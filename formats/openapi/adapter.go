@@ -27,7 +27,7 @@ type Adapter struct {
 
 var (
 	_ invoke.BindingInvoker           = (*Adapter)(nil)
-	_ invoke.BindingPreparer          = (*Adapter)(nil)
+	_ invoke.BindingPreflighter       = (*Adapter)(nil)
 	_ invoke.BuiltinHooksProvider     = (*Adapter)(nil)
 	_ synthesize.InterfaceSynthesizer = (*Adapter)(nil)
 	_ synthesize.CoverageSynthesizer  = (*Adapter)(nil)
@@ -64,11 +64,12 @@ func (a *Adapter) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return a.invoker.InvokeBinding(ctx, args)
 }
 
-// PrepareBinding loads and analyzes the source, retaining reusable analysis
-// under the invoker's cache policy, and reports known missing context. It may
-// fetch the description but never dispatches the selected operation.
-func (a *Adapter) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	return a.invoker.PrepareBinding(ctx, args)
+// PreflightBinding loads and analyzes the description, retaining reusable
+// analysis under the invoker's cache policy, and reports the context
+// requirements it can already identify. It may fetch the description but
+// never dispatches the selected operation.
+func (a *Adapter) PreflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	return a.invoker.PreflightBinding(ctx, args)
 }
 
 // BuiltinHooks returns the adapter's protocol-aware output and result hooks.

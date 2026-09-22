@@ -11,10 +11,10 @@ import (
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
-// prepareBindingSpec names a binary that does not exist. Preflight is
-// side-effect-free by contract, so neither it nor the pre-spawn challenge
+// preflightBindingSpec names a binary that does not exist. This adapter's
+// preflight spawns no process, so neither it nor the pre-spawn challenge
 // may resolve, dereference, or run it.
-const prepareBindingSpec = `bin "/nonexistent/prepare-binding-must-not-run"
+const preflightBindingSpec = `bin "/nonexistent/preflight-binding-must-not-run"
 cmd "ping" {
     help "Never runs"
 }
@@ -32,34 +32,34 @@ func untouchableInvoker() (*Invoker, *atomic.Bool) {
 	return invoker, &spawned
 }
 
-func prepareBindingArgs(bindCtx map[string]any) *invoke.BindingInvocationArgs {
+func preflightBindingArgs(bindCtx map[string]any) *invoke.BindingInvocationArgs {
 	return &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "/nonexistent/prepare-binding-must-not-run", Content: openbindings.TextContent(prepareBindingSpec)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "/nonexistent/preflight-binding-must-not-run", Content: openbindings.TextContent(preflightBindingSpec)},
 		Selector: "ping",
 		Context:  bindCtx,
 	}
 }
 
-// PrepareBinding reports exactly the challenge the live invocation raises
+// PreflightBinding reports exactly the challenge the live invocation raises
 // for the same arguments: a generic credential that names no process
 // environment variable is surfaced under §9.1 / USAGE-P-06 as one
 // auth.apiKey requirement against the source location, for the flat
 // apiKey and for a scheme-scoped apiKeys entry alike.
-func TestPrepareBinding_MatchesLiveChallenge(t *testing.T) {
+func TestPreflightBinding_MatchesLiveChallenge(t *testing.T) {
 	for name, bindCtx := range map[string]map[string]any{
 		"flat apiKey":          {"apiKey": "k-secret"},
 		"scheme-scoped apiKey": {"apiKeys": map[string]any{"svc": "k-secret"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			invoker, spawned := untouchableInvoker()
-			args := prepareBindingArgs(bindCtx)
+			args := preflightBindingArgs(bindCtx)
 
-			preflight, err := invoker.PrepareBinding(context.Background(), args)
+			preflight, err := invoker.PreflightBinding(context.Background(), args)
 			if err != nil {
-				t.Fatalf("PrepareBinding: %v", err)
+				t.Fatalf("PreflightBinding: %v", err)
 			}
 			if !invoke.ValidContextRequiredDetails(preflight) {
-				t.Fatalf("PrepareBinding must report a valid challenge, got %#v", preflight)
+				t.Fatalf("PreflightBinding must report a valid challenge, got %#v", preflight)
 			}
 			if preflight.Target != args.Source.Location {
 				t.Errorf("Target = %q, want the source location %q", preflight.Target, args.Source.Location)
@@ -81,9 +81,9 @@ func TestPrepareBinding_MatchesLiveChallenge(t *testing.T) {
 }
 
 // Supplying context the binding can place narrows the result to nothing:
-// PrepareBinding returns nil exactly where the invocation would proceed to
+// PreflightBinding returns nil exactly where the invocation would proceed to
 // load the descriptor.
-func TestPrepareBinding_SatisfiedContextIsNil(t *testing.T) {
+func TestPreflightBinding_SatisfiedContextIsNil(t *testing.T) {
 	for name, bindCtx := range map[string]map[string]any{
 		"empty":                    {},
 		"credential named an env":  {"configuration": map[string]any{"environment": map[string]any{"API_KEY": "k-9"}}},
@@ -91,12 +91,12 @@ func TestPrepareBinding_SatisfiedContextIsNil(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			invoker, spawned := untouchableInvoker()
-			details, err := invoker.PrepareBinding(context.Background(), prepareBindingArgs(bindCtx))
+			details, err := invoker.PreflightBinding(context.Background(), preflightBindingArgs(bindCtx))
 			if err != nil {
-				t.Fatalf("PrepareBinding: %v", err)
+				t.Fatalf("PreflightBinding: %v", err)
 			}
 			if details != nil {
-				t.Errorf("PrepareBinding = %#v, want nil for placeable context", details)
+				t.Errorf("PreflightBinding = %#v, want nil for placeable context", details)
 			}
 			if spawned.Load() {
 				t.Error("a process was spawned during preflight")

@@ -79,7 +79,7 @@ type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) 
 //     Callers that need to inspect unvalidated payloads call InvokeBinding
 //     directly.
 //   - CONTEXT_REQUIRED negotiation: challenges a binding can state before
-//     the first attempt (its PrepareBinding preflight) are resolved via
+//     the first attempt (its PreflightBinding answer) are resolved via
 //     ContextResolver and the one attempt starts with the merged context. A
 //     live CONTEXT_REQUIRED raised by the binding during the attempt
 //     terminates the invocation with its ContextRequiredDetails intact,
@@ -252,20 +252,26 @@ func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
 	}
 }
 
-// PrepareBinding gives a resolved binding an opportunity to prepare without
-// executing the requested operation. See BindingPreparer for effects, results
-// and ownership. This call does not run ContextResolver.
-func (e *OperationInvoker) PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
-	return e.invoker.prepareBinding(ctx, args)
+// PreflightBinding takes an already resolved binding in args and asks the selected
+// binding which context requirements it can already identify. Supply
+// context with WithContext; it is used for this call alone. A non-nil
+// result has the shape a live CONTEXT_REQUIRED carries and may omit
+// requirements; nil means none reported, not ready. An error means the
+// binding could not answer and predicts nothing. Invoke preflights on its
+// own before every attempt and consults ContextResolver then; this explicit
+// call never does. Discard a result once the operation, binding or context
+// changes.
+func (e *OperationInvoker) PreflightBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+	return e.invoker.preflightBinding(ctx, args)
 }
 
 // resolveBinding is the shared operation-layer resolution behind Invoke and
-// PrepareOperation: it resolves operation against obi's flat key+alias namespace
+// PreflightOperation: it resolves operation against obi's flat key+alias namespace
 // (OBI-T-12), resolves a binding (an explicit caller choice or the contract's
 // sole-candidate rule),
 // and looks up its source. A wiring failure returns a typed *InvocationError so
 // each caller can surface it its own way (an errored handle for Invoke, a
-// returned error for PrepareOperation).
+// returned error for PreflightOperation).
 func (e *OperationInvoker) resolveBinding(obi *openbindings.Interface, operation, pinnedBindingKey string, callerContext map[string]any) (
 	op *openbindings.Operation, bindingKey string, binding *openbindings.BindingEntry, source *openbindings.Source, ierr *InvocationError,
 ) {
@@ -343,17 +349,16 @@ func (e *OperationInvoker) resolveBinding(obi *openbindings.Interface, operation
 	return op, bindingKey, binding, &src, nil
 }
 
-// PrepareOperation resolves operation and offers the selected binding optional
-// advance preparation, using the same selection rules as invocation. It may
-// perform binding-owned I/O but does not execute the requested operation or run
-// ContextResolver. WithContext supplies context for this call; nil details and
-// nil error mean no unmet requirement is reported, not that invocation is ready.
-//
-// Early preparation is optional. Ordinary invocation calls the same capability
-// before context resolution and execution. Preparation does not pin future selection or
-// guarantee future success; callers must discard results for obsolete operation,
-// binding or context selections. See BindingPreparer for the full contract.
-func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *openbindings.Interface, operation string, opts ...InvokeOption) (*ContextRequiredDetails, error) {
+// PreflightOperation resolves operation as Invoke would and asks the selected
+// binding which context requirements it can already identify. Supply
+// context with WithContext; it is used for this call alone. A non-nil
+// result has the shape a live CONTEXT_REQUIRED carries and may omit
+// requirements; nil means none reported, not ready. An error means the
+// binding could not answer and predicts nothing. Invoke preflights on its
+// own before every attempt and consults ContextResolver then; this explicit
+// call never does. Discard a result once the operation, binding or context
+// changes.
+func (e *OperationInvoker) PreflightOperation(ctx context.Context, obi *openbindings.Interface, operation string, opts ...InvokeOption) (*ContextRequiredDetails, error) {
 	var cfg invokeConfig
 	for _, opt := range opts {
 		opt(&cfg)
@@ -362,7 +367,7 @@ func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *openbindin
 	if ierr != nil {
 		return nil, ierr
 	}
-	return e.PrepareBinding(ctx, &BindingInvocationArgs{
+	return e.PreflightBinding(ctx, &BindingInvocationArgs{
 		Source: InvocationSource{
 			BindingSpec: source.BindingSpec,
 			Location:    source.Location,
@@ -534,18 +539,18 @@ func (e *OperationInvoker) runCompiled(
 		return changed
 	}
 
-	// Preflight (the binding-invoker contract's prepareBinding): collapse
+	// Preflight (the binding-invoker contract's preflightBinding): collapse
 	// knowable-upfront context challenges into the clean no-input-consumed
 	// case before anything is forwarded.
-	// Preparation and resolution share the attempt's cancellation lifetime.
+	// Preflight and resolution share the attempt's cancellation lifetime.
 	innerCtx, innerCancel := DoneContext(ctx, caller.Done())
 	defer innerCancel()
 	var details *ContextRequiredDetails
 	var err error
 	if compiledBinding != nil {
-		details, err = compiledBinding.PrepareBinding(innerCtx, bindingArgs())
+		details, err = compiledBinding.PreflightBinding(innerCtx, bindingArgs())
 	} else {
-		details, err = e.invoker.prepareBinding(innerCtx, bindingArgs())
+		details, err = e.invoker.preflightBinding(innerCtx, bindingArgs())
 	}
 	if err != nil {
 		caller.FireError(wireError(err))

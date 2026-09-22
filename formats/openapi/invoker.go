@@ -228,8 +228,8 @@ type Invoker struct {
 }
 
 var (
-	_ invoke.BindingInvoker  = (*Invoker)(nil)
-	_ invoke.BindingPreparer = (*Invoker)(nil)
+	_ invoke.BindingInvoker     = (*Invoker)(nil)
+	_ invoke.BindingPreflighter = (*Invoker)(nil)
 )
 
 func newInvokerRuntime(options InvokerOptions) *invokerRuntime {
@@ -379,18 +379,19 @@ func (e *invokerRuntime) run(ctx context.Context, args *invoke.BindingInvocation
 	return e.runNative(ctx, args, inv)
 }
 
-// PrepareBinding adapts the SDK binding preflight to the artifact runtime.
-func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	return e.runtime.prepareBinding(ctx, args)
+// PreflightBinding adapts the SDK preflight signal to the artifact runtime.
+func (e *Invoker) PreflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	return e.runtime.preflightBinding(ctx, args)
 }
 
-// prepareBinding loads and analyzes the source to report known missing context
-// without dispatching the selected operation. Qualifying embedded descriptions
-// reuse the existing bounded client cache; location-only descriptions load
-// afresh. Required load and analysis errors are returned, not reported as an
-// unknown requirement. Nil details are not a guarantee of future success.
-func (e *invokerRuntime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	return e.prepareNativeBinding(ctx, args)
+// preflightBinding loads and analyzes the description to report the context
+// requirements it can already identify, without dispatching the selected
+// operation. Qualifying self-contained embedded descriptions reuse the
+// existing bounded client cache; location-only descriptions load afresh here
+// and again at invocation. A load or analysis failure is returned as an
+// error, which carries no prediction; nil details are not readiness.
+func (e *invokerRuntime) preflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	return e.preflightNativeBinding(ctx, args)
 }
 
 // Synthesizer handles interface synthesis from OpenAPI documents.

@@ -34,8 +34,8 @@ type mockOpts struct {
 	nativeFailure       bool // ping returns one binding-native failure completion
 	requireBearer       bool // getUser challenges when context lacks bearerToken (after reading input)
 	requireServerConfig bool // getUser challenges with config.value until context.configuration.server is present
-	challengeAlways     bool // getUser (and a preparer's preflight) challenge unconditionally
-	preflight           bool // expose PrepareBinding reporting the bearer requirement
+	challengeAlways     bool // getUser (and a preflighter's preflight) challenge unconditionally
+	preflight           bool // expose PreflightBinding reporting the bearer requirement
 }
 
 type mockBindingInvoker struct {
@@ -243,24 +243,24 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 	return nil
 }
 
-// PrepareBinding is attached via the preparerMock wrapper so that plain
-// mocks do NOT implement BindingPreparer.
-type preparerMock struct {
+// PreflightBinding is attached via the preflighterMock wrapper so that plain
+// mocks do NOT implement BindingPreflighter.
+type preflighterMock struct {
 	*mockBindingInvoker
 }
 
-type malformedPreparerMock struct {
+type malformedPreflighterMock struct {
 	*mockBindingInvoker
 }
 
-func (p *malformedPreparerMock) PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (p *malformedPreflighterMock) PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return &ContextRequiredDetails{
 		Target:       "api.example.com",
 		Alternatives: []ContextAlternative{{Requirements: nil}},
 	}, nil
 }
 
-func (p *preparerMock) PrepareBinding(_ context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (p *preflighterMock) PreflightBinding(_ context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	p.mu.Lock()
 	p.prepares++
 	p.mu.Unlock()
@@ -891,13 +891,13 @@ func hasServerConfig(ctx map[string]any) bool {
 }
 
 // TestOpPreflightResolvesConfigValue proves the R1a config.value path end to
-// end through preflight: the binding's PrepareBinding reports a config.value
+// end through preflight: the binding's PreflightBinding reports a config.value
 // requirement, a resolver supplies the value into context.configuration under
 // its point, and the single attempt carries it, while a configuration point
 // the caller already supplied (decode) survives the point-wise merge rather
 // than being clobbered.
 func TestOpPreflightResolvesConfigValue(t *testing.T) {
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireServerConfig: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireServerConfig: true, preflight: true}}}
 	resolver := func(_ context.Context, details *ContextRequiredDetails) (map[string]any, error) {
 		req := details.Alternatives[0].Requirements[0]
 		if req.Type != "config.value" || req.Extra["point"] != "server" {
@@ -932,7 +932,7 @@ func TestOpPreflightResolvesConfigValue(t *testing.T) {
 }
 
 func TestOpPreflightResolverDeclineSurfaces(t *testing.T) {
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		return nil, nil
 	})
@@ -966,7 +966,7 @@ func TestOpResolverFailureIsRuntimeFailure(t *testing.T) {
 	})
 
 	t.Run("preflight challenge", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 			return nil, errors.New("credential broker unavailable")
 		})
@@ -982,7 +982,7 @@ func TestOpResolverFailureIsRuntimeFailure(t *testing.T) {
 }
 
 func TestMalformedPreflightDoesNotReachResolver(t *testing.T) {
-	mock := &malformedPreparerMock{&mockBindingInvoker{}}
+	mock := &malformedPreflighterMock{&mockBindingInvoker{}}
 	resolverCalls := 0
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		resolverCalls++
@@ -1002,7 +1002,7 @@ func TestMalformedPreflightDoesNotReachResolver(t *testing.T) {
 }
 
 func TestOpPreflightUnchangedResolutionSurfaces(t *testing.T) {
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{challengeAlways: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{challengeAlways: true, preflight: true}}}
 	var resolverCalls int
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		resolverCalls++
@@ -1051,7 +1051,7 @@ func TestOpMidStreamChallengeSurfaces(t *testing.T) { // SS: the delivered prefi
 }
 
 func TestOpPreflightCollapsesChallenge(t *testing.T) { // CS-friendly path
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	var resolverCalls int
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		resolverCalls++
@@ -1077,7 +1077,7 @@ func TestOpPreflightCollapsesChallenge(t *testing.T) { // CS-friendly path
 }
 
 func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	op := newOpInvoker(mock, nil)
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	_, err := drainOutputs(t, call)
@@ -1105,14 +1105,14 @@ func TestOperationInvokerDoesNotExposeBindingDiagnostics(t *testing.T) {
 	}
 }
 
-func TestPrepareOperation(t *testing.T) {
+func TestPreflightOperation(t *testing.T) {
 	// Reports the resolved binding's requirements without invoking (no attempt).
 	t.Run("reports requirements without invoking", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser")
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "getUser")
 		if err != nil {
-			t.Fatalf("PrepareOperation: %v", err)
+			t.Fatalf("PreflightOperation: %v", err)
 		}
 		if details == nil || details.Target != "api.example.com" {
 			t.Fatalf("expected bearer requirement, got %+v", details)
@@ -1124,23 +1124,23 @@ func TestPrepareOperation(t *testing.T) {
 
 	// Supplied context narrows the result to what remains unsatisfied.
 	t.Run("WithContext narrows to satisfied", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser",
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "getUser",
 			WithContext(map[string]any{"bearerToken": "tok"}))
 		if err != nil {
-			t.Fatalf("PrepareOperation: %v", err)
+			t.Fatalf("PreflightOperation: %v", err)
 		}
 		if details != nil {
 			t.Fatalf("bearer supplied; expected no remaining requirements, got %+v", details)
 		}
 	})
 
-	// A binding whose format exposes no static preparer reports nil (the
-	// always-satisfiable answer), same as PrepareBinding.
-	t.Run("no preparer yields nil", func(t *testing.T) {
+	// A binding whose format exposes no static preflighter reports nil (the
+	// always-satisfiable answer), same as PreflightBinding.
+	t.Run("no preflighter yields nil", func(t *testing.T) {
 		op := newOpInvoker(&mockBindingInvoker{}, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser")
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "getUser")
 		if err != nil || details != nil {
 			t.Fatalf("expected (nil, nil), got (%+v, %v)", details, err)
 		}
@@ -1148,12 +1148,12 @@ func TestPrepareOperation(t *testing.T) {
 
 	// Shares Invoke's resolution: alias-aware (OBI-T-12) + WithBindingKey pinning.
 	t.Run("alias and pinned binding", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "fetchUser", // alias of getUser
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "fetchUser", // alias of getUser
 			WithBindingKey("getUser.main"))
 		if err != nil {
-			t.Fatalf("PrepareOperation(alias, pinned): %v", err)
+			t.Fatalf("PreflightOperation(alias, pinned): %v", err)
 		}
 		if details == nil {
 			t.Fatal("expected requirements for the pinned binding")
@@ -1163,10 +1163,10 @@ func TestPrepareOperation(t *testing.T) {
 	// Wiring failures return an error, never a panic.
 	t.Run("wiring failures return errors", func(t *testing.T) {
 		op := newOpInvoker(&mockBindingInvoker{}, nil)
-		if _, err := op.PrepareOperation(bg(), opTestInterface(), "nope"); err == nil {
+		if _, err := op.PreflightOperation(bg(), opTestInterface(), "nope"); err == nil {
 			t.Fatal("expected error for unknown operation")
 		}
-		if _, err := op.PrepareOperation(bg(), nil, "getUser"); err == nil {
+		if _, err := op.PreflightOperation(bg(), nil, "getUser"); err == nil {
 			t.Fatal("expected error for nil interface")
 		}
 	})

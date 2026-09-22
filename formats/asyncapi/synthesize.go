@@ -107,7 +107,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 // Note: the OBI no longer carries a security section. Context requirements
 // are derived at invocation time from the AsyncAPI doc's security
 // declarations and surfaced via CONTEXT_REQUIRED negotiation (see
-// requiredContext in invoke.go and Invoker.PrepareBinding).
+// requiredContext in invoke.go and Invoker.PreflightBinding).
 
 func loadDocument(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*document, error) {
 	data, err := sourceToBytes(ctx, client, location, content)

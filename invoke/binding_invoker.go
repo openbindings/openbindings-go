@@ -21,42 +21,38 @@ import (
 // an already-errored handle, never as a panic.
 //
 // A concrete invoker may also implement InterfaceSynthesizer, SourceInspector,
-// or BindingPreparer; check via type assertion.
+// or BindingPreflighter; check via type assertion.
 type BindingInvoker interface {
 	BindingSpecs() []openbindings.BindingSpecInfo
 	CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict
 	InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any]
 }
 
-// BindingPreparer optionally gets ready for a possible invocation and reports
-// known unmet context requirements. The binding chooses useful setup, including
-// I/O, and owns reusable state under its ordinary resource and cleanup policy.
-// Preparation must not execute the requested operation, consume its input, or
-// spend an approval for it. Invocation must work without an earlier call.
-//
-// A nil result with no error reports no known unmet requirement, not readiness.
-// Required preparation failures return an error. Optional acceleration uses the
-// binding's normal valid fallback: it must not add an invocation prerequisite.
-// Ordinary invocation calls this same hook and stops on a returned error before
-// execution. Explicit preparation does not run the application's context resolver.
-//
-// Calls may repeat or overlap with invocation. Implementations observe ctx
-// cooperatively, do not mutate or retain caller-owned mutable context, and keep
-// reusable resources independent of this call's cancellation lifetime. Supplied
-// values stay stable during the call. Context-scoped and non-durable data must
-// not leak into later calls through retained state. No preparation handle,
-// background task, future-success guarantee or automatic retry is implied.
-type BindingPreparer interface {
-	PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error)
+// BindingPreflighter is optional. PreflightBinding tells a binding that an
+// invocation of args' selection may follow and lets it report context
+// requirements it can already identify from the source and args.Context:
+// a ContextRequiredDetails in the same shape its CONTEXT_REQUIRED challenge
+// carries, or nil. The result is advisory: it may omit requirements, nil is
+// always conformant, and the live challenge remains authoritative.
+// Invocation never requires a prior preflight. args.Context is supplied for
+// this call alone. Preflight never dispatches the requested operation,
+// consumes its input, emits its outputs, or spends an approval for it; the
+// boundary of the requested operation is the governing binding
+// specification's, and anything else a binding does in response is that
+// specification's to require and otherwise this implementation's,
+// documented in its README. Requirements are reported only as the result;
+// an error means the binding could not answer and carries no prediction.
+type BindingPreflighter interface {
+	PreflightBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error)
 }
 
 // CompiledBindingInvoker is executable behavior captured for one exact
 // SDK-selected binding. It owns no route identity; the SDK supplies fresh
-// per-call args containing context and hooks. PrepareBinding has the same
-// contract as BindingPreparer; implementations without preparation return nil, nil.
+// per-call args containing context and hooks. PreflightBinding has the same
+// contract as BindingPreflighter; implementations without preflight return nil, nil.
 type CompiledBindingInvoker interface {
 	InvokeBinding(context.Context, *BindingInvocationArgs) Invocation[any, any]
-	PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error)
+	PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error)
 }
 
 // BindingCompiler is the optional deterministic closure seam. Implementers

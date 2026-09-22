@@ -68,7 +68,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 	// Credentials ride the Streamable HTTP requests as headers (§9.4,
 	// MCP-P-07); one without an expressible header destination is surfaced
-	// here, before the handshake, with the challenge PrepareBinding reports
+	// here, before the handshake, with the challenge PreflightBinding reports
 	// for the same arguments.
 	if challenge := unplacedCredentialChallenge(location, args.Context); challenge != nil {
 		inv.FireError(invoke.NewContextRequiredError(challenge))

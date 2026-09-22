@@ -148,14 +148,14 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	return nil
 }
 
-func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+func (e *invokerRuntime) preflightNativeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := assertNativeBindingSpec(args); err != nil {
 		return nil, err
 	}
-	// Loading the description is required for both preparation and invocation.
+	// Loading the description is required for both preflight and invocation.
 	// Retain reusable analysis under the existing client-cache policy; this call
 	// never dispatches the selected operation or resolves missing context.
 	client, err := e.loadNativeClient(ctx, args)

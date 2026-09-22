@@ -69,6 +69,15 @@ Present `content` must be one successful introspection execution-result object
 with no `errors` member and an object at `data.__schema`. It is authoritative
 and displaces live introspection.
 
+## Preflight
+
+`PreflightBinding` answers the SDK's preflight signal by reporting the
+configuration requirements it can identify from the selector and the supplied
+context: a missing `configuration.document`, or a missing
+`configuration.subscriptionTarget` for a subscription. It performs no
+introspection, parses no source, and never dispatches. Context supplied to
+preflight is not retained.
+
 ## Synthesis and coverage
 
 Synthesis creates one operation for each non-introspection query or mutation

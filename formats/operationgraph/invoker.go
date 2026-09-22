@@ -142,8 +142,8 @@ func nestingDepth(ctx context.Context) int {
 	return 0
 }
 
-// drive performs the preflight (load, resolve, version-check, validate) and
-// runs the engine, firing preflight failures as terminal errors on the
+// drive performs the source load (load, resolve, version-check, validate)
+// and runs the engine, firing source-load failures as terminal errors on the
 // handle.
 func (e *Invoker) drive(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	doc, err := e.loadDocument(ctx, args.Source.Location, args.Source.Content)

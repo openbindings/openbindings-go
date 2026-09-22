@@ -4,8 +4,8 @@
 
 ### Added
 
-- **Preflight (`PrepareBinding`)**: the invoker implements the
-  `openbindings.binding-invoker` `prepareBinding` operation. It reports the
+- **Preflight (`PreflightBinding`)**: the invoker implements the
+  `openbindings.binding-invoker` `preflightBinding` operation. It reports the
   §9.4 / MCP-P-07 challenge (an apiKey or basic credential with no named
   header destination) before invocation, from the same in-memory
   pre-dispatch gates (binding specification, selector, endpoint) and the
@@ -25,8 +25,20 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`, including the
 - The live `CONTEXT_REQUIRED` for a credential without an expressible
   header destination (§9.4, MCP-P-07) now carries `ContextRequiredDetails`
   (the endpoint plus one `auth.apiKey` requirement) instead of a bare code,
-  so a resolver can act on it and it is identical to the `PrepareBinding`
+  so a resolver can act on it and it is identical to the `PreflightBinding`
   answer.
+
+- **The operation is named preflight and its documented contract is the signal
+  contract** (the preflight signal contract proposal, 2026-09-21):
+  `Invoker.PrepareBinding` is `Invoker.PreflightBinding` and the
+  `invoke.BindingPreparer` assertion is `invoke.BindingPreflighter`. The
+  result is advisory: it may omit requirements, nil is always conformant, and
+  the live `CONTEXT_REQUIRED` remains authoritative. Invocation never requires
+  a prior preflight. Context supplied to preflight is supplied for that call
+  alone. Preflight never dispatches the requested operation, consumes its
+  input, emits its outputs, or spends an approval for it. An error means the
+  binding could not answer and carries no prediction. See the README's
+  Preflight section for what this adapter does to answer.
 
 - **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
   `bindings[*].selector`): bindings ride

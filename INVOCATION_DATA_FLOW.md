@@ -9,7 +9,7 @@ about generic readers and configurable mapping registries.
 
 Applications select providers and transform evaluators and own policy,
 authorization, delegation, persistence and presentation. The SDK owns
-OpenBindings documents, operation selection, preparation, invocation lifecycle,
+OpenBindings documents, operation selection, preflight, invocation lifecycle,
 validation order, context preflight and binding contracts. Binding adapters preserve
 their governing protocol correspondence. Protocol implementations own actual
 wire encoding and decoding. A private value implementation supplies logical

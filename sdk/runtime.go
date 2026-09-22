@@ -128,7 +128,7 @@ func (r *Runtime) PrepareProvider(key, label string, iface *openbindings.Interfa
 }
 
 // PrepareProviderSnapshot indexes an already-prepared immutable interface.
-// It lets hosts key their own revision caches without repeating preparation.
+// It lets hosts key their own revision caches without repeating compilation.
 func (r *Runtime) PrepareProviderSnapshot(key, label string, prepared *openbindings.PreparedInterface) (*invoke.PreparedProvider, error) {
 	return invoke.PrepareProvider(invoke.PreparedProviderOptions{
 		Key:       key,
@@ -169,11 +169,17 @@ func (r *Runtime) SynthesizeInterfaceWithCoverage(ctx context.Context, input *sy
 	return coverage.SynthesizeInterfaceWithCoverage(ctx, input)
 }
 
-// PrepareOperation offers optional binding-owned setup for one operation through
-// the same provider registry used by Invoke. It follows invoke.BindingPreparer:
-// setup may perform I/O but does not execute the operation or run the resolver.
-func (r *Runtime) PrepareOperation(ctx context.Context, iface *openbindings.Interface, operation string, options ...invoke.InvokeOption) (*invoke.ContextRequiredDetails, error) {
-	return r.operationInvoker.PrepareOperation(ctx, iface, operation, options...)
+// PreflightOperation resolves operation through the same provider registry Invoke uses and asks the selected
+// binding which context requirements it can already identify. Supply
+// context with WithContext; it is used for this call alone. A non-nil
+// result has the shape a live CONTEXT_REQUIRED carries and may omit
+// requirements; nil means none reported, not ready. An error means the
+// binding could not answer and predicts nothing. Invoke preflights on its
+// own before every attempt and consults ContextResolver then; this explicit
+// call never does. Discard a result once the operation, binding or context
+// changes.
+func (r *Runtime) PreflightOperation(ctx context.Context, iface *openbindings.Interface, operation string, options ...invoke.InvokeOption) (*invoke.ContextRequiredDetails, error) {
+	return r.operationInvoker.PreflightOperation(ctx, iface, operation, options...)
 }
 
 // Invoke performs a dynamic operation call. Typed callers use invoke.Invoke

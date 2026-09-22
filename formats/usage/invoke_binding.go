@@ -37,7 +37,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 
 	// A generic runtime credential without an environment-variable name is
 	// surfaced before any load or spawn (§9.1, USAGE-P-06), with the
-	// challenge PrepareBinding reports for the same arguments.
+	// challenge PreflightBinding reports for the same arguments.
 	if challenge := genericCredentialChallenge(args); challenge != nil {
 		inv.FireError(invoke.NewContextRequiredError(challenge))
 		return
@@ -348,7 +348,7 @@ func metadataBinary(ctx map[string]any) string {
 }
 
 // genericCredentialChallenge is the ONE place the family's context
-// challenge is built, so the live invocation and PrepareBinding cannot
+// challenge is built, so the live invocation and PreflightBinding cannot
 // drift. A usage descriptor declares no credential-to-environment mapping
 // and this specification invents none (§9.1, USAGE-P-06): credential
 // material never rides argv, and a generic runtime credential (a flat

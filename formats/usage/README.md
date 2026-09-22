@@ -132,6 +132,15 @@ bridge for process-native tooling.
 
 Usage-spec bindings execute local CLI binaries, not network services. Credentials are applied via environment variables through the `environment` key in the `BindingContext`, not HTTP headers.
 
+### Preflight
+
+`PreflightBinding` answers the SDK's preflight signal from the supplied context
+alone: the family's only context requirement (a generic credential naming no
+environment variable) is decided before the descriptor is loaded. It uses no
+network, spawns no process, and never dereferences an `exec:` address.
+Supplied context that the binding can place narrows the result to nil. Context
+supplied to preflight is not retained.
+
 ### Interface synthesis
 
 Converts a usage-spec KDL document into an OBI by:

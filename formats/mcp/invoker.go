@@ -50,7 +50,7 @@ type Invoker struct {
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
-var _ invoke.BindingPreparer = (*Invoker)(nil)
+var _ invoke.BindingPreflighter = (*Invoker)(nil)
 
 // InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
@@ -167,13 +167,13 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return inv
 }
 
-// PrepareBinding is the side-effect-free preflight (the prepareBinding
+// PreflightBinding answers the preflight signal (the preflightBinding
 // operation of the openbindings.binding-invoker interface). It walks the
-// pre-dispatch gates the invocation walks before its context challenge —
-// binding specification, selector, and endpoint, all in-memory — and
+// pre-dispatch gates the invocation walks before its context challenge
+// (binding specification, selector, and endpoint, all in-memory) and
 // reports the challenge the invocation would raise for these arguments, or
-// nil when it would proceed to the handshake. It never connects, reads
-// input, or touches the filesystem.
+// nil when it would proceed to the handshake. This implementation never
+// connects, reads input, or touches the filesystem.
 //
 // A gate the invocation would fail with a different error (a foreign
 // binding specification, an invalid selector, a non-HTTP endpoint) is
@@ -181,7 +181,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // refusal, and preflight is advisory. Resolution against a live listing
 // needs the handshake, but the family's only context requirement is
 // decided before it, so preflight is complete without it.
-func (e *Invoker) PrepareBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	if args.Source.BindingSpec != BindingSpec {
 		return nil, nil
 	}
@@ -196,7 +196,7 @@ func (e *Invoker) PrepareBinding(_ context.Context, args *invoke.BindingInvocati
 }
 
 // unplacedCredentialChallenge is the ONE place the family's context
-// challenge is built, so the live invocation and PrepareBinding cannot
+// challenge is built, so the live invocation and PreflightBinding cannot
 // drift. Credentials ride the Streamable HTTP requests as HTTP headers
 // (§9.4, MCP-P-07): a bearer token has a defined destination
 // (`Authorization: Bearer`), while an apiKey or basic credential must name

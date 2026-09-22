@@ -6,17 +6,18 @@ processor, and Operation Graph corpora. The checked-in
 [`reference-sdk-correspondence.json`](../spec/conformance/reference-sdk-correspondence.json)
 also guards the public role and family correspondence.
 
-The optional [operation preparation](PREPARATION.md) contract is implemented
-and qualified for Go core/OpenAPI first. TypeScript preparation alignment and
-qualification are pending; the corresponding names below do not claim that
-the revised behavior has already been implemented there.
+The optional [preflight](PREFLIGHT.md) contract (the preflight signal
+contract, 2026-09-21) is implemented and qualified for Go core/OpenAPI first.
+TypeScript alignment is pending for both the rename (`prepareBinding` to
+`preflightBinding`) and the contract; the corresponding names below do not
+claim that the revised behavior has already been implemented there.
 
 | Concept | Go | TypeScript |
 |---|---|---|
 | binding implementation | `BindingInvoker` | `BindingInvoker` |
 | supported identifiers | `BindingSpecs()` | `bindingSpecs()` |
 | invoke one binding | `InvokeBinding(...)` | `invokeBinding(...)` |
-| optional binding-owned preparation | `PrepareBinding(...)` | `prepareBinding(...)` (alignment pending) |
+| optional preflight | `PreflightBinding(...)` | `prepareBinding(...)` (TypeScript alignment pending) |
 | artifact → OBI | `InterfaceSynthesizer.SynthesizeInterface(...)` | `InterfaceSynthesizer.synthesizeInterface(...)` |
 | artifact → OBI + exhaustiveness-qualified disposition evidence | `CoverageSynthesizer.SynthesizeInterfaceWithCoverage(...)` | `CoverageSynthesizer.synthesizeInterfaceWithCoverage(...)` |
 | inspect bindable targets | `SourceInspector.InspectSource(...)` | `SourceInspector.inspectSource(...)` |
@@ -69,8 +70,8 @@ registry, and rejects duplicate exact identifiers listed by its providers.
 The transitional operation-requirement APIs retain their earlier observable
 roles—alias correspondence, directional schema comparison, advisory context
 requirements, preference ordering, and ambiguous route refusal—until removal.
-Their Go preparation now follows the I/O-permitting preparation contract above;
-this is part of the pending TypeScript alignment.
+Their Go preflight now follows the signal contract above; this is part of the
+pending TypeScript alignment.
 
 ## Implementation proof
 

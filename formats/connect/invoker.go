@@ -104,7 +104,7 @@ func connectBindingSpecInfos() []openbindings.BindingSpecInfo {
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
-var _ invoke.BindingPreparer = (*Invoker)(nil)
+var _ invoke.BindingPreflighter = (*Invoker)(nil)
 
 // InvokeBinding invokes a Connect binding and returns the invocation
 // handle synchronously; the HTTP work runs on its own goroutine. The
@@ -138,19 +138,20 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return inv
 }
 
-// PrepareBinding is the side-effect-free preflight (the prepareBinding
+// PreflightBinding answers the preflight signal (the preflightBinding
 // operation of the openbindings.binding-invoker interface). It walks the
-// same pre-dispatch gates the invocation walks — selector, target, and in
+// same pre-dispatch gates the invocation walks (selector, target, and in
 // schema mode the embedded content's method resolution, all of which are
-// in-memory — and reports the context challenge the invocation would raise
+// in-memory) and reports the context challenge the invocation would raise
 // for these arguments, or nil when it would proceed past context
-// application. It never dispatches, reads input, or touches the filesystem.
+// application. This implementation never dispatches, reads input, or
+// touches the filesystem.
 //
 // Any gate the invocation would fail with a different error (an invalid
 // selector, a malformed target, unloadable content, an unresolvable or
 // unsupported method) is reported as no requirement: the invocation is the
 // authority for that refusal, and preflight is advisory.
-func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+func (e *Invoker) PreflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	svcName, methodName, err := parseSelector(args.Selector)
 	if err != nil {
 		return nil, nil
@@ -205,7 +206,7 @@ func resolveTarget(args *invoke.BindingInvocationArgs) (string, error) {
 
 // resolveHeaders applies the binding context to the outgoing header set
 // (§9.6) and is the ONE place the family's context challenge is built, so
-// the live invocation and PrepareBinding cannot drift. An inexpressible
+// the live invocation and PreflightBinding cannot drift. An inexpressible
 // credential (an apiKey with no consumer-named header, CONN-P-07) yields
 // the challenge; any other placement failure yields err.
 func resolveHeaders(target string, bindCtx map[string]any) (map[string]string, *invoke.ContextRequiredDetails, error) {
@@ -279,7 +280,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	// inexpressible credential (an apiKey with no consumer-named header) is
 	// surfaced here — pre-dispatch AND before any input is consumed, so a
 	// no-input-consumed retry stays safe — never silently skipped. The
-	// challenge is the one PrepareBinding reports for the same arguments.
+	// challenge is the one PreflightBinding reports for the same arguments.
 	headers, challenge, hdrErr := resolveHeaders(target, args.Context)
 	if challenge != nil {
 		inv.FireError(invoke.NewContextRequiredError(challenge))

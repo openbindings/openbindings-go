@@ -17,11 +17,11 @@ import (
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
-func preparationDocument(server string) string {
-	return fmt.Sprintf(`{"openapi":"3.1.2","info":{"title":"Preparation","version":"1"},"servers":[{"url":%q}],"paths":{"/run":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}}}}}`, server)
+func preflightDocument(server string) string {
+	return fmt.Sprintf(`{"openapi":"3.1.2","info":{"title":"Preflight","version":"1"},"servers":[{"url":%q}],"paths":{"/run":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}}}}}`, server)
 }
 
-func preparationInterface(source openbindings.Source) *openbindings.Interface {
+func preflightInterface(source openbindings.Source) *openbindings.Interface {
 	return &openbindings.Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"run": {}},
@@ -32,7 +32,7 @@ func preparationInterface(source openbindings.Source) *openbindings.Interface {
 	}
 }
 
-func TestPreparationRequiredFailuresSurface(t *testing.T) {
+func TestPreflightRequiredFailuresSurface(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -44,14 +44,14 @@ func TestPreparationRequiredFailuresSurface(t *testing.T) {
 	}{
 		{"retrieval", "", "#/paths/~1run/get", invoke.ErrCodeSourceLoadFailed},
 		{"invalid document", "{", "#/paths/~1run/get", invoke.ErrCodeSourceLoadFailed},
-		{"unknown selector", preparationDocument(server.URL), "#/paths/~1missing/get", invoke.ErrCodeSelectorNotFound},
+		{"unknown selector", preflightDocument(server.URL), "#/paths/~1missing/get", invoke.ErrCodeSelectorNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI31, Location: server.URL + "/description"}
 			if tc.content != "" {
 				source.Content = openbindings.TextContent(tc.content)
 			}
-			details, err := NewInvoker().PrepareBinding(t.Context(), &invoke.BindingInvocationArgs{Source: source, Selector: tc.selector})
+			details, err := NewInvoker().PreflightBinding(t.Context(), &invoke.BindingInvocationArgs{Source: source, Selector: tc.selector})
 			var invocationErr *invoke.InvocationError
 			if details != nil || !errors.As(err, &invocationErr) || invocationErr.Code != tc.code {
 				t.Fatalf("prepare = (%v, %v), want %s", details, err, tc.code)
@@ -63,7 +63,7 @@ func TestPreparationRequiredFailuresSurface(t *testing.T) {
 	}
 }
 
-func TestPreparationReusesEmbeddedSourceWithoutExecuting(t *testing.T) {
+func TestPreflightReusesEmbeddedSourceWithoutExecuting(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -71,20 +71,20 @@ func TestPreparationReusesEmbeddedSourceWithoutExecuting(t *testing.T) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer server.Close()
-	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(preparationDocument(server.URL))}
-	iface := preparationInterface(source)
+	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(preflightDocument(server.URL))}
+	iface := preflightInterface(source)
 	adapter := NewAdapter()
 	invoker := invoke.NewOperationInvoker(adapter)
 	args := &invoke.BindingInvocationArgs{Source: invoke.InvocationSource{BindingSpec: source.BindingSpec, Content: source.Content}}
 	screenCtx, cancelScreen := context.WithCancel(t.Context())
 	for i := 0; i < 3; i++ {
-		if details, err := invoker.PrepareOperation(screenCtx, iface, "run"); details != nil || err != nil {
+		if details, err := invoker.PreflightOperation(screenCtx, iface, "run"); details != nil || err != nil {
 			t.Fatalf("early prepare = (%v, %v)", details, err)
 		}
 	}
 	prepared, ok := adapter.invoker.runtime.cachedNativeClient(args)
 	if !ok || requests.Load() != 0 {
-		t.Fatalf("preparation failed to retain analysis or executed the operation: retained=%v requests=%d", ok, requests.Load())
+		t.Fatalf("preflight failed to retain analysis or executed the operation: retained=%v requests=%d", ok, requests.Load())
 	}
 	cancelScreen() // Completed reusable analysis does not belong to this context.
 	call := invoke.Invoke(t.Context(), invoker, iface, invoke.NewOperationSignature[any, any]("run"))
@@ -113,7 +113,7 @@ func TestPreparationReusesEmbeddedSourceWithoutExecuting(t *testing.T) {
 	}
 }
 
-func TestPreparationCancellationDoesNotCancelConcurrentInvocation(t *testing.T) {
+func TestPreflightCancellationDoesNotCancelConcurrentInvocation(t *testing.T) {
 	var documents, operations atomic.Int64
 	entered := make(chan struct{})
 	var server *httptest.Server
@@ -124,7 +124,7 @@ func TestPreparationCancellationDoesNotCancelConcurrentInvocation(t *testing.T) 
 				<-r.Context().Done()
 				return
 			}
-			_, _ = io.WriteString(w, preparationDocument(server.URL))
+			_, _ = io.WriteString(w, preflightDocument(server.URL))
 			return
 		}
 		operations.Add(1)
@@ -132,13 +132,13 @@ func TestPreparationCancellationDoesNotCancelConcurrentInvocation(t *testing.T) 
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer server.Close()
-	iface := preparationInterface(openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Location: server.URL + "/description"})
+	iface := preflightInterface(openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Location: server.URL + "/description"})
 	invoker := invoke.NewOperationInvoker(NewAdapter())
 	screenCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	finished := make(chan error, 1)
 	go func() {
-		_, err := invoker.PrepareOperation(screenCtx, iface, "run")
+		_, err := invoker.PreflightOperation(screenCtx, iface, "run")
 		finished <- err
 	}()
 	<-entered
@@ -150,14 +150,14 @@ func TestPreparationCancellationDoesNotCancelConcurrentInvocation(t *testing.T) 
 	}
 	cancel()
 	if err := <-finished; !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled preparation = %v", err)
+		t.Fatalf("cancelled preflight = %v", err)
 	}
 	if operations.Load() != 1 || documents.Load() != 3 {
 		t.Fatalf("operation requests=%d description loads=%d; expected one execution and three uncached loads", operations.Load(), documents.Load())
 	}
 }
 
-func TestPreparationConcurrentContextIsolation(t *testing.T) {
+func TestPreflightConcurrentContextIsolation(t *testing.T) {
 	adapter := NewAdapter()
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1) }))
@@ -179,7 +179,7 @@ func TestPreparationConcurrentContextIsolation(t *testing.T) {
 			if supplied {
 				args.Context = map[string]any{"bearerToken": secret}
 			}
-			details, err := adapter.PrepareBinding(t.Context(), args)
+			details, err := adapter.PreflightBinding(t.Context(), args)
 			if err != nil || (details == nil) != supplied {
 				t.Errorf("supplied=%v prepare=(%v, %v)", supplied, details, err)
 			}
@@ -187,15 +187,15 @@ func TestPreparationConcurrentContextIsolation(t *testing.T) {
 	}
 	wg.Wait()
 	if calls.Load() != 0 {
-		t.Fatal("preparation executed an operation")
+		t.Fatal("preflight executed an operation")
 	}
 }
 
-// BenchmarkOperationPreparation compares the same fresh adapter and embedded
+// BenchmarkOperationPreflight compares the same fresh adapter and embedded
 // source, with work either at invocation time or moved before the simulated
 // click. The native-setup control deliberately accesses the adapter's private
 // loader to measure equivalent reuse without inventing another public API.
-func BenchmarkOperationPreparation(b *testing.B) {
+func BenchmarkOperationPreflight(b *testing.B) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -203,11 +203,11 @@ func BenchmarkOperationPreparation(b *testing.B) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer server.Close()
-	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(preparationDocument(server.URL))}
-	iface := preparationInterface(source)
-	for _, mode := range []string{"cold", "early-client-setup", "early-operation-preparation"} {
+	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(preflightDocument(server.URL))}
+	iface := preflightInterface(source)
+	for _, mode := range []string{"cold", "early-client-setup", "early-operation-preflight"} {
 		b.Run(mode, func(b *testing.B) {
-			var preparing, invoking time.Duration
+			var preflighting, invoking time.Duration
 			startRequests := requests.Load()
 			for i := 0; i < b.N; i++ {
 				adapter := NewAdapter()
@@ -221,13 +221,13 @@ func BenchmarkOperationPreparation(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
-				case "early-operation-preparation":
-					if details, err := invoker.PrepareOperation(b.Context(), iface, "run"); err != nil || details != nil {
+				case "early-operation-preflight":
+					if details, err := invoker.PreflightOperation(b.Context(), iface, "run"); err != nil || details != nil {
 						b.Fatalf("prepare=(%v, %v)", details, err)
 					}
 				}
 				click := time.Now()
-				preparing += click.Sub(start)
+				preflighting += click.Sub(start)
 				call := invoke.Invoke(b.Context(), invoker, iface, invoke.NewOperationSignature[any, any]("run"))
 				_ = call.Close()
 				_, err := invoke.Single(b.Context(), call.Outputs())
@@ -237,9 +237,9 @@ func BenchmarkOperationPreparation(b *testing.B) {
 				}
 				invoking += time.Since(click)
 			}
-			b.ReportMetric(float64(preparing.Nanoseconds())/float64(b.N), "prepare-ns/op")
+			b.ReportMetric(float64(preflighting.Nanoseconds())/float64(b.N), "preflight-ns/op")
 			b.ReportMetric(float64(invoking.Nanoseconds())/float64(b.N), "click-ns/op")
-			b.ReportMetric(float64((preparing+invoking).Nanoseconds())/float64(b.N), "total-ns/op")
+			b.ReportMetric(float64((preflighting+invoking).Nanoseconds())/float64(b.N), "total-ns/op")
 			b.ReportMetric(float64(requests.Load()-startRequests)/float64(b.N), "operation-requests/op")
 		})
 	}

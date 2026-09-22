@@ -77,9 +77,9 @@ func (r *PreparedRealization) Invoke(ctx context.Context, opts ...InvokeOption) 
 	return r.behavior.Invoke(ctx, opts...)
 }
 
-// Preflight offers optional binding-owned preparation and reports known missing
-// context under the BindingPreparer contract. It may perform I/O and does not
-// guarantee readiness or future success.
+// Preflight asks the realized binding which context requirements it can
+// already identify, under the BindingPreflighter contract. The result is
+// advisory; nil means none reported, not ready.
 func (r *PreparedRealization) Preflight(ctx context.Context, opts ...InvokeOption) (*ContextRequiredDetails, error) {
 	if err := r.provider.assertActive(); err != nil {
 		return nil, err

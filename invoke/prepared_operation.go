@@ -9,8 +9,8 @@ import (
 
 // CompiledRealizationBehavior is executable behavior for one exact
 // SDK-selected binding descriptor. It carries no authoritative route metadata.
-// Preflight forwards optional preparation under the BindingPreparer contract;
-// it may perform I/O but must not execute the requested operation.
+// Preflight forwards the preflight signal under the BindingPreflighter
+// contract; it never dispatches the requested operation.
 type CompiledRealizationBehavior interface {
 	Invoke(context.Context, ...InvokeOption) Invocation[any, any]
 	Preflight(context.Context, ...InvokeOption) (*ContextRequiredDetails, error)
@@ -123,9 +123,9 @@ func (b *compiledOperationBehavior) Preflight(ctx context.Context, opts ...Invok
 		args.Site.seamStamped = true
 	}
 	if b.compiledBinding != nil {
-		return b.compiledBinding.PrepareBinding(ctx, args)
+		return b.compiledBinding.PreflightBinding(ctx, args)
 	}
-	return b.invoker.PrepareBinding(ctx, args)
+	return b.invoker.PreflightBinding(ctx, args)
 }
 
 // CompileRealization performs deterministic closure for one exact prepared

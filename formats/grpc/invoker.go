@@ -38,7 +38,7 @@ type Invoker struct {
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
-var _ invoke.BindingPreparer = (*Invoker)(nil)
+var _ invoke.BindingPreflighter = (*Invoker)(nil)
 
 // InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
@@ -143,13 +143,13 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return inv
 }
 
-// PrepareBinding is the side-effect-free preflight (the prepareBinding
+// PreflightBinding answers the preflight signal (the preflightBinding
 // operation of the openbindings.binding-invoker interface). It walks the
-// pre-dispatch gates the invocation walks before its context challenge —
-// selector, target, and transport determination, all in-memory — and
+// pre-dispatch gates the invocation walks before its context challenge
+// (selector, target, and transport determination, all in-memory) and
 // reports the challenge the invocation would raise for these arguments, or
-// nil when it would proceed to dial. It never dials, reflects, reads input,
-// or touches the filesystem.
+// nil when it would proceed to dial. This implementation never dials,
+// reflects, reads input, or touches the filesystem.
 //
 // A gate the invocation would fail with a different error (an invalid
 // selector, a malformed target, an undetermined transport) is reported as
@@ -158,7 +158,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // Server Reflection after dialing (GRPC-P-01), but the family's only
 // context requirement is decided before that, so preflight is complete
 // without them.
-func (e *Invoker) PrepareBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	if _, _, err := parseSelector(args.Selector); err != nil {
 		return nil, nil
 	}
@@ -199,7 +199,7 @@ func resolveTarget(args *invoke.BindingInvocationArgs) (string, dialAddress, err
 }
 
 // unplacedCredentialChallenge is the ONE place the family's context
-// challenge is built, so the live invocation and PrepareBinding cannot
+// challenge is built, so the live invocation and PreflightBinding cannot
 // drift. Protobuf and gRPC declare no application authentication scheme
 // and this specification invents none (§9.5, GRPC-P-07): a generic
 // runtime credential (apiKey, bearer, basic) that does not name its
@@ -261,7 +261,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 
 	// Credentials ride outgoing gRPC metadata (§9.5, GRPC-P-07); a generic
 	// credential that names no metadata carriage is surfaced here,
-	// pre-dispatch, with the challenge PrepareBinding reports for the same
+	// pre-dispatch, with the challenge PreflightBinding reports for the same
 	// arguments.
 	if challenge := unplacedCredentialChallenge(target, args.Context); challenge != nil {
 		inv.FireError(invoke.NewContextRequiredError(challenge))

@@ -82,12 +82,12 @@ func TestBindingInvokerRequiresAnExactFamilyToken(t *testing.T) {
 	_, invocationErr := driveSingle(t, NewInvoker().InvokeBinding(context.Background(), args), nil)
 	assertExactTokenError(t, invocationErr)
 
-	_, prepareErr := NewInvoker().PrepareBinding(context.Background(), args)
-	var prepareInvocationErr *invoke.InvocationError
-	if !errors.As(prepareErr, &prepareInvocationErr) {
-		t.Fatalf("prepare error = %#v, want invocation error", prepareErr)
+	_, preflightErr := NewInvoker().PreflightBinding(context.Background(), args)
+	var preflightInvocationErr *invoke.InvocationError
+	if !errors.As(preflightErr, &preflightInvocationErr) {
+		t.Fatalf("preflight error = %#v, want invocation error", preflightErr)
 	}
-	assertExactTokenError(t, prepareInvocationErr)
+	assertExactTokenError(t, preflightInvocationErr)
 
 }
 
@@ -120,13 +120,13 @@ func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {
 				t.Fatalf("synthesis error = %v, want token/edition refusal", synthesisErr)
 			}
 
-			prepareDetails, prepareErr := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
+			preflightDetails, preflightErr := NewInvoker().PreflightBinding(context.Background(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)},
 				Selector: "#/paths/~1x/get",
 			})
-			var preparationErr *invoke.InvocationError
-			if prepareDetails != nil || !errors.As(prepareErr, &preparationErr) || preparationErr.Code != invoke.ErrCodeSourceLoadFailed {
-				t.Fatalf("prepare = (%#v, %#v), want source edition failure", prepareDetails, prepareErr)
+			var preflightInvocationErr *invoke.InvocationError
+			if preflightDetails != nil || !errors.As(preflightErr, &preflightInvocationErr) || preflightInvocationErr.Code != invoke.ErrCodeSourceLoadFailed {
+				t.Fatalf("preflight = (%#v, %#v), want source edition failure", preflightDetails, preflightErr)
 			}
 		})
 	}

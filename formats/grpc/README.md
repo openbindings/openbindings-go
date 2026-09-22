@@ -173,6 +173,15 @@ credential without a named metadata carriage raises `CONTEXT_REQUIRED` before
 reflection or method dispatch; it is never silently mapped to
 `authorization`.
 
+### Preflight
+
+`PreflightBinding` answers the SDK's preflight signal from the supplied context
+and the in-memory gates the invocation walks before its context challenge
+(selector, target, transport determination). It uses no network, opens no
+session, and never dials or reflects; a location-only source's descriptors are
+still obtained live at invocation. Supplied context that the binding can place
+narrows the result to nil. Context supplied to preflight is not retained.
+
 ### Connect (Buf) compatibility
 
 This invoker can discover and execute against [Connect](https://connectrpc.com) servers that serve the gRPC protocol (the default). Connect handlers expose gRPC alongside the Connect protocol, and Connect's `grpcreflect` package is wire-compatible with Google's gRPC reflection API.

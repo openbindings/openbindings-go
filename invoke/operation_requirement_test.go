@@ -84,7 +84,7 @@ func (b *operationRequirementBinding) CheckBindingSpecs(bindingSpecs []string) [
 	return openbindings.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
 }
 
-func (b *operationRequirementBinding) PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (b *operationRequirementBinding) PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return b.requirement, nil
 }
 
@@ -458,7 +458,7 @@ func TestResolveOperationRequirementReportsMalformedCandidates(t *testing.T) {
 }
 
 // A cancelled context must stop MatchOperationRequirement rather than run the
-// full candidate assessment: each candidate's PrepareOperation can do real
+// full candidate assessment: each candidate's PreflightOperation can do real
 // work (schema compilation, discovery). Parity with the TS SDK, which
 // throwIfAborted()s per candidate.
 func TestMatchOperationRequirementHonorsCancellation(t *testing.T) {

@@ -4,25 +4,37 @@
 
 ### Fixed
 
-- **Required preparation failures are returned.** Failed description retrieval,
+- **Required preflight failures are returned.** Failed description retrieval,
   invalid descriptions, edition/selector checks and analysis no longer become
   successful unknown results. Cancellation remains observable to the caller.
-  Preparation does not execute the selected operation or resolve credentials.
+  Preflight does not execute the selected operation or resolve credentials.
 
 ### Changed
 
-- **`PrepareBinding` loads a location-only document.** Preflight now performs
+- **The operation is named preflight and its documented contract is the signal
+  contract** (the preflight signal contract proposal, 2026-09-21):
+  `Invoker.PrepareBinding` and `Adapter.PrepareBinding` are `PreflightBinding`
+  and the `invoke.BindingPreparer` assertions are `invoke.BindingPreflighter`.
+  The result is advisory: it may omit requirements, nil is always conformant,
+  and the live `CONTEXT_REQUIRED` remains authoritative. Invocation never
+  requires a prior preflight. Context supplied to preflight is supplied for
+  that call alone. Preflight never dispatches the requested operation,
+  consumes its input, emits its outputs, or spends an approval for it. An
+  error means the binding could not answer and carries no prediction. See the
+  README's Preflight section for what this adapter does to answer.
+
+- **`PreflightBinding` loads a location-only document.** Preflight now performs
   the same description load the invocation performs before any operation
   request, so a cold source reports its context requirements instead of
   deferring them to a live challenge. Reading the description artifact does
   not execute the selected operation. This follows the 2026-09-21 ruling that removed live
   `CONTEXT_REQUIRED` replay from the operation invoker: a configured resolver
-  is consulted at preparation only. The advisory no-fetch load and its separate cache lane are
+  is consulted at preflight only. The advisory no-fetch load and its separate cache lane are
   removed.
 
 ### Added
 
-- **OpenAPI adapter preparation now reuses bounded, content-addressed native
+- **OpenAPI adapter preflight now reuses bounded, content-addressed native
   client revisions.** Identical source content reuses one executable analysis;
   changed inline content at the same location creates a distinct revision.
 

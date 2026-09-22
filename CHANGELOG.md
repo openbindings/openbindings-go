@@ -6,8 +6,8 @@
 
 ### Fixed
 
-- **Preparation failures remain visible.** OpenAPI now reports failed required
-  description loads, edition/selector checks and analysis during preparation,
+- **Preflight failures remain visible.** OpenAPI now reports failed required
+  description loads, edition/selector checks and analysis during preflight,
   including cancellation, instead of returning a successful unknown result.
 
 - **Context matching keeps the complete challenge's scheme identities.**
@@ -21,7 +21,7 @@
   when the other is nonempty. Missing or wrongly typed members no longer pass
   the flat or extraction paths when the named representation would reject them.
 - **Cancellation also reaches preflight and its context resolver.** Cancelling
-  an invocation after rejected input now cancels cooperative preparation and
+  an invocation after rejected input now cancels cooperative preflight and
   resolution work, as well as binding execution.
 
 - **Named credential scoping preserves usable fallbacks.** Empty or malformed
@@ -51,13 +51,22 @@
 
 ### Changed
 
-- **Optional preparation permits binding-owned setup.** `PrepareOperation`,
-  `PrepareBinding` and existing `Preflight` callbacks keep their signatures.
-  They may perform I/O and retain reusable state under the adapter/client's
-  existing policy, but never execute the requested operation. Early preparation
-  is optional and does not resolve context. Nil is not readiness; an error in
-  invocation's automatic preparation lane stops execution. Optional acceleration
-  uses the binding's normal valid fallback. See `PREPARATION.md`.
+- **The operation is named preflight and its documented contract is the
+  signal contract** (the preflight signal contract proposal, 2026-09-21).
+  `invoke.BindingPreparer` is `invoke.BindingPreflighter`;
+  `OperationInvoker.PrepareOperation` and `.PrepareBinding` are
+  `PreflightOperation` and `PreflightBinding`;
+  `CompiledBindingInvoker.PrepareBinding` is `PreflightBinding`;
+  `OperationMatch.Prepare` is `OperationMatch.Preflight`;
+  `sdk.Runtime.PrepareOperation` is `PreflightOperation`; `PREPARATION.md` is
+  `PREFLIGHT.md`. The static compilation family (`PrepareInterface`,
+  `PrepareProvider`, `Prepared*`) is unchanged. The result is advisory: it may
+  omit requirements, nil is always conformant, and the live `CONTEXT_REQUIRED`
+  remains authoritative. Invocation never requires a prior preflight. Context
+  supplied to preflight is supplied for that call alone. Preflight never
+  dispatches the requested operation, consumes its input, emits its outputs,
+  or spends an approval for it. An error means the binding could not answer
+  and carries no prediction. See `PREFLIGHT.md`.
 
 - **Invocation values now have snapshot ownership and finite per-value
   limits** (breaking, pre-1.0 minor-release change). Ordinary typed/local paths
@@ -75,7 +84,7 @@
 - **A live `CONTEXT_REQUIRED` now ends the invocation instead of being
   replayed** (breaking, pre-1.0 minor-release change; the context-challenge
   replay removal ruling, 2026-09-21). The operation invoker still resolves
-  requirements a binding states before the first attempt (`PrepareBinding`)
+  requirements a binding states before the first attempt (`PreflightBinding`)
   through its `ContextResolver` and starts the one attempt with the merged
   context. A `CONTEXT_REQUIRED` raised during the attempt surfaces as the
   terminal error with its `ContextRequiredDetails` intact, whether or not any
@@ -297,8 +306,8 @@
   pairs an ordinary required OBI with a typed operation signature; an
   application supplies concrete interfaces and its explicitly installed
   `OperationInvoker`s. Matching is alias-aware, checks only the requested
-  operation against both complete schema graphs, offers binding-owned
-  preparation, and carries advisory context requirements. The neutral
+  operation against both complete schema graphs, offers preflight, and
+  carries advisory context requirements. The neutral
   matcher returns every invocable match; the route-to-one convenience selects
   a unique highest caller preference and refuses a tie as
   `OperationRequirementAmbiguous`. Format modules remain optional and
@@ -510,8 +519,8 @@
   effects of the requested operation. The `OperationInvoker` resolves challenges known at preflight
   via a composition-time `ContextResolver` (a live challenge surfaces to the
   caller; see the replay-removal entry above). Invokers that can derive
-  requirements from their source implement optional `BindingPreparer`
-  preparation; `StoreContextResolver(store)`/`ContextSatisfies` compose the
+  requirements from their source implement optional `BindingPreflighter`
+  preflight; `StoreContextResolver(store)`/`ContextSatisfies` compose the
   binding-invoker and context-store roles. `OperationInvoker.WithRuntime` now
   takes a `ContextResolver`.
 

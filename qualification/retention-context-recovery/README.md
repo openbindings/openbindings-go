@@ -33,7 +33,7 @@ Matching, scoping and credential extraction now agree about valid named and flat
 representations. Restricted store eligibility retains the complete challenge's
 credential-identity rules. Store-backed resolution preserves original alternative
 order across storage keys and caches reads. Invocation cancellation now reaches
-cooperative preparation and preflight context resolution as well as execution.
+cooperative preflight and its context resolution as well as execution.
 Core gained no automatic live replay or application merge policy.
 
 ## Review evidence
@@ -41,7 +41,7 @@ Core gained no automatic live replay or application merge policy.
 Three rounds of independent readers found defects that were corrected before
 the final assessment, including whole-object replacement, credential fallbacks,
 matching alternatives outside the complete challenge, Basic representation
-consistency, preparation cancellation, and storage-key grouping that reordered
+consistency, preflight cancellation, and storage-key grouping that reordered
 alternatives. The array-element path limitation below was documented explicitly.
 
 | Final reader | Method | Grade |
@@ -83,12 +83,13 @@ Verification inputs:
 
 ## Remaining work
 
-1. **Preflight contract.** `BindingPreparer` currently prohibits network I/O,
-   while OpenAPI preparation can retrieve a remote description for a cold,
-   location-only source. Decide the binding-neutral boundary between preparation
-   and execution of the requested operation, then align contracts, documentation
-   and the OpenAPI implementation. The cancellation correction does not settle
-   this policy.
+1. **Preflight contract.** At the time of this pass the contract text
+   prohibited network I/O while OpenAPI preflight could retrieve a remote
+   description for a cold, location-only source. Since settled by the preflight
+   signal contract (2026-09-21): `BindingPreflighter` (then `BindingPreparer`)
+   promises only that preflight never dispatches the requested operation; what
+   an adapter does to answer is that adapter's to document. See `PREFLIGHT.md`.
+   The cancellation correction did not settle this policy.
 2. **Array-element configuration paths.** Default context helpers and this
    example traverse object members. Whole arrays are supported as values, but
    paths through an array element, such as `/0/url`, require application-specific

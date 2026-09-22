@@ -6,12 +6,12 @@ import (
 	"testing/synctest"
 )
 
-type cancellationPreparer struct {
+type cancellationPreflighter struct {
 	mockBindingInvoker
 	prepare func(context.Context) (*ContextRequiredDetails, error)
 }
 
-func (p *cancellationPreparer) PrepareBinding(ctx context.Context, _ *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (p *cancellationPreflighter) PreflightBinding(ctx context.Context, _ *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return p.prepare(ctx)
 }
 
@@ -26,7 +26,7 @@ func TestCancelAfterRejectedInputStopsPreflight(t *testing.T) {
 					entered <- workCtx
 					<-workCtx.Done()
 				}
-				binding := &cancellationPreparer{prepare: func(workCtx context.Context) (*ContextRequiredDetails, error) {
+				binding := &cancellationPreflighter{prepare: func(workCtx context.Context) (*ContextRequiredDetails, error) {
 					if stage == "prepare" {
 						block(workCtx)
 						return nil, workCtx.Err()

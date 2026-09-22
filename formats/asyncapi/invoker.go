@@ -46,8 +46,8 @@ type Invoker struct {
 }
 
 var (
-	_ invoke.BindingInvoker  = (*Invoker)(nil)
-	_ invoke.BindingPreparer = (*Invoker)(nil)
+	_ invoke.BindingInvoker     = (*Invoker)(nil)
+	_ invoke.BindingPreflighter = (*Invoker)(nil)
 )
 
 // NewInvoker creates a new AsyncAPI binding invoker with a default HTTP
@@ -206,14 +206,16 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	return nil
 }
 
-// PrepareBinding is the side-effect-free preflight: it reports the context
-// this binding would require, or nil when the binding can proceed. It performs
-// the same document load the invocation performs before any protocol I/O, so a
-// cold location-only source reports its requirements here; reading the
-// description artifact touches no operation target. A live CONTEXT_REQUIRED
-// terminates the invocation for the caller to resolve, so a configured
-// resolver only ever sees the requirements this preflight reports.
-func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+// PreflightBinding answers the preflight signal (the preflightBinding
+// operation of the openbindings.binding-invoker interface): it reports the
+// context requirements it can already identify, or nil. It performs the
+// same document load the invocation performs before any protocol I/O
+// (the warm document cache first), so a cold location-only source reports
+// its requirements here; reading the description artifact touches no
+// operation target. A live CONTEXT_REQUIRED terminates the invocation for
+// the caller to resolve, so a configured resolver only ever sees the
+// requirements this preflight reports.
+func (e *Invoker) PreflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	options, err := enginePrepareOptions(args, e.httpClient)
 	if err != nil {
 		return nil, nil

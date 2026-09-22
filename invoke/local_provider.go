@@ -10,9 +10,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// LocalPreflight optionally prepares one native implementation and reports
-// known missing context. It follows BindingPreparer, including its effects and
-// ownership rules; it must not execute the requested operation.
+// LocalPreflight answers preflight for one native implementation: the
+// context requirements it can already identify, under the BindingPreflighter
+// contract. It never dispatches the requested operation.
 type LocalPreflight func(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error)
 
 type localStreamHandler func(context.Context, BindingHandle[any, any], *BindingInvocationArgs)
@@ -27,7 +27,7 @@ type LocalBindingImplementation struct {
 // LocalImplementationOption configures one native implementation.
 type LocalImplementationOption func(*LocalBindingImplementation)
 
-// WithLocalPreflight attaches optional preparation under the BindingPreparer contract.
+// WithLocalPreflight attaches an optional preflight under the BindingPreflighter contract.
 func WithLocalPreflight(preflight LocalPreflight) LocalImplementationOption {
 	return func(implementation *LocalBindingImplementation) {
 		implementation.preflight = preflight
@@ -149,12 +149,12 @@ func (i *localBindingInvoker) InvokeBinding(ctx context.Context, args *BindingIn
 	return compiled.InvokeBinding(ctx, args)
 }
 
-func (i *localBindingInvoker) PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (i *localBindingInvoker) PreflightBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	compiled, err := i.CompileBinding(args)
 	if err != nil {
 		return nil, err
 	}
-	return compiled.PrepareBinding(ctx, args)
+	return compiled.PreflightBinding(ctx, args)
 }
 
 type compiledLocalBinding struct{ implementation LocalBindingImplementation }
@@ -178,7 +178,7 @@ func (b *compiledLocalBinding) InvokeBinding(ctx context.Context, args *BindingI
 	return invocation
 }
 
-func (b *compiledLocalBinding) PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (b *compiledLocalBinding) PreflightBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	if b.implementation.preflight == nil {
 		return nil, nil
 	}
@@ -292,7 +292,7 @@ func PrepareLocalProvider(options PrepareLocalProviderOptions) (*PreparedProvide
 }
 
 var _ BindingInvoker = (*localBindingInvoker)(nil)
-var _ BindingPreparer = (*localBindingInvoker)(nil)
+var _ BindingPreflighter = (*localBindingInvoker)(nil)
 var _ BindingCompiler = (*localBindingInvoker)(nil)
 var _ ProviderRuntime = (*localProviderRuntime)(nil)
 var _ ProviderRuntimeSnapshotCompiler = (*localProviderRuntime)(nil)

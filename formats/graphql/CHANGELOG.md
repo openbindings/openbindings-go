@@ -20,6 +20,18 @@
 
 ### Changed
 
+- **The operation is named preflight and its documented contract is the signal
+  contract** (the preflight signal contract proposal, 2026-09-21):
+  `Invoker.PrepareBinding` is `Invoker.PreflightBinding` and the
+  `invoke.BindingPreparer` assertion is `invoke.BindingPreflighter`. The
+  result is advisory: it may omit requirements, nil is always conformant, and
+  the live `CONTEXT_REQUIRED` remains authoritative. Invocation never requires
+  a prior preflight. Context supplied to preflight is supplied for that call
+  alone. Preflight never dispatches the requested operation, consumes its
+  input, emits its outputs, or spends an approval for it. An error means the
+  binding could not answer and carries no prediction. See the README's
+  Preflight section for what this adapter does to answer.
+
 - **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
   `bindings[*].selector`): bindings ride
   `invoke.BindingInvocationArgs.Selector`, and refusals use

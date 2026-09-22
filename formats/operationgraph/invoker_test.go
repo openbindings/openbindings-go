@@ -15,10 +15,10 @@ import (
 )
 
 // Creation is inert: InvokeBinding returns the handle synchronously and
-// preflight failures (here: an unloadable source) surface as a terminal
+// source-load failures (here: an unloadable source) surface as a terminal
 // error THROUGH the handle, never as a synchronous load before the handle
 // exists (the load may be a network fetch).
-func TestInvokeBinding_PreflightErrorsThroughHandle(t *testing.T) {
+func TestInvokeBinding_SourceLoadErrorsThroughHandle(t *testing.T) {
 	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: filepath.Join(t.TempDir(), "missing.json")},
 		Selector: "#/graphs/g",
@@ -28,7 +28,7 @@ func TestInvokeBinding_PreflightErrorsThroughHandle(t *testing.T) {
 	}
 	_, err := invoke.Single[any](context.Background(), inv.Outputs())
 	if err == nil {
-		t.Fatal("expected the preflight failure as a terminal error")
+		t.Fatal("expected the source-load failure as a terminal error")
 	}
 	ierr := invoke.AsInvocationError(err)
 	if ierr == nil || ierr.Code != invoke.ErrCodeSourceLoadFailed {

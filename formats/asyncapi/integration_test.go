@@ -325,7 +325,7 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 
 	for _, opSelector := range []string{"#/operations/refScheme", "#/operations/inlineScheme"} {
 		t.Run(opSelector, func(t *testing.T) {
-			details, err := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+			details, err := binv.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 				Selector: opSelector,
 			})
@@ -343,7 +343,7 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 			}
 
 			// A bearer token in context satisfies the challenge.
-			ok, err := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+			ok, err := binv.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 				Selector: opSelector,
 				Context:  map[string]any{"bearerToken": "t"},
@@ -684,16 +684,16 @@ func TestWiringErrors(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PrepareBinding (side-effect-free preflight)
+// PreflightBinding (the preflight signal)
 // ---------------------------------------------------------------------------
 
-func TestPrepareBindingReportsBearerRequirement(t *testing.T) {
+func TestPreflightBindingReportsBearerRequirement(t *testing.T) {
 	srv, requests := newHTTPFixture(t)
 	binv := NewInvoker()
 	defer binv.Close()
 
 	before := requests.Load()
-	details, err := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+	details, err := binv.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   httpSource(srv),
 		Selector: "#/operations/sendMessage",
 	})
@@ -710,16 +710,16 @@ func TestPrepareBindingReportsBearerRequirement(t *testing.T) {
 		t.Errorf("alternatives = %+v", details.Alternatives)
 	}
 	if got := requests.Load(); got != before {
-		t.Errorf("PrepareBinding must be side-effect-free: %d requests dispatched", got-before)
+		t.Errorf("PreflightBinding must not dispatch the operation: %d requests dispatched", got-before)
 	}
 }
 
-func TestPrepareBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
+func TestPreflightBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
 	srv, _ := newHTTPFixture(t)
 	binv := NewInvoker()
 	defer binv.Close()
 
-	if d, _ := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+	if d, _ := binv.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   httpSource(srv),
 		Selector: "#/operations/sendMessage",
 		Context:  map[string]any{"bearerToken": testSecret},
@@ -727,7 +727,7 @@ func TestPrepareBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
 		t.Errorf("satisfied context: expected nil, got %+v", d)
 	}
 
-	if d, _ := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+	if d, _ := binv.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   httpSource(srv),
 		Selector: "#/operations/sendOpenMessage",
 	}); d != nil {
@@ -735,7 +735,7 @@ func TestPrepareBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
 	}
 }
 
-func TestPrepareBindingLoadsLocationOnlyDocument(t *testing.T) {
+func TestPreflightBindingLoadsLocationOnlyDocument(t *testing.T) {
 	srv, requests := newHTTPFixture(t)
 	specURL := srv.URL + "/spec.json"
 
@@ -745,7 +745,7 @@ func TestPrepareBindingLoadsLocationOnlyDocument(t *testing.T) {
 	cold := NewInvoker()
 	defer cold.Close()
 	before := requests.Load()
-	d, err := cold.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+	d, err := cold.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
 		Selector: "#/operations/sendMessage",
 	})
@@ -761,7 +761,7 @@ func TestPrepareBindingLoadsLocationOnlyDocument(t *testing.T) {
 
 	// The load warmed the cache: a second preflight answers without any request.
 	warmBefore := requests.Load()
-	d, err = cold.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+	d, err = cold.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
 		Selector: "#/operations/sendMessage",
 	})

@@ -317,7 +317,7 @@ func TestStoreResolverDrivesPreflightEndToEnd(t *testing.T) {
 	// attempt starts with it.
 	store := testStore{"api.example.com": {"bearerToken": "stored"}}
 
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	op := newOpInvoker(mock, StoreContextResolver(store))
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {

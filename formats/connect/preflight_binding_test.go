@@ -10,8 +10,9 @@ import (
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
-// untouchableServer is an HTTP server that records any contact. Preflight is
-// side-effect-free by contract, so any request reaching it is a failure.
+// untouchableServer is an HTTP server that records any contact. This
+// adapter's preflight uses no network, so any request reaching it is a
+// failure.
 func untouchableServer(t *testing.T) (*httptest.Server, *atomic.Bool) {
 	t.Helper()
 	var hit atomic.Bool
@@ -23,11 +24,11 @@ func untouchableServer(t *testing.T) (*httptest.Server, *atomic.Bool) {
 	return srv, &hit
 }
 
-// PrepareBinding reports exactly the challenge the live invocation raises
+// PreflightBinding reports exactly the challenge the live invocation raises
 // for the same arguments: an apiKey with no consumer-named header is
 // inexpressible under §9.6 and is surfaced as one auth.apiKey requirement
 // against the resolved target.
-func TestPrepareBinding_MatchesLiveChallenge(t *testing.T) {
+func TestPreflightBinding_MatchesLiveChallenge(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		content any
@@ -41,12 +42,12 @@ func TestPrepareBinding_MatchesLiveChallenge(t *testing.T) {
 			args := unaryArgs(srv.URL, tc.content, "testpkg.TestService/GetItem")
 			args.Context = map[string]any{"apiKey": "k-secret"}
 
-			preflight, err := NewInvoker().PrepareBinding(ctx, args)
+			preflight, err := NewInvoker().PreflightBinding(ctx, args)
 			if err != nil {
-				t.Fatalf("PrepareBinding: %v", err)
+				t.Fatalf("PreflightBinding: %v", err)
 			}
 			if !invoke.ValidContextRequiredDetails(preflight) {
-				t.Fatalf("PrepareBinding must report a valid challenge, got %#v", preflight)
+				t.Fatalf("PreflightBinding must report a valid challenge, got %#v", preflight)
 			}
 			if preflight.Target != srv.URL {
 				t.Errorf("Target = %q, want the resolved target %q", preflight.Target, srv.URL)
@@ -65,9 +66,9 @@ func TestPrepareBinding_MatchesLiveChallenge(t *testing.T) {
 }
 
 // Supplying context that the binding can place narrows the result to
-// nothing: PrepareBinding returns nil exactly where the invocation would
+// nothing: PreflightBinding returns nil exactly where the invocation would
 // proceed past context application.
-func TestPrepareBinding_SatisfiedContextIsNil(t *testing.T) {
+func TestPreflightBinding_SatisfiedContextIsNil(t *testing.T) {
 	ctx := testContext(t)
 	srv, hit := untouchableServer(t)
 	for name, bindCtx := range map[string]map[string]any{
@@ -78,12 +79,12 @@ func TestPrepareBinding_SatisfiedContextIsNil(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
 			args.Context = bindCtx
-			details, err := NewInvoker().PrepareBinding(ctx, args)
+			details, err := NewInvoker().PreflightBinding(ctx, args)
 			if err != nil {
-				t.Fatalf("PrepareBinding: %v", err)
+				t.Fatalf("PreflightBinding: %v", err)
 			}
 			if details != nil {
-				t.Errorf("PrepareBinding = %#v, want nil for placeable context", details)
+				t.Errorf("PreflightBinding = %#v, want nil for placeable context", details)
 			}
 		})
 	}
@@ -95,7 +96,7 @@ func TestPrepareBinding_SatisfiedContextIsNil(t *testing.T) {
 // The challenge names the target the invocation would dispatch to: a
 // configured target (§9.1) replaces the source location in the challenge
 // exactly as it does on the wire.
-func TestPrepareBinding_ConfiguredTargetIsChallengeTarget(t *testing.T) {
+func TestPreflightBinding_ConfiguredTargetIsChallengeTarget(t *testing.T) {
 	ctx := testContext(t)
 	srv, hit := untouchableServer(t)
 	args := unaryArgs("http://never.invalid", testProto, "testpkg.TestService/GetItem")
@@ -103,9 +104,9 @@ func TestPrepareBinding_ConfiguredTargetIsChallengeTarget(t *testing.T) {
 		"apiKey":        "k-secret",
 		"configuration": map[string]any{"target": srv.URL},
 	}
-	preflight, err := NewInvoker().PrepareBinding(ctx, args)
+	preflight, err := NewInvoker().PreflightBinding(ctx, args)
 	if err != nil {
-		t.Fatalf("PrepareBinding: %v", err)
+		t.Fatalf("PreflightBinding: %v", err)
 	}
 	if preflight == nil || preflight.Target != srv.URL {
 		t.Fatalf("Target = %#v, want configured target %q", preflight, srv.URL)
@@ -123,7 +124,7 @@ func TestPrepareBinding_ConfiguredTargetIsChallengeTarget(t *testing.T) {
 // Gates the invocation would fail with a different error are not context
 // requirements: preflight reports nothing and leaves the refusal to the
 // authoritative invocation.
-func TestPrepareBinding_NonContextRefusalsReportNothing(t *testing.T) {
+func TestPreflightBinding_NonContextRefusalsReportNothing(t *testing.T) {
 	ctx := testContext(t)
 	srv, hit := untouchableServer(t)
 	for name, args := range map[string]*invoke.BindingInvocationArgs{
@@ -135,9 +136,9 @@ func TestPrepareBinding_NonContextRefusalsReportNothing(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			args.Context = map[string]any{"apiKey": "k-secret"}
-			details, err := NewInvoker().PrepareBinding(ctx, args)
+			details, err := NewInvoker().PreflightBinding(ctx, args)
 			if err != nil || details != nil {
-				t.Errorf("PrepareBinding = (%#v, %v), want (nil, nil)", details, err)
+				t.Errorf("PreflightBinding = (%#v, %v), want (nil, nil)", details, err)
 			}
 		})
 	}

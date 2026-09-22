@@ -20,7 +20,7 @@ func (b *preparedEchoBinding) CheckBindingSpecs(bindingSpecs []string) []openbin
 	return openbindings.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
 }
 
-func (b *preparedEchoBinding) PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (b *preparedEchoBinding) PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return nil, nil
 }
 
