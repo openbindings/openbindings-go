@@ -1,4 +1,4 @@
-package synthesize
+package acquire
 
 import (
 	"context"
@@ -10,23 +10,19 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/httpdiscovery"
 	"github.com/openbindings/openbindings-go/jsonvalue"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
-
-// WellKnownPath is the well-known URI path at which an origin publishes its
-// OpenBindings interface document, per the OpenBindings HTTP Discovery
-// companion specification (spec repository, http-discovery.md), which
-// registers the `openbindings` well-known URI suffix and defines the
-// endpoint it names. FetchInterface probes it after a direct fetch fails.
-const WellKnownPath = "/.well-known/openbindings"
 
 // maxFetchBytes caps how much of a fetched interface document is read
 // (1 MiB — matched byte-for-byte by the TS SDK). Exceeding it is a loud
 // error, never a truncation.
 const maxFetchBytes = 1 << 20
 
-// FetchedInterface is the result of FetchInterface.
-type FetchedInterface struct {
+// Result is the result of resolving an interface through acquisition or
+// optional synthesis.
+type Result struct {
 	Interface *openbindings.Interface
 	// Synthesized is true when the OBI was synthesized from a non-OBI
 	// source (e.g. an OpenAPI document) via a synthesizer.
@@ -34,45 +30,49 @@ type FetchedInterface struct {
 	// Coverage is present when synthesis produced durable coverage evidence.
 	// It is nil for an interface fetched directly or through well-known
 	// discovery, because no synthesis occurred in this call.
-	Coverage *SynthesisCoverage
+	Coverage *synthesize.SynthesisCoverage
 }
 
-// FetchOption configures FetchInterface.
-type FetchOption func(*fetchOptions)
+// Option configures Resolve.
+type Option func(*options)
 
-type fetchOptions struct {
+type options struct {
 	client       *http.Client
-	synthesizers []InterfaceSynthesizer
+	synthesizers []synthesize.InterfaceSynthesizer
 }
 
-// WithFetchHTTPClient sets a custom HTTP client for the fetch.
-func WithFetchHTTPClient(c *http.Client) FetchOption {
-	return func(o *fetchOptions) { o.client = c }
+// WithHTTPClient sets a custom HTTP client for direct retrieval and discovery.
+func WithHTTPClient(c *http.Client) Option {
+	return func(o *options) { o.client = c }
 }
 
 // WithSynthesizers provides synthesizers for synthesizing OBIs from non-OBI
 // sources (OpenAPI, AsyncAPI, etc.). When the URL doesn't serve an
 // OBI directly and well-known discovery fails, each synthesizer is tried
 // in turn.
-func WithSynthesizers(synthesizers ...InterfaceSynthesizer) FetchOption {
-	return func(o *fetchOptions) { o.synthesizers = synthesizers }
+func WithSynthesizers(synthesizers ...synthesize.InterfaceSynthesizer) Option {
+	return func(o *options) { o.synthesizers = synthesizers }
 }
 
-// FetchInterface resolves an OBI from a URL. For HTTP URLs, it tries
-// a direct fetch first, then well-known discovery at
-// /.well-known/openbindings. If neither yields an OBI and synthesizers are
-// supplied, it synthesizes from the URL's content (e.g. an OpenAPI doc).
+// Resolve obtains an OBI from a URL. For HTTP URLs, it tries a direct fetch,
+// then optional well-known discovery at the URL's origin. If neither yields an
+// OBI and synthesizers are supplied, it tries synthesis from the target.
 //
 // Returns an error if the OBI cannot be acquired.
-func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*FetchedInterface, error) {
-	o := &fetchOptions{client: http.DefaultClient}
+func Resolve(ctx context.Context, target string, opts ...Option) (*Result, error) {
+	o := &options{client: http.DefaultClient}
 	for _, opt := range opts {
-		opt(o)
+		if opt != nil {
+			opt(o)
+		}
+	}
+	if o.client == nil {
+		o.client = http.DefaultClient
 	}
 
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return nil, fmt.Errorf("openbindings: FetchInterface: empty target")
+		return nil, fmt.Errorf("openbindings: Resolve: empty target")
 	}
 
 	// The resolution chain has up to three steps (direct OBI, well-known
@@ -85,17 +85,30 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 	if openbindings.IsHTTPURL(target) {
 		iface, err := tryFetchOBI(ctx, o.client, target)
 		if err == nil && iface != nil {
-			return &FetchedInterface{Interface: iface}, nil
+			return &Result{Interface: iface}, nil
 		}
 		trail = append(trail, "direct fetch: "+fetchStepResult(iface, err))
 
 		if !shouldSkipWellKnownDiscovery(target) {
-			wellKnown := strings.TrimRight(target, "/") + WellKnownPath
-			iface, err := tryFetchOBI(ctx, o.client, wellKnown)
-			if err == nil && iface != nil {
-				return &FetchedInterface{Interface: iface}, nil
+			origin, originErr := originOf(target)
+			if originErr != nil {
+				trail = append(trail, httpdiscovery.WellKnownPath+": "+originErr.Error())
+			} else {
+				iface, found, discoveryErr := httpdiscovery.Discover(ctx, origin, httpdiscovery.WithHTTPClient(o.client))
+				if discoveryErr == nil && found {
+					return &Result{Interface: iface}, nil
+				}
+				var gated *httpdiscovery.GatedError
+				var refused *httpdiscovery.VersionRefusalError
+				if errors.As(discoveryErr, &gated) || errors.As(discoveryErr, &refused) {
+					return nil, discoveryErr
+				}
+				if discoveryErr != nil {
+					trail = append(trail, httpdiscovery.WellKnownPath+": "+discoveryErr.Error())
+				} else {
+					trail = append(trail, httpdiscovery.WellKnownPath+": not published")
+				}
 			}
-			trail = append(trail, WellKnownPath+": "+fetchStepResult(iface, err))
 		}
 	}
 
@@ -106,25 +119,25 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 		return nil, fmt.Errorf("no OBI available at %s and no synthesizers supplied for synthesis", sanitizeURL(target))
 	}
 
-	combined := CombineSynthesizers(o.synthesizers...)
-	coverageCombined, hasCoverage := combined.(CoverageSynthesizer)
+	combined := synthesize.CombineSynthesizers(o.synthesizers...)
+	coverageCombined, hasCoverage := combined.(synthesize.CoverageSynthesizer)
 	for _, fi := range combined.BindingSpecs() {
-		input := &SynthesizeInput{
-			Sources: []SynthesizeSource{{BindingSpec: fi.BindingSpec, Location: target}},
+		input := &synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{BindingSpec: fi.BindingSpec, Location: target}},
 		}
-		var result *SynthesizeResult
+		var result *synthesize.SynthesizeResult
 		var err error
 		if hasCoverage {
 			result, err = coverageCombined.SynthesizeInterfaceWithCoverage(ctx, input)
 		} else {
-			err = ErrSynthesisCoverageUnsupported
+			err = synthesize.ErrSynthesisCoverageUnsupported
 		}
-		if errors.Is(err, ErrSynthesisCoverageUnsupported) {
+		if errors.Is(err, synthesize.ErrSynthesisCoverageUnsupported) {
 			iface, fallbackErr := combined.SynthesizeInterface(ctx, input)
 			if fallbackErr != nil {
 				err = fallbackErr
 			} else if iface != nil && len(iface.Operations) > 0 {
-				return &FetchedInterface{Interface: iface, Synthesized: true}, nil
+				return &Result{Interface: iface, Synthesized: true}, nil
 			} else {
 				err = nil
 			}
@@ -135,7 +148,7 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 		}
 		if result != nil && result.Interface != nil && len(result.Interface.Operations) > 0 {
 			coverage := result.Coverage
-			return &FetchedInterface{
+			return &Result{
 				Interface:   result.Interface,
 				Synthesized: true,
 				Coverage:    &coverage,
@@ -212,6 +225,17 @@ func sanitizeURL(u string) string {
 	return u
 }
 
+func originOf(target string) (string, error) {
+	u, err := url.Parse(target)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("target has no HTTP origin")
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String(), nil
+}
+
 func shouldSkipWellKnownDiscovery(target string) bool {
 	u, err := url.Parse(target)
 	if err != nil {
@@ -224,5 +248,5 @@ func shouldSkipWellKnownDiscovery(target string) bool {
 		strings.Contains(path, "/openapi") ||
 		strings.Contains(path, "/swagger") ||
 		strings.Contains(path, "/asyncapi") ||
-		strings.HasSuffix(path, WellKnownPath)
+		strings.HasSuffix(path, httpdiscovery.WellKnownPath)
 }

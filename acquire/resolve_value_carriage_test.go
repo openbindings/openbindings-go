@@ -1,4 +1,4 @@
-package synthesize
+package acquire
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestFetchInterfaceRetainsExactNumbers(t *testing.T) {
+func TestResolveRetainsExactNumbers(t *testing.T) {
 	for _, token := range []string{"9007199254740993", "0.10000000000000000001", "1e400", "1e-400"} {
 		t.Run(token, func(t *testing.T) {
 			raw := fmt.Sprintf(`{"openbindings":"0.2.0","operations":{"test":{"input":{"minimum":%s},"examples":{"exact":{"input":%s}}}},"x-exact":%s}`, token, token, token)
@@ -18,7 +18,7 @@ func TestFetchInterfaceRetainsExactNumbers(t *testing.T) {
 				fmt.Fprint(w, raw)
 			}))
 			defer srv.Close()
-			got, err := FetchInterface(context.Background(), srv.URL)
+			got, err := Resolve(context.Background(), srv.URL)
 			if err != nil {
 				t.Fatal(err)
 			}

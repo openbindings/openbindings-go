@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/acquire"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -140,12 +141,12 @@ func (r *Runtime) PrepareProviderSnapshot(key, label string, prepared *openbindi
 
 // Resolve obtains an OBI directly, through well-known discovery, or through a
 // registered provider's synthesizer.
-func (r *Runtime) Resolve(ctx context.Context, target string) (*synthesize.FetchedInterface, error) {
-	options := []synthesize.FetchOption{synthesize.WithSynthesizers(r.providersAsSynthesizers()...)}
+func (r *Runtime) Resolve(ctx context.Context, target string) (*acquire.Result, error) {
+	options := []acquire.Option{acquire.WithSynthesizers(r.providersAsSynthesizers()...)}
 	if r.httpClient != nil {
-		options = append(options, synthesize.WithFetchHTTPClient(r.httpClient))
+		options = append(options, acquire.WithHTTPClient(r.httpClient))
 	}
-	return synthesize.FetchInterface(ctx, target, options...)
+	return acquire.Resolve(ctx, target, options...)
 }
 
 // InspectSource lists bindable targets through the provider selected by the

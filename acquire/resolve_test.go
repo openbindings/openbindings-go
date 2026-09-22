@@ -1,16 +1,28 @@
-package synthesize
+package acquire
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/httpdiscovery"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
+
+func makeTestInterface(name string, ops ...string) *openbindings.Interface {
+	iface := &openbindings.Interface{OpenBindings: "0.2.0", Name: name, Operations: map[string]openbindings.Operation{}}
+	for _, op := range ops {
+		iface.Operations[op] = openbindings.Operation{}
+	}
+	return iface
+}
 
 func serveOBI(t *testing.T, iface *openbindings.Interface) *httptest.Server {
 	t.Helper()
@@ -24,12 +36,12 @@ func serveOBI(t *testing.T, iface *openbindings.Interface) *httptest.Server {
 	}))
 }
 
-func TestFetchInterface_DirectOBI(t *testing.T) {
+func TestResolve_DirectOBI(t *testing.T) {
 	iface := makeTestInterface("svc", "ping")
 	srv := serveOBI(t, iface)
 	defer srv.Close()
 
-	got, err := FetchInterface(context.Background(), srv.URL)
+	got, err := Resolve(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -44,7 +56,7 @@ func TestFetchInterface_DirectOBI(t *testing.T) {
 	}
 }
 
-func TestFetchInterface_WellKnownDiscovery(t *testing.T) {
+func TestResolve_WellKnownDiscovery(t *testing.T) {
 	iface := makeTestInterface("svc", "ping")
 	data, _ := json.Marshal(iface)
 
@@ -59,7 +71,7 @@ func TestFetchInterface_WellKnownDiscovery(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	got, err := FetchInterface(context.Background(), srv.URL)
+	got, err := Resolve(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,7 +83,60 @@ func TestFetchInterface_WellKnownDiscovery(t *testing.T) {
 	}
 }
 
-func TestFetchInterface_ErrorWhenNoOBIAndNoSynthesizers(t *testing.T) {
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func testResponse(request *http.Request, status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}
+}
+
+func TestResolveDiscoversAtOriginNotTargetPath(t *testing.T) {
+	var paths []string
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		paths = append(paths, request.URL.Path)
+		if request.URL.Path == httpdiscovery.WellKnownPath {
+			return testResponse(request, http.StatusOK, `{"openbindings":"0.2.0","operations":{"ping":{}}}`), nil
+		}
+		return testResponse(request, http.StatusNotFound, ""), nil
+	})}
+	result, err := Resolve(context.Background(), "https://example.test/api", WithHTTPClient(client))
+	if err != nil || result == nil || result.Interface == nil {
+		t.Fatalf("Resolve = (%#v, %v)", result, err)
+	}
+	if len(paths) != 2 || paths[0] != "/api" || paths[1] != httpdiscovery.WellKnownPath {
+		t.Fatalf("requested paths = %q", paths)
+	}
+}
+
+func TestResolveDoesNotSynthesizeAfterGatedDiscoveryOrVersionRefusal(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{name: "gated", status: http.StatusUnauthorized, check: func(err error) bool { var e *httpdiscovery.GatedError; return errors.As(err, &e) }},
+		{name: "version refusal", status: http.StatusOK, body: `{"openbindings":"0.3.0","operations":{}}`, check: func(err error) bool { var e *httpdiscovery.VersionRefusalError; return errors.As(err, &e) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == httpdiscovery.WellKnownPath {
+					return testResponse(request, tt.status, tt.body), nil
+				}
+				return testResponse(request, http.StatusNotFound, ""), nil
+			})}
+			result, err := Resolve(context.Background(), "https://example.test", WithHTTPClient(client), WithSynthesizers(coverageFetchSynthesizer{}))
+			if result != nil || !tt.check(err) {
+				t.Fatalf("Resolve should preserve discovery outcome, got (%#v, %v)", result, err)
+			}
+		})
+	}
+}
+
+func TestResolve_ErrorWhenNoOBIAndNoSynthesizers(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -80,26 +145,26 @@ func TestFetchInterface_ErrorWhenNoOBIAndNoSynthesizers(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	_, err := FetchInterface(context.Background(), srv.URL)
+	_, err := Resolve(context.Background(), srv.URL)
 	if err == nil {
 		t.Error("expected error when no OBI is available and no synthesizers are supplied")
 	}
 }
 
-func TestFetchInterface_EmptyTarget(t *testing.T) {
-	_, err := FetchInterface(context.Background(), "")
+func TestResolve_EmptyTarget(t *testing.T) {
+	_, err := Resolve(context.Background(), "")
 	if err == nil {
 		t.Error("expected error for empty target")
 	}
 }
 
-func TestFetchInterface_HTTPError(t *testing.T) {
+func TestResolve_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
-	_, err := FetchInterface(context.Background(), srv.URL)
+	_, err := Resolve(context.Background(), srv.URL)
 	if err == nil {
 		t.Error("expected error from 500 response with no synthesizers to fall back to")
 	}
@@ -109,26 +174,26 @@ func TestFetchInterface_HTTPError(t *testing.T) {
 // each synthesizer — plus the pass-the-spec-URL hint. Regression: only the
 // last synthesizer's raw parse error surfaced, pointing a user who passed
 // an API's HTML root at a third-party internals message.
-func TestFetchInterface_FailureCarriesResolutionTrail(t *testing.T) {
+func TestResolve_FailureCarriesResolutionTrail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html>welcome</html>"))
 	}))
 	defer srv.Close()
 
-	_, err := FetchInterface(context.Background(), srv.URL, WithSynthesizers(failingSynthesizer{}))
+	_, err := Resolve(context.Background(), srv.URL, WithSynthesizers(failingSynthesizer{}))
 	if err == nil {
 		t.Fatal("expected failure")
 	}
-	for _, want := range []string{"direct fetch:", WellKnownPath, "synthesize as fake@1.0:", "pass the spec document's own URL"} {
+	for _, want := range []string{"direct fetch:", httpdiscovery.WellKnownPath, "synthesize as fake@1.0:", "pass the spec document's own URL"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("trail should contain %q, got:\n%v", want, err)
 		}
 	}
 }
 
-func TestFetchInterface_SynthesizedResultRetainsCoverage(t *testing.T) {
-	got, err := FetchInterface(context.Background(), "artifact://fake", WithSynthesizers(coverageFetchSynthesizer{}))
+func TestResolve_SynthesizedResultRetainsCoverage(t *testing.T) {
+	got, err := Resolve(context.Background(), "artifact://fake", WithSynthesizers(coverageFetchSynthesizer{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +215,7 @@ func (s failingSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindi
 	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
 }
 
-func (failingSynthesizer) SynthesizeInterface(context.Context, *SynthesizeInput) (*openbindings.Interface, error) {
+func (failingSynthesizer) SynthesizeInterface(context.Context, *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	return nil, fmt.Errorf("invalid character '<' looking for beginning of value")
 }
 
@@ -164,7 +229,7 @@ func (s coverageFetchSynthesizer) CheckBindingSpecs(bindingSpecs []string) []ope
 	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
 }
 
-func (coverageFetchSynthesizer) SynthesizeInterface(ctx context.Context, input *SynthesizeInput) (*openbindings.Interface, error) {
+func (coverageFetchSynthesizer) SynthesizeInterface(ctx context.Context, input *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	result, err := (coverageFetchSynthesizer{}).SynthesizeInterfaceWithCoverage(ctx, input)
 	if err != nil {
 		return nil, err
@@ -172,7 +237,7 @@ func (coverageFetchSynthesizer) SynthesizeInterface(ctx context.Context, input *
 	return result.Interface, nil
 }
 
-func (coverageFetchSynthesizer) SynthesizeInterfaceWithCoverage(_ context.Context, input *SynthesizeInput) (*SynthesizeResult, error) {
+func (coverageFetchSynthesizer) SynthesizeInterfaceWithCoverage(_ context.Context, input *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	location := input.Sources[0].Location
 	iface := &openbindings.Interface{
 		OpenBindings: "0.2.0",
@@ -184,12 +249,12 @@ func (coverageFetchSynthesizer) SynthesizeInterfaceWithCoverage(_ context.Contex
 			"ping.source": {Operation: "ping", Source: "source", Selector: "ping"},
 		},
 	}
-	return NewSynthesisResult(iface, []SynthesisCoverageEntry{{
+	return synthesize.NewSynthesisResult(iface, []synthesize.SynthesisCoverageEntry{{
 		SourceIndex:     0,
 		SourceKey:       "source",
 		SourceRef:       "ping",
-		Scope:           SynthesisCoverageTarget,
-		Status:          SynthesisRepresented,
+		Scope:           synthesize.SynthesisCoverageTarget,
+		Status:          synthesize.SynthesisRepresented,
 		OperationKey:    "ping",
 		BindingKey:      "ping.source",
 		BindingSelector: "ping",

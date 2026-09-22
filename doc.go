@@ -1,7 +1,7 @@
 // Package openbindings is the core OpenBindings SDK for Go: the OBI
 // document model with lossless JSON handling, document validation,
 // operation resolution, schema validation at invocation boundaries, and
-// the spec-defined constants (versions, media type, well-known path).
+// the Core-defined constants (versions and media type).
 //
 // The package is dependency-light and format-agnostic, and covers exactly
 // what the OpenBindings specification defines. The layers above it are
@@ -61,8 +61,10 @@
 //   - invoke: the invocation runtime — operation invokers, the
 //     cardinality-agnostic Invocation handle, context resolution, and the
 //     seams (binding invokers, transform evaluators, consumer hooks)
-//   - synthesize: interface synthesis and source inspection, plus
-//     interface discovery (FetchInterface)
+//   - synthesize: interface synthesis and source inspection
+//   - httpdiscovery: optional well-known HTTP discovery of existing OBIs
+//   - acquire: application-level ordering of direct retrieval, discovery,
+//     and optional synthesis
 //   - compare: interface and operation compatibility checking
 //   - canonicaljson: RFC 8785 (JCS) deterministic JSON serialization
 //   - schemaprofile: the OpenBindings Schema Comparison Profile (OB-2020-12)
