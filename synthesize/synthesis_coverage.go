@@ -31,8 +31,8 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 	if iface == nil {
 		return nil, fmt.Errorf("synthesis coverage requires an interface")
 	}
-	if err := iface.Validate(); err != nil {
-		return nil, fmt.Errorf("synthesis coverage interface is invalid: %w", err)
+	if _, err := iface.Validate(); err != nil {
+		return nil, fmt.Errorf("synthesis coverage interface: %w", err)
 	}
 	if exhaustive && limitation != nil {
 		return nil, fmt.Errorf("exhaustive synthesis coverage must not carry a limitation")

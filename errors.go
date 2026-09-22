@@ -5,18 +5,19 @@ import (
 	"strings"
 )
 
-// ValidationError is a deterministic, multi-problem validation error.
-// Returned by Interface.Validate and by ParseDocument for shape-level
-// violations.
+// ValidationError lists, in a deterministic order, the document-rule
+// violations validation established. Interface.Validate and ValidateDocument
+// return it beside their report, and ParseDocument returns it for violations
+// of the document schema. Every problem names the rule it violates.
 type ValidationError struct {
 	Problems []string
 }
 
 func (e *ValidationError) Error() string {
 	if e == nil || len(e.Problems) == 0 {
-		return "invalid interface"
+		return "non-conformant interface"
 	}
-	return "invalid interface: " + strings.Join(e.Problems, "; ")
+	return "non-conformant interface: " + strings.Join(e.Problems, "; ")
 }
 
 // ErrOperationNotFound is returned when the requested operation does not exist in the OBI.

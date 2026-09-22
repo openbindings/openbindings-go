@@ -148,7 +148,7 @@ func runSelectionFixture(t *testing.T, tc *selectionCase) {
 
 	// Fixture documents are complete, valid OBIs; run them through the
 	// SDK's real document validation. A failure here is a corpus defect.
-	iface, err := openbindings.ValidateDocument(tc.Document)
+	iface, _, err := openbindings.ValidateDocument(tc.Document)
 	if err != nil {
 		t.Fatalf("fixture document does not validate: %v", err)
 	}

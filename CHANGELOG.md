@@ -61,6 +61,32 @@
 
 ### Changed
 
+- **`Interface.Validate()` and `ValidateDocument(data)` return a
+  `ValidationReport` beside their error** (breaking, pre-1.0). The error is
+  a `*ValidationError` listing every violation established, now tagged with
+  the rule each one breaks (several schema-level checks carried no rule
+  identifier), so `if _, err := iface.Validate(); err != nil` remains the
+  gate before acting on a document. A nil error is documented as "no
+  violation established", not conformance; the report's `Conclusion` says
+  which. `ValidateDocument` validates the exact input bytes instead of
+  parsing first, so input that is not a JSON document is reported as a
+  violation of OBI-D-01 rather than returned as a parse error, and it returns
+  the decoded document whenever the bytes decode. A version outside the
+  supported set is a `*VersionRefusalError` from `Validate`,
+  `ValidateDocument`, and `ParseDocument` alike, returned with no report,
+  because a refused document is not interpreted under this version's rules
+  at all. `ValidationError` reads "non-conformant interface" instead of
+  "invalid interface".
+- **OBI-D-11 checks exactly the examples in its scope.** Example validation
+  used to abstain for every operation as soon as any schema in the document
+  referenced an external resource, hiding in-scope mismatches. It now walks
+  each operation schema's reachable graph, following same-document pointers
+  and references into schema resources the document embeds by `$id`, and
+  leaves out only positions whose graph reaches an external resource. A
+  schema that cannot be compiled is reported as inconclusive rather than as a
+  violation of the example rule, since failing to compile is not evidence
+  that an example is wrong.
+
 - **A name or alias correspondence is the provider's compatibility claim;
   composition only sets a candidate aside on a proven contradiction.** The
   reference composition policy treats a profile verdict of `indeterminate`
@@ -598,6 +624,13 @@
 
 ### Removed
 
+- **`WithRejectUnknownTypedFields` and the exported `ValidateOption`**
+  (breaking, pre-1.0). OBI-T-02 requires every processor to ignore unknown
+  fields; the option turned them into rejections. Unknown non-`x-` fields
+  are now always surfaced as OBI-T-02 diagnostics in a `ValidationReport`,
+  which is what the rule asks for, and never affect validation.
+  `Interface.Validate` and `PrepareInterface` no longer take options.
+
 - **The local provider is gone: `PrepareLocalProvider`, `PrepareLocalProviderOptions`,
   `LocalBindingImplementation`, `LocalImplementationOption`, `LocalUnary`,
   `LocalStream`, `LocalPreflight`, `WithLocalPreflight`** (breaking, pre-1.0).
@@ -730,6 +763,29 @@
   readable messages. Leaves now render via `ErrorKind.LocalizedString`.
 
 ### Added
+
+- **Document validation reports its conformance conclusion, not just its
+  violations.** The `ValidationReport` from `Interface.Validate()` and
+  `ValidateDocument(data)` uses the core's §10.5 vocabulary: per-rule
+  `Evidence` for every document rule (satisfied, violated, or inconclusive),
+  the `Violated` and `Inconclusive` rule identifiers OBI-T-17 requires,
+  located `Findings` for each violation and each check this SDK could not
+  decide, OBI-T-02 `Diagnostics`, and a `Conclusion` of conformant,
+  non-conformant, or conformance-undetermined. Previously a check the SDK
+  could not decide passed silently, so a nil error from `Validate` was
+  indistinguishable from conformance; a tool reporting it as such violated
+  OBI-T-17. The cases now recorded as inconclusive rather than passed:
+  OBI-D-13 for any document with bindings (only the governing binding
+  specification decides it), an OBI-D-05 source location that is
+  colon-bearing but not a well-formed URI (`10.0.0.1:443`), OBI-D-11
+  examples whose schema could not be compiled or whose graph's reach could
+  not be established, and OBI-D-01 on a host object, which no longer carries
+  the exact input bytes (`ValidateDocument` decides it). `ValidateDocument`
+  decides OBI-D-12 from the raw document, so a non-string version is still
+  identified. `DocumentRules()` lists the rules a report covers; a caller
+  holding evidence the SDK cannot produce, such as a binding specification
+  implementation deciding OBI-D-13, can amend `Evidence` and call
+  `ConcludeConformance` again.
 
 - **Configurable delivery-unit bound.** `BindingInvocationArgs.MaxDeliveryUnitBytes`
   bounds ONE DELIVERY UNIT — the bytes materialized to produce one emitted

@@ -868,7 +868,7 @@ func TestConvertToInterface_OneofShapeAcceptedByProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(); err != nil {
 		t.Fatalf("oneof schema rejected by the OpenBindings schema boundary: %v", err)
 	}
 }

@@ -44,8 +44,8 @@ func TestOfficialSDKQualification_ExactSnapshots(t *testing.T) {
 		// Corpus well-formedness is separate from the stronger snapshot assertions.
 		t.Run("fixture-validity/"+c.ID, func(t *testing.T) {
 			for _, raw := range []string{c.LeftJSON, c.RightJSON} {
-				if _, err := ValidateDocument([]byte(raw)); err != nil {
-					t.Fatalf("invalid fixture document: %v", err)
+				if _, _, err := ValidateDocument([]byte(raw)); err != nil {
+					t.Fatalf("non-conformant fixture document: %v", err)
 				}
 			}
 		})
