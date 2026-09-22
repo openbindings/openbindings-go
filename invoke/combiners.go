@@ -75,15 +75,15 @@ func (c *combinedInvoker) InvokeBinding(ctx context.Context, args *BindingInvoca
 	return invoker.InvokeBinding(ctx, args)
 }
 
-// prepareBinding routes the side-effect-free preflight to the matching inner
-// invoker. An invoker without BindingPreparer simply reports no requirement.
-func (c *combinedInvoker) prepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+// preflightBinding routes the preflight signal to the matching inner
+// invoker. An invoker without BindingPreflighter simply reports no requirement.
+func (c *combinedInvoker) preflightBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	invoker := c.findInvoker(args.Source.BindingSpec)
 	if invoker == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNoInvoker, args.Source.BindingSpec)
 	}
-	if p, ok := invoker.(BindingPreparer); ok {
-		return p.PrepareBinding(ctx, args)
+	if p, ok := invoker.(BindingPreflighter); ok {
+		return p.PreflightBinding(ctx, args)
 	}
 	return nil, nil
 }

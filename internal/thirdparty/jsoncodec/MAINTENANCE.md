@@ -19,3 +19,10 @@ after those existing codec corrections when rebuilding the dependency.
 Acceptance: full `go vet ./...`, codec race tests, exact-string/number carriage
 tests and the SDK corpus-required suite. No production codec source was changed by
 the test-fixture adaptation.
+
+The invocation migration adds private field-metadata access, bounded encoding
+with checks before buffer growth and a complete-buffer decoder that avoids an
+extra streaming copy. These entry points share the maintained field/scalar
+semantics. Callback-owned allocations remain outside SDK accounting. Ordinary
+codec entry points retain their behavior. `value_support_test.go` and the private
+value differential/fuzz tests supplement the existing acceptance gates.

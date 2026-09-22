@@ -74,6 +74,16 @@ Message headers are an explicit abstraction-boundary exclusion. JSON-family
 and UTF-8 text payloads have built-in value carriage; binary and codec-specific
 payloads require a faithful mapping and are otherwise excluded.
 
+## Preflight
+
+`PreflightBinding` answers the SDK's preflight signal by retrieving and
+analyzing the AsyncAPI description: inline content and a warm document cache
+answer without I/O, and a cold location-only source is loaded once, which also
+warms the cache under the standalone engine's cache policy. It reports the
+server and artifact-declared credential requirements it can identify from the
+description and the supplied context, and never dispatches the selected
+operation. Context supplied to preflight is not retained.
+
 ## Protocol drivers
 
 The standalone engine contains the current HTTP and WebSocket drivers. A host

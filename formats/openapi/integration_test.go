@@ -1213,9 +1213,15 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 }
 
 // Embedded content never supplies authority for a location-only source.
-func TestPrepareBinding_LocationOnlyDoesNotReuseEmbeddedContent(t *testing.T) {
+func TestPreflightBinding_LocationOnlyDoesNotReuseEmbeddedContent(t *testing.T) {
 	spec, _ := json.Marshal(makeOpenAPISpec("https://api.example.com"))
-	location := "https://example.test/openapi.json"
+	var fetches atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetches.Add(1)
+		http.Error(w, "description unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	location := server.URL + "/openapi.json"
 
 	binv := NewInvoker()
 	// Content+location invocation uses the authoritative embedded content.
@@ -1228,16 +1234,15 @@ func TestPrepareBinding_LocationOnlyDoesNotReuseEmbeddedContent(t *testing.T) {
 		t.Fatalf("expected CONTEXT_REQUIRED, got %v", ierr)
 	}
 
-	// Location-only preflight remains unknown because it cannot retrieve.
-	details, err := binv.PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
+	// The location-only source must be retrieved; a failure cannot be hidden
+	// by either successful preflight or another source's embedded content.
+	details, err := binv.PreflightBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
 		Selector: "#/paths/~1items/get",
 	})
-	if err != nil {
-		t.Fatalf("prepareBinding: %v", err)
-	}
-	if details != nil {
-		t.Fatal("location-only preflight reused embedded content from a different source")
+	var preflightErr *invoke.InvocationError
+	if details != nil || !errors.As(err, &preflightErr) || preflightErr.Code != invoke.ErrCodeSourceLoadFailed || fetches.Load() != 1 {
+		t.Fatalf("location-only prepare=(%v, %v), fetches=%d", details, err, fetches.Load())
 	}
 }
 
@@ -1254,11 +1259,11 @@ func TestContentOnlySourceReusesNativeClientByContentRevision(t *testing.T) {
 		},
 		Selector: "#/paths/~1ping/get",
 	}
-	first, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	first, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	second, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1283,7 +1288,7 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 			Location:    locationServer.URL,
 		},
 	}
-	first, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	first, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1292,7 +1297,7 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 		"info":{"title":"Cache","version":"2"},
 		"paths":{}
 	}`)
-	second, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	second, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1301,7 +1306,7 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 	}
 	locationOnly := *args
 	locationOnly.Source.Content = nil
-	fetched, err := invoker.runtime.loadNativeClient(t.Context(), &locationOnly, true)
+	fetched, err := invoker.runtime.loadNativeClient(t.Context(), &locationOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1310,31 +1315,6 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 	}
 	if fetched == second {
 		t.Fatal("location-only source reused co-present embedded content solely because its URI matched")
-	}
-}
-
-func TestAdvisoryContentClientDoesNotPoisonExecutableCache(t *testing.T) {
-	invoker := NewInvoker()
-	args := &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{
-			BindingSpec: BindingSpecOpenAPI31,
-			Content: json.RawMessage(`{
-				"openapi":"3.1.2",
-				"info":{"title":"Advisory","version":"1"},
-				"paths":{}
-			}`),
-		},
-	}
-	advisory, err := invoker.runtime.loadNativeClient(t.Context(), args, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executable, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if advisory == executable {
-		t.Fatal("side-effect-free advisory client entered the executable cache")
 	}
 }
 
@@ -1351,7 +1331,7 @@ func TestNativeSourceCacheIsBounded(t *testing.T) {
 				}`, index)),
 			},
 		}
-		if _, err := invoker.runtime.loadNativeClient(t.Context(), args, true); err != nil {
+		if _, err := invoker.runtime.loadNativeClient(t.Context(), args); err != nil {
 			t.Fatal(err)
 		}
 	}

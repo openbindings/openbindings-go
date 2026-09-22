@@ -1,0 +1,128 @@
+{
+  "baseline": {
+    "BenchmarkOwnedValueMigration/SmallTyped": [
+      36734.0,
+      13811,
+      223
+    ],
+    "BenchmarkOwnedValueMigration/SmallGeneric": [
+      19384.0,
+      4446,
+      67
+    ],
+    "BenchmarkOwnedValueMigration/WideTyped": [
+      11710030.0,
+      9191688,
+      115161
+    ],
+    "BenchmarkOwnedValueMigration/NativeBytes": [
+      30074878.0,
+      31036372,
+      189
+    ],
+    "BenchmarkHTTPValueMigration/Image1MiBHookfalse": [
+      46499917.0,
+      55813758,
+      2045
+    ],
+    "BenchmarkHTTPValueMigration/Image1MiBHooktrue": [
+      45509530.0,
+      60012746,
+      2100
+    ],
+    "BenchmarkGraphValueMigration/Fanout1": [
+      10423.0,
+      5602,
+      74
+    ],
+    "BenchmarkGraphValueMigration/Fanout8": [
+      29631.0,
+      16990,
+      220
+    ]
+  },
+  "owned-codec": {
+    "BenchmarkOwnedValueMigration/SmallTyped": [
+      47768.0,
+      17880,
+      395
+    ],
+    "BenchmarkOwnedValueMigration/SmallGeneric": [
+      34210.0,
+      11746,
+      216
+    ],
+    "BenchmarkOwnedValueMigration/WideTyped": [
+      17127450.0,
+      7639386,
+      217394
+    ],
+    "BenchmarkOwnedValueMigration/NativeBytes": [
+      39111026.0,
+      10531602,
+      225
+    ],
+    "BenchmarkHTTPValueMigration/Image1MiBHookfalse": [
+      56901424.0,
+      53026382,
+      2099
+    ],
+    "BenchmarkHTTPValueMigration/Image1MiBHooktrue": [
+      61623200.0,
+      55823275,
+      2161
+    ],
+    "BenchmarkGraphValueMigration/Fanout1": [
+      27027.0,
+      12523,
+      211
+    ],
+    "BenchmarkGraphValueMigration/Fanout8": [
+      75053.0,
+      50285,
+      812
+    ]
+  },
+  "candidate": {
+    "BenchmarkOwnedValueMigration/SmallTyped": [
+      29461.0,
+      11123,
+      180
+    ],
+    "BenchmarkOwnedValueMigration/SmallGeneric": [
+      31427.0,
+      11746,
+      216
+    ],
+    "BenchmarkOwnedValueMigration/WideTyped": [
+      6182191.0,
+      3079379,
+      49302
+    ],
+    "BenchmarkOwnedValueMigration/NativeBytes": [
+      2060665.0,
+      9808616,
+      172
+    ],
+    "BenchmarkHTTPValueMigration/Image1MiBHookfalse": [
+      45965750.0,
+      52672948,
+      2087
+    ],
+    "BenchmarkHTTPValueMigration/Image1MiBHooktrue": [
+      41183427.0,
+      55115399,
+      2136
+    ],
+    "BenchmarkGraphValueMigration/Fanout1": [
+      27017.0,
+      12524,
+      211
+    ],
+    "BenchmarkGraphValueMigration/Fanout8": [
+      74812.0,
+      50285,
+      812
+    ]
+  }
+}

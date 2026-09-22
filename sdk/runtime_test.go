@@ -94,7 +94,7 @@ func TestRuntimeComposesProviderCapabilities(t *testing.T) {
 	if err != nil || !result.Coverage.Exhaustive || len(result.Coverage.Entries) != 1 {
 		t.Fatalf("synthesis = (%#v, %v)", result, err)
 	}
-	details, err := runtime.PrepareOperation(context.Background(), testInterface(), "ping")
+	details, err := runtime.PreflightOperation(context.Background(), testInterface(), "ping")
 	if err != nil || details != nil {
 		t.Fatalf("preflight = (%#v, %v)", details, err)
 	}

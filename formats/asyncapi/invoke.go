@@ -553,7 +553,7 @@ func unmappedRequirementType(s securityScheme) string {
 // whose scheme family requirementType doesn't map is SURFACED with a
 // derived type (R2.c ruling) rather than dropped, so the alternative stays
 // discoverable to a runtime with a resolver for it. Side-effect-free;
-// shared by runBinding and PrepareBinding.
+// shared by runBinding and PreflightBinding.
 //
 // secSrv is the selected artifact server whose declared security applies
 // (§9.5), including when its target is replaced by a complete URL

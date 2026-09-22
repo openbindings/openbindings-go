@@ -118,14 +118,19 @@ func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, head
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
-var _ invoke.BindingPreparer = (*Invoker)(nil)
+var _ invoke.BindingPreflighter = (*Invoker)(nil)
 
 // InvokeBinding invokes a GraphQL binding and returns the invocation handle
 // synchronously; the work runs on its own goroutine. Queries and mutations
 // yield one output; subscriptions yield one output per event. The variables
 // object flows through the handle's Write channel.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
 }
@@ -259,9 +264,12 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	emitProjectedGraphQLResult(inv, result, responseKey)
 }
 
-// PrepareBinding reports required configuration without parsing a source,
-// reading caller input, introspecting, or dispatching.
-func (e *Invoker) PrepareBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+// PreflightBinding answers the preflight signal (the preflightBinding
+// operation of the openbindings.binding-invoker interface): it reports the
+// configuration requirements it can identify from the selector and
+// args.Context, without parsing a source, reading caller input,
+// introspecting, or dispatching.
+func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	rootType, _, err := parseSelector(args.Selector)
 	if err != nil {
 		return nil, nil

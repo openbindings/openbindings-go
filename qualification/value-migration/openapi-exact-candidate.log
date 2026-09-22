@@ -1,0 +1,8 @@
+github.com/openbindings/openbindings-go v0.1.1-0.20260921130534-9a69a38acb5e
+github.com/openbindings/openapi-client/go v0.0.0-20260918184113-7b15d57e960f
+go: downloading github.com/openbindings/openbindings-go v0.1.1-0.20260921130534-9a69a38acb5e
+go: downloading github.com/openbindings/openapi-client/go v0.0.0-20260918184113-7b15d57e960f
+ok  	github.com/openbindings/openbindings-go/formats/openapi	9.602s
+verified standalone candidate: formats/openapi (source manifests unchanged)
+ok  	github.com/openbindings/openbindings-go/formats/usage	2.588s
+verified standalone candidate: formats/usage (source manifests unchanged)

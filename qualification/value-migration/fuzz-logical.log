@@ -1,0 +1,10 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/4 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 4/4 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 135020 (44976/sec), new interesting: 137 (total: 141)
+fuzz: elapsed: 6s, execs: 238824 (34623/sec), new interesting: 160 (total: 164)
+fuzz: elapsed: 9s, execs: 329290 (30153/sec), new interesting: 195 (total: 199)
+fuzz: elapsed: 12s, execs: 329290 (0/sec), new interesting: 195 (total: 199)
+fuzz: elapsed: 15s, execs: 329290 (0/sec), new interesting: 195 (total: 199)
+fuzz: elapsed: 16s, execs: 329290 (0/sec), new interesting: 195 (total: 199)
+PASS
+ok  	github.com/openbindings/openbindings-go/internal/value	16.306s

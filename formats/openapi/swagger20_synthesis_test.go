@@ -83,13 +83,13 @@ func TestSwagger20SynthesisEmitsFlatContractEnvelopeTransformAndCoverage(t *test
 	}
 }
 
-func TestSwagger20PrepareBindingReportsSelectedCredentialRequirement(t *testing.T) {
+func TestSwagger20PreflightBindingReportsSelectedCredentialRequirement(t *testing.T) {
 	artifact := `{"swagger":"2.0","info":{"title":"Auth","version":"1"},"host":"api.example","schemes":["https"],"securityDefinitions":{"key":{"type":"apiKey","in":"header","name":"X-Key"}},"security":[{"key":[]}],"paths":{"/x":{"get":{"responses":{"204":{"description":"ok"}}}}}}`
 	args := &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI20, Content: openbindings.TextContent(artifact)},
 		Selector: "#/paths/~1x/get",
 	}
-	details, err := NewInvoker().PrepareBinding(context.Background(), args)
+	details, err := NewInvoker().PreflightBinding(context.Background(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestSwagger20PrepareBindingReportsSelectedCredentialRequirement(t *testing.
 		t.Fatalf("requirement = %#v", requirement)
 	}
 	args.Context = map[string]any{"credentials": map[string]any{"key": "secret"}}
-	if details, err := NewInvoker().PrepareBinding(context.Background(), args); err != nil || details != nil {
+	if details, err := NewInvoker().PreflightBinding(context.Background(), args); err != nil || details != nil {
 		t.Fatalf("satisfied prepare = (%#v, %v)", details, err)
 	}
 }

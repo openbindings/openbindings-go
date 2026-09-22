@@ -6,12 +6,18 @@ processor, and Operation Graph corpora. The checked-in
 [`reference-sdk-correspondence.json`](../spec/conformance/reference-sdk-correspondence.json)
 also guards the public role and family correspondence.
 
+The optional [preflight](PREFLIGHT.md) contract (the preflight signal
+contract, 2026-09-21) is implemented and qualified for Go core/OpenAPI first.
+TypeScript alignment is pending for both the rename (`prepareBinding` to
+`preflightBinding`) and the contract; the corresponding names below do not
+claim that the revised behavior has already been implemented there.
+
 | Concept | Go | TypeScript |
 |---|---|---|
 | binding implementation | `BindingInvoker` | `BindingInvoker` |
 | supported identifiers | `BindingSpecs()` | `bindingSpecs()` |
 | invoke one binding | `InvokeBinding(...)` | `invokeBinding(...)` |
-| side-effect-free context preflight | `PrepareBinding(...)` | `prepareBinding(...)` |
+| optional preflight | `PreflightBinding(...)` | `prepareBinding(...)` (TypeScript alignment pending) |
 | artifact → OBI | `InterfaceSynthesizer.SynthesizeInterface(...)` | `InterfaceSynthesizer.synthesizeInterface(...)` |
 | artifact → OBI + exhaustiveness-qualified disposition evidence | `CoverageSynthesizer.SynthesizeInterfaceWithCoverage(...)` | `CoverageSynthesizer.synthesizeInterfaceWithCoverage(...)` |
 | inspect bindable targets | `SourceInspector.InspectSource(...)` | `SourceInspector.inspectSource(...)` |
@@ -62,9 +68,10 @@ fan-out semantics. Its explicit, process-local provider set is caller-owned
 composition state rather than a persistent implementation or delegate
 registry, and rejects duplicate exact identifiers listed by its providers.
 The transitional operation-requirement APIs retain their earlier observable
-parity—alias correspondence, directional schema comparison, side-effect-free
-preflight, advisory context requirements, preference ordering, and ambiguous
-route refusal—until removal.
+roles—alias correspondence, directional schema comparison, advisory context
+requirements, preference ordering, and ambiguous route refusal—until removal.
+Their Go preflight now follows the signal contract above; this is part of the
+pending TypeScript alignment.
 
 ## Implementation proof
 

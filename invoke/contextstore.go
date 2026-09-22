@@ -71,11 +71,37 @@ func isCredentialField(key string) bool {
 	return credentialFieldNames[key]
 }
 
+// credentialValueSatisfies is shared by satisfaction and scoped admission.
+func credentialValueSatisfies(value any, kind string) bool {
+	switch kind {
+	case "auth.bearer", "auth.apiKey":
+		token, ok := value.(string)
+		return ok && token != ""
+	case "auth.basic":
+		credential, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		username, hasUsername := credential["username"].(string)
+		password, hasPassword := credential["password"].(string)
+		return hasUsername && hasPassword && (username != "" || password != "")
+	case "auth.oauth2":
+		credential, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		token, ok := credential["accessToken"].(string)
+		return ok && token != ""
+	default:
+		return false
+	}
+}
+
 // requirementSatisfied reports whether ctx resolves one requirement. A named
 // auth.* requirement checks context.credentials[req.Name] first. Named
 // auth.apiKey additionally accepts historical context.apiKeys[req.Name]. A
 // flat convenience may satisfy a named requirement only when that use is
-// unambiguous within the selected alternative. This is the same priority the
+// unambiguous across the complete challenge. This is the same priority the
 // credential-application helpers use.
 //
 // Every other "auth.*" type is UNMAPPED: a scheme an invoker surfaced from
@@ -91,17 +117,13 @@ func isCredentialField(key string) bool {
 // Other non-"auth." extension families fall back to a context field named
 // after their type; the extension family owns that convention.
 func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatNamedCredential bool) bool {
-	named := ContextNamedCredential(ctx, req.Name)
+	if credentialValueSatisfies(ContextNamedCredential(ctx, req.Name), req.Type) {
+		return true
+	}
 	switch req.Type {
 	case "auth.bearer":
-		if value, ok := named.(string); ok && value != "" {
-			return true
-		}
 		return allowFlatNamedCredential && ContextBearerToken(ctx) != ""
 	case "auth.apiKey":
-		if value, ok := named.(string); ok && value != "" {
-			return true
-		}
 		if req.Name != "" {
 			if keys, ok := ctx["apiKeys"].(map[string]any); ok {
 				if value, ok := keys[req.Name].(string); ok && value != "" {
@@ -111,34 +133,11 @@ func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatN
 		}
 		return allowFlatNamedCredential && ContextAPIKey(ctx) != ""
 	case "auth.basic":
-		if value, ok := named.(map[string]any); ok {
-			username, hasUsername := value["username"].(string)
-			password, hasPassword := value["password"].(string)
-			if hasUsername && hasPassword && (username != "" || password != "") {
-				return true
-			}
-		}
 		_, _, ok := ContextBasicAuth(ctx)
 		return allowFlatNamedCredential && ok
 	case "auth.oauth2":
-		if value, ok := named.(map[string]any); ok {
-			if token, ok := value["accessToken"].(string); ok && token != "" {
-				return true
-			}
-		}
-		if !allowFlatNamedCredential {
-			return false
-		}
-		// A flat bearer token counts here because an OAuth2 access token
-		// reaches the wire AS a Bearer credential, and the placement side
-		// already knows it: credentialValues falls back to the flat bearer
-		// token when no accessToken is present. Until these two agreed, an
-		// artifact declaring oauth2 was a dead end -- the challenge asked for
-		// context, the remedy it printed stored a bearerToken, and the next
-		// attempt challenged identically because only `accessToken` counted.
-		// OAuth2 is among the most common schemes in real documents, so that
-		// disagreement closed off a large share of them.
-		return ContextString(ctx, "accessToken") != "" || ContextBearerToken(ctx) != ""
+		// Flat OAuth credentials can use accessToken or bearerToken.
+		return allowFlatNamedCredential && (ContextString(ctx, "accessToken") != "" || ContextBearerToken(ctx) != "")
 	}
 	if req.Type == "config.value" {
 		point, _ := req.Extra["point"].(string)
@@ -179,13 +178,20 @@ func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatN
 	return present && v != nil && v != ""
 }
 
-// ContextSatisfies reports whether the context can satisfy every requirement
-// of at least one alternative of the challenge.
-func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool {
+// MatchContextAlternative returns the index of the first alternative the
+// context satisfies, or ok=false when none matches (including nil details).
+// Matching considers the entire challenge when deciding whether flat
+// credentials unambiguously identify a scheme. Callers applying a resolution
+// should retain this index rather than re-evaluating alternatives in isolation.
+func MatchContextAlternative(ctx map[string]any, details *ContextRequiredDetails) (index int, ok bool) {
 	if details == nil {
-		return true
+		return 0, false
 	}
-	for _, alt := range details.Alternatives {
+	return matchContextAlternative(ctx, details, details.Alternatives)
+}
+
+func matchContextAlternative(ctx map[string]any, details *ContextRequiredDetails, alternatives []ContextAlternative) (int, bool) {
+	for index, alt := range alternatives {
 		ok := len(alt.Requirements) > 0
 		for _, req := range alt.Requirements {
 			if !requirementSatisfied(ctx, req, flatCredentialIsUnambiguous(details, req)) {
@@ -194,10 +200,22 @@ func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool 
 			}
 		}
 		if ok {
-			return true
+			return index, true
 		}
 	}
-	return false
+	return 0, false
+}
+
+// ContextSatisfies reports whether the context can satisfy every requirement
+// of at least one alternative of the challenge. Nil details need no context.
+// config.value paths currently traverse object members only: arrays may be
+// selected as whole values, but array-element paths are not resolved here.
+func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool {
+	if details == nil {
+		return true
+	}
+	_, ok := MatchContextAlternative(ctx, details)
+	return ok
 }
 
 func flatCredentialIsUnambiguous(details *ContextRequiredDetails, requirement ContextRequirement) bool {
@@ -227,38 +245,36 @@ func flatCredentialIsUnambiguous(details *ContextRequiredDetails, requirement Co
 // an extension requirement admits its type-named field. No other stored field
 // passes by default because this generic helper cannot determine its
 // sensitivity or relevance. With a nil challenge there is nothing to scope, so
-// the full context is returned (copied). Returns nil for nil input.
+// the full context is returned (shallow-copied). Returns nil for nil input.
+// Scoping does not authorize storage reuse or persistence: the resolver must
+// enforce durability before supplying stored values. This helper understands
+// the standard credential families, config.value and type-named non-auth
+// extensions; unrecognized auth.* requirements are not satisfiable here.
+// config.value paths traverse object members only. Arrays can be scoped as
+// whole values, but array-element paths need application-specific handling.
 func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[string]any {
 	if stored == nil {
 		return nil
 	}
-	out := make(map[string]any, len(stored))
 	if details == nil {
+		out := make(map[string]any, len(stored))
 		for k, v := range stored {
 			out[k] = v
 		}
 		return out
 	}
-	// Admit credentials only from the first alternative stored satisfies, using
-	// the same satisfaction rule as ContextSatisfies.
-	for _, alt := range details.Alternatives {
-		if len(alt.Requirements) == 0 {
-			continue
-		}
-		satisfied := true
-		for _, req := range alt.Requirements {
-			if !requirementSatisfied(stored, req, flatCredentialIsUnambiguous(details, req)) {
-				satisfied = false
-				break
-			}
-		}
-		if !satisfied {
-			continue
-		}
-		for _, req := range alt.Requirements {
+	return scopeContextAlternatives(stored, details, details.Alternatives)
+}
+
+// candidates may restrict eligibility, but matching retains the complete
+// challenge's credential-identity rules (including non-durable alternatives).
+func scopeContextAlternatives(stored map[string]any, details *ContextRequiredDetails, candidates []ContextAlternative) map[string]any {
+	out := make(map[string]any)
+	index, ok := matchContextAlternative(stored, details, candidates)
+	if ok {
+		for _, req := range candidates[index].Requirements {
 			admitRequirement(out, stored, req)
 		}
-		return out
 	}
 	return out
 }
@@ -270,14 +286,14 @@ func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[st
 // so another alternative's credential cannot cross the scope — per the
 // binding-invoker contract's least-privilege rule (§ ContextRequiredDetails:
 // "provisions only the context that satisfies the one selected
-// alternative"). Falls back to the plain 'apiKey' field when the named entry
-// is what actually satisfied the requirement (requirementSatisfied's own
-// fallback). An unnamed standard requirement admits its flat family fields;
+// alternative"). Falls back to the flat credential family when the named
+// entry is unusable, following the same validity checks as requirementSatisfied.
+// An unnamed standard requirement admits its flat family fields;
 // an unmapped extension admits the single field named by req.Type.
 func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 	if req.Type == "auth.apiKey" && req.Name != "" {
 		if credentials, ok := stored["credentials"].(map[string]any); ok {
-			if value, ok := credentials[req.Name].(string); ok && value != "" {
+			if value := credentials[req.Name]; credentialValueSatisfies(value, req.Type) {
 				scoped, _ := out["credentials"].(map[string]any)
 				if scoped == nil {
 					scoped = map[string]any{}
@@ -337,7 +353,7 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 	}
 	if req.Name != "" && strings.HasPrefix(req.Type, "auth.") {
 		if credentials, ok := stored["credentials"].(map[string]any); ok {
-			if value, present := credentials[req.Name]; present {
+			if value := credentials[req.Name]; credentialValueSatisfies(value, req.Type) {
 				scoped, _ := out["credentials"].(map[string]any)
 				if scoped == nil {
 					scoped = map[string]any{}
@@ -459,10 +475,9 @@ func StoreContextResolver(store ContextStore) ContextResolver {
 		if details == nil {
 			return nil, nil
 		}
-		// Stored context may satisfy only a complete alternative whose every
-		// requirement explicitly opts into reuse. Durability defaults to false;
-		// filtering individual members of an AND-set would weaken the challenge.
-		reusable := &ContextRequiredDetails{Target: details.Target}
+		// Visit eligible alternatives in their original order. Cache reads by
+		// key without grouping candidates, which would change that order.
+		cached := map[string]map[string]any{}
 		for _, alt := range details.Alternatives {
 			whollyDurable := len(alt.Requirements) > 0
 			for _, req := range alt.Requirements {
@@ -471,53 +486,29 @@ func StoreContextResolver(store ContextStore) ContextResolver {
 					break
 				}
 			}
-			if whollyDurable {
-				reusable.Alternatives = append(reusable.Alternatives, alt)
+			if !whollyDurable {
+				continue
 			}
-		}
-		if len(reusable.Alternatives) == 0 {
-			return nil, nil
-		}
-		// Group the reusable alternatives by the store key their requirement
-		// families assert (the keying rule in this function's doc comment):
-		// config.value-only alternatives under the exact target string,
-		// credential-bearing alternatives under the normalized endpoint.
-		// Groups are tried in first-appearance order so the challenge's own
-		// alternative preference is preserved.
-		type keyedGroup struct {
-			key     string
-			details *ContextRequiredDetails
-		}
-		var groups []*keyedGroup
-		byKey := map[string]*keyedGroup{}
-		for _, alt := range reusable.Alternatives {
 			key := NormalizeEndpoint(details.Target)
 			if configValueOnlyAlternative(alt) {
 				key = details.Target
 			}
 			if key == "" {
-				// An empty or unkeyable target cannot safely select reusable
-				// stored context. Interactive or application-specific
-				// resolvers may still satisfy the challenge.
-				continue
+				continue // No safe reusable-storage key; an interactive resolver may help.
 			}
-			group := byKey[key]
-			if group == nil {
-				group = &keyedGroup{key: key, details: &ContextRequiredDetails{Target: details.Target}}
-				byKey[key] = group
-				groups = append(groups, group)
+			stored, read := cached[key]
+			if !read {
+				var err error
+				stored, err = store.Get(ctx, key)
+				if err != nil {
+					return nil, err
+				}
+				cached[key] = stored
 			}
-			group.details.Alternatives = append(group.details.Alternatives, alt)
-		}
-		for _, group := range groups {
-			stored, err := store.Get(ctx, group.key)
-			if err != nil {
-				return nil, err
+			scoped := scopeContextAlternatives(stored, details, []ContextAlternative{alt})
+			if len(scoped) > 0 {
+				return scoped, nil
 			}
-			if stored == nil || !ContextSatisfies(stored, group.details) {
-				continue
-			}
-			return ScopeContext(stored, group.details), nil
 		}
 		return nil, nil
 	}

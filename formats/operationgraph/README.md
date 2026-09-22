@@ -65,6 +65,13 @@ invocation with that error (the identity law's terminal-status clause). The
 graph back-closes the caller's input side when every direct consumer of the
 input node is a non-accepting conduit.
 
+## Preflight
+
+This module has no preflight method. The SDK's combiner default answers nil
+for a graph binding, which reports nothing rather than readiness; each node
+binding's requirements surface when the processor invokes that node. Context
+supplied to a graph preflight is not retained.
+
 ## Conformance
 
 The test suite runs the spec repository's conformance corpus unmodified

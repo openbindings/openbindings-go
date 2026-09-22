@@ -1,31 +1,30 @@
 # Generic JSON value carriage
 
-## Isolated run-3 string experiment — not qualified
+## JSON boundaries and explicit export
 
-This candidate additionally retains isolated UTF-16 code units at generic
-`any`, `map[string]any`, `[]any` and scalar-string decoding boundaries. Native
-Go strings use canonical UTF-8 for scalars and WTF-8 bytes for isolated units;
-`jsonvalue.Marshal` emits the latter as JSON escapes, never invalid wire UTF-8.
-Generic member names, equality and invocation-error data use that representation.
-Other malformed native bytes retain the previous replacement behavior.
+`jsonvalue` is the SDK's maintained codec/equality area. Invocation snapshots and
+typed construction live in private implementation packages; applications keep
+ordinary Go values. See [invocation values](../INVOCATION_VALUES.md).
 
-Typed struct decoding/encoding still selects the standard representation and
-can replace these units, including in generic struct fields. SDK-owned wire
-wrappers and document preparation need further work. Do not activate this
-candidate or advertise whole-SDK string fidelity. This does not change document
-UTF-8/duplicate-member requirements, Core, or binding specifications.
+`MarshalWithOptions` adds finite value/depth/codec-scratch allowances to explicit
+export. `Marshal` and `Unmarshal` keep their existing general-purpose APIs. The
+maintained codec derives from Go's JSON codec; its provenance and local changes
+are recorded in `internal/thirdparty/jsoncodec/MAINTENANCE.md`.
 
-The helper is temporarily duplicated in isolated SDK and native-engine
-candidates to prove the boundary without an evaluator dependency in JSON.
-The final owned integration must resolve that duplication. This is not the
-proposed permanent source layout or a new public package.
+The maintained string representation uses canonical UTF-8 for scalar values and
+WTF-8 for isolated UTF-16 units. Its encoder emits isolated units as JSON escapes.
+Other malformed native bytes retain replacement behavior. This does not qualify
+every SDK-owned document/wire wrapper or external protocol codec for exact string
+carriage; their contracts and tests remain authoritative. Standard Go JSON
+encoding can replace isolated units, so use the maintained codec when those
+values matter. No Core or binding specification changes are implied.
 
 ## Existing numerical carriage contract
 
 This SDK implementation retains `encoding/json.Number` at generic JSON decode,
 clone, invocation and context boundaries. Use `jsonvalue.Unmarshal(data, &value)`
 when reading JSON into `any`; encode the result with `jsonvalue.Marshal`.
-This is a small adapter over the standard library, not a new parser.
+The adapter uses the maintained codec rather than a separate invocation parser.
 
 ```go
 var value any

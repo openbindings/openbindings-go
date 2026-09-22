@@ -119,6 +119,15 @@ ride under Connect/HTTP metadata rules. A generic bearer, basic, or API-key
 credential without a named carriage raises `CONTEXT_REQUIRED` before
 dispatch; it is never silently mapped to `Authorization`.
 
+### Preflight
+
+`PreflightBinding` answers the SDK's preflight signal from the same in-memory
+gates the invocation walks before its context challenge: it parses the
+selector and target and, in schema mode, parses the embedded content and
+resolves the method. It uses no network and never dispatches. Supplied context
+that the binding can place narrows the result to nil. Context supplied to
+preflight is not retained.
+
 ### Connect protocol details
 
 The invoker sends unary requests as plain `application/json` and streaming

@@ -294,7 +294,8 @@ const hex = "0123456789abcdef"
 
 // An encodeState encodes JSON into a bytes.Buffer.
 type encodeState struct {
-	bytes.Buffer // accumulated output
+	bytes.Buffer              // accumulated output
+	bound        *encodeBound // nil for the unchanged general codec API
 
 	// Keep track of what pointers we've seen in the current recursive call
 	// path, to avoid cycles that could lead to a stack overflow. Only do
@@ -397,13 +398,13 @@ func typeEncoder(t reflect.Type) encoderFunc {
 		return newTypeEncoder(t, true)
 	})
 	fi, loaded := encoderCache.LoadOrStore(t, encoderFunc(func(e *encodeState, v reflect.Value, opts encOpts) {
-		indirect()(e, v, opts)
+		boundedEncoder(t, indirect())(e, v, opts)
 	}))
 	if loaded {
 		return fi.(encoderFunc)
 	}
 
-	f := indirect()
+	f := boundedEncoder(t, indirect())
 	encoderCache.Store(t, f)
 	return f
 }
@@ -479,10 +480,11 @@ func marshalerEncoder(e *encodeState, v reflect.Value, opts encOpts) {
 	}
 	b, err := m.MarshalJSON()
 	if err == nil {
+		e.prepareCompact(b, opts.escapeHTML)
 		e.Grow(len(b))
 		out := e.AvailableBuffer()
 		out, err = appendCompact(out, b, opts.escapeHTML)
-		e.Buffer.Write(out)
+		e.Write(out)
 	}
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalJSON"})
@@ -498,10 +500,11 @@ func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encOpts) {
 	m := va.Interface().(Marshaler)
 	b, err := m.MarshalJSON()
 	if err == nil {
+		e.prepareCompact(b, opts.escapeHTML)
 		e.Grow(len(b))
 		out := e.AvailableBuffer()
 		out, err = appendCompact(out, b, opts.escapeHTML)
-		e.Buffer.Write(out)
+		e.Write(out)
 	}
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalJSON"})
@@ -522,6 +525,7 @@ func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encOpts) {
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalText"})
 	}
+	e.prepareText(b, opts.escapeHTML)
 	e.Write(appendString(e.AvailableBuffer(), b, opts.escapeHTML))
 }
 
@@ -536,6 +540,7 @@ func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encOpts) {
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalText"})
 	}
+	e.prepareText(b, opts.escapeHTML)
 	e.Write(appendString(e.AvailableBuffer(), b, opts.escapeHTML))
 }
 
@@ -605,6 +610,7 @@ var (
 )
 
 func stringEncoder(e *encodeState, v reflect.Value, opts encOpts) {
+	e.prepareString(v.String(), opts.escapeHTML, opts.quoted)
 	if v.Type() == numberType {
 		numStr := v.String()
 		// In Go1.5 the empty string encodes to "0", while this is not a valid number literal
@@ -786,6 +792,17 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encOpts) {
 	e.WriteByte('{')
 
 	// Extract and sort the keys.
+	if e.bound != nil {
+		if int64(v.Len()) > e.bound.limits.MaxNodes-e.bound.nodes {
+			e.error(&EncodeLimitError{"nodes", e.bound.limits.MaxNodes})
+		}
+		if e.bound.limits.Account != nil {
+			if err := e.bound.limits.Account(int64(v.Len()) * 64); err != nil {
+				e.error(err)
+			}
+			defer e.bound.limits.Account(-int64(v.Len()) * 64)
+		}
+	}
 	var (
 		sv  = make([]reflectWithString, v.Len())
 		mi  = v.MapRange()
@@ -805,6 +822,7 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encOpts) {
 		if i > 0 {
 			e.WriteByte(',')
 		}
+		e.prepareString(kv.ks, opts.escapeHTML, false)
 		e.Write(appendString(e.AvailableBuffer(), kv.ks, opts.escapeHTML))
 		e.WriteByte(':')
 		me.elemEnc(e, kv.v, opts)
@@ -834,6 +852,9 @@ func encodeByteSlice(e *encodeState, v reflect.Value, _ encOpts) {
 	}
 
 	s := v.Bytes()
+	if e.bound != nil {
+		e.Grow(int((int64(len(s))+2)/3*4 + 2))
+	}
 	b := e.AvailableBuffer()
 	b = append(b, '"')
 	b = base64.StdEncoding.AppendEncode(b, s)

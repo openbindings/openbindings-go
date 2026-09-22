@@ -2,7 +2,8 @@ package invoke
 
 // Operation-layer tests mirroring the TS SDK's operation-invoker.test.ts:
 // wiring, cardinalities, OBI-T-07/T-08, CONTEXT_REQUIRED negotiation
-// (resolve-replay-retry, preflight), and metadata pass-through.
+// (preflight resolution; a live challenge terminates the invocation), and
+// metadata pass-through.
 
 import (
 	"context"
@@ -33,8 +34,8 @@ type mockOpts struct {
 	nativeFailure       bool // ping returns one binding-native failure completion
 	requireBearer       bool // getUser challenges when context lacks bearerToken (after reading input)
 	requireServerConfig bool // getUser challenges with config.value until context.configuration.server is present
-	challengeAlways     bool // getUser challenges unconditionally (tests the retry cap)
-	preflight           bool // expose PrepareBinding reporting the bearer requirement
+	challengeAlways     bool // getUser (and a preflighter's preflight) challenge unconditionally
+	preflight           bool // expose PreflightBinding reporting the bearer requirement
 }
 
 type mockBindingInvoker struct {
@@ -142,13 +143,7 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 			return nil
 		}
 		if m.opts.requireServerConfig && !hasServerConfig(args.Context) {
-			h.FireError(NewContextRequiredError(
-				&ContextRequiredDetails{
-					Target: "api.example.com",
-					Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{
-						NewConfigValueRequirement("server", "/url", "supply a connection URL", nil, nil),
-					}}},
-				}))
+			h.FireError(NewContextRequiredError(serverConfigDetails()))
 			return nil
 		}
 		_ = h.CloseInput()
@@ -182,8 +177,8 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 		}
 		h.CloseOutput()
 	case "watchThenChallenge":
-		// Mid-stream challenge: observable progress happened, so the
-		// operation layer must surface, not retry.
+		// Mid-stream challenge: a live CONTEXT_REQUIRED after output
+		// surfaces like any other terminal, delivered prefix intact.
 		_ = h.CloseInput()
 		if err := h.EmitOutput(map[string]any{"id": "ord_1", "status": "created"}); err != nil {
 			return nil
@@ -248,31 +243,46 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 	return nil
 }
 
-// PrepareBinding is attached via the preparerMock wrapper so that plain
-// mocks do NOT implement BindingPreparer.
-type preparerMock struct {
+// PreflightBinding is attached via the preflighterMock wrapper so that plain
+// mocks do NOT implement BindingPreflighter.
+type preflighterMock struct {
 	*mockBindingInvoker
 }
 
-type malformedPreparerMock struct {
+type malformedPreflighterMock struct {
 	*mockBindingInvoker
 }
 
-func (p *malformedPreparerMock) PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (p *malformedPreflighterMock) PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return &ContextRequiredDetails{
 		Target:       "api.example.com",
 		Alternatives: []ContextAlternative{{Requirements: nil}},
 	}, nil
 }
 
-func (p *preparerMock) PrepareBinding(_ context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+func (p *preflighterMock) PreflightBinding(_ context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	p.mu.Lock()
 	p.prepares++
 	p.mu.Unlock()
+	if p.opts.challengeAlways {
+		return bearerDetails, nil
+	}
+	if p.opts.requireServerConfig && !hasServerConfig(args.Context) {
+		return serverConfigDetails(), nil
+	}
 	if ContextBearerToken(args.Context) != "" {
 		return nil, nil
 	}
 	return bearerDetails, nil
+}
+
+func serverConfigDetails() *ContextRequiredDetails {
+	return &ContextRequiredDetails{
+		Target: "api.example.com",
+		Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{
+			NewConfigValueRequirement("server", "/url", "supply a connection URL", nil, nil),
+		}}},
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +781,7 @@ func TestOpT16FormatIsAnnotationNotAssertion(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CONTEXT_REQUIRED negotiation
+// CONTEXT_REQUIRED negotiation: preflight resolves; a live challenge terminates
 // ---------------------------------------------------------------------------
 
 func TestOpContextRequiredSurfacesWithoutResolver(t *testing.T) {
@@ -788,51 +798,89 @@ func TestOpContextRequiredSurfacesWithoutResolver(t *testing.T) {
 	}
 }
 
-func TestOpResolveAndRetryReplaysInput(t *testing.T) { // U — read ≠ consumed
+// TestOpLiveChallengeTerminatesAndCallerReinvokes is the caller-owned redo:
+// the binding challenges AFTER reading its input (the live lane), the
+// invoker neither consults the resolver nor starts a second attempt, the
+// challenge surfaces with its details, and the caller resolves and invokes
+// again with the scoped context.
+func TestOpLiveChallengeTerminatesAndCallerReinvokes(t *testing.T) { // U: read is not consumed
 	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
 	var resolverCalls int
-	var rmu sync.Mutex
-	resolver := func(_ context.Context, details *ContextRequiredDetails) (map[string]any, error) {
-		rmu.Lock()
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		resolverCalls++
-		rmu.Unlock()
-		if details.Target != "api.example.com" {
-			return nil, fmt.Errorf("wrong target: %s", details.Target)
+		return map[string]any{"bearerToken": "must-not-run"}, nil
+	})
+	var given map[string]any
+	var result any
+	for attempt := 0; attempt < 2; attempt++ {
+		call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"), WithContext(given))
+		if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+			t.Fatal(err)
 		}
-		return map[string]any{"bearerToken": "tok-123"}, nil
+		out, err := Single(shortCtx(t), call.Outputs())
+		if err == nil {
+			result = out
+			break
+		}
+		details := ContextRequiredFrom(AsInvocationError(err))
+		if details == nil || attempt == 1 {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+		if details.Target != "api.example.com" || details.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+			t.Fatalf("challenge details were not preserved: %+v", details)
+		}
+		given = ScopeContext(map[string]any{"bearerToken": "tok-123", "apiKey": "unrelated"}, details)
 	}
-	op := newOpInvoker(mock, resolver)
-	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
-	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil { // written ONCE
-		t.Fatal(err)
+	if result == nil || result.(map[string]any)["name"] != "Ada" {
+		t.Fatalf("got %v", result)
 	}
-	v, err := Single(shortCtx(t), call.Outputs())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.(map[string]any)["name"] != "Ada" {
-		t.Fatalf("got %v", v)
-	}
-
 	attempts, _, reads, contexts := mock.snapshot()
-	rmu.Lock()
-	rc := resolverCalls
-	rmu.Unlock()
-	if rc != 1 {
-		t.Fatalf("resolver calls: %d", rc)
+	if resolverCalls != 0 {
+		t.Fatalf("resolver consulted for a live challenge %d time(s)", resolverCalls)
 	}
 	if attempts != 2 {
 		t.Fatalf("attempts: %d", attempts)
 	}
-	// Both attempts read the same lone input: the prefix was replayed.
-	if len(reads[0]) != 1 || len(reads[1]) != 1 {
-		t.Fatalf("replay failed: %v", reads)
+	// Each attempt read the input its own caller wrote; nothing was replayed.
+	if len(reads) != 2 || len(reads[0]) != 1 || len(reads[1]) != 1 || reads[1][0].(map[string]any)["id"] != "u1" {
+		t.Fatalf("reads: %v", reads)
 	}
-	if reads[1][0].(map[string]any)["id"] != "u1" {
-		t.Fatalf("replayed wrong value: %v", reads[1])
+	if ContextBearerToken(contexts[0]) != "" || ContextBearerToken(contexts[1]) != "tok-123" {
+		t.Fatalf("contexts: %v", contexts)
 	}
-	if ContextBearerToken(contexts[1]) != "tok-123" {
-		t.Fatalf("retry context missing token: %v", contexts[1])
+	if _, present := contexts[1]["apiKey"]; present {
+		t.Fatalf("scoped context leaked an unrelated credential: %v", contexts[1])
+	}
+}
+
+// TestOpLiveChallengeAfterStreamedInputsSurfaces: a client-streaming caller
+// that already forwarded several inputs still gets the live challenge as its
+// terminal, unchanged, and the invoker does not consult the resolver.
+func TestOpLiveChallengeAfterStreamedInputsSurfaces(t *testing.T) { // CS
+	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
+	var resolverCalls int
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		resolverCalls++
+		return map[string]any{"bearerToken": "must-not-run"}, nil
+	})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	// Later writes may be accepted or may report the terminal; either is
+	// truthful. The output side carries the verdict.
+	_ = call.Write(shortCtx(t), map[string]any{"id": "u2"})
+	_ = call.Close()
+	_, err := drainOutputs(t, call)
+	details := ContextRequiredFrom(AsInvocationError(err))
+	if details == nil || details.Target != "api.example.com" {
+		t.Fatalf("expected the live challenge with details, got %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("resolver consulted for a live challenge %d time(s)", resolverCalls)
+	}
+	if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
+		t.Fatalf("attempts: %d", attempts)
 	}
 }
 
@@ -842,14 +890,14 @@ func hasServerConfig(ctx map[string]any) bool {
 	return ok
 }
 
-// TestOpResolveAndRetryConfigValue proves the R1a config.value path end to
-// end: a binding challenges with a config.value requirement, a resolver
-// supplies the value into context.configuration under its point, and the
-// retry carries it — while a configuration point the caller already supplied
-// (decode) survives the point-wise merge rather than being clobbered.
-func TestOpResolveAndRetryConfigValue(t *testing.T) {
-	mock := &mockBindingInvoker{opts: mockOpts{requireServerConfig: true}}
-	var got map[string]any
+// TestOpPreflightResolvesConfigValue proves the R1a config.value path end to
+// end through preflight: the binding's PreflightBinding reports a config.value
+// requirement, a resolver supplies the value into context.configuration under
+// its point, and the single attempt carries it, while a configuration point
+// the caller already supplied (decode) survives the point-wise merge rather
+// than being clobbered.
+func TestOpPreflightResolvesConfigValue(t *testing.T) {
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireServerConfig: true, preflight: true}}}
 	resolver := func(_ context.Context, details *ContextRequiredDetails) (map[string]any, error) {
 		req := details.Alternatives[0].Requirements[0]
 		if req.Type != "config.value" || req.Extra["point"] != "server" {
@@ -858,8 +906,6 @@ func TestOpResolveAndRetryConfigValue(t *testing.T) {
 		return map[string]any{"configuration": map[string]any{"server": map[string]any{"url": "https://api.example.com"}}}, nil
 	}
 	op := newOpInvoker(mock, resolver)
-	// The caller pre-supplies a DIFFERENT configuration point (decode); it must
-	// survive the resolve-and-retry merge.
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"),
 		WithContext(map[string]any{"configuration": map[string]any{"decode": map[string]any{"lane": "text"}}}))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
@@ -867,42 +913,41 @@ func TestOpResolveAndRetryConfigValue(t *testing.T) {
 	}
 	v, err := Single(shortCtx(t), call.Outputs())
 	if err != nil {
-		t.Fatalf("resolve-and-retry did not dispatch: %v", err)
+		t.Fatalf("preflight resolution did not dispatch: %v", err)
 	}
 	if v.(map[string]any)["name"] != "Ada" {
 		t.Fatalf("got %v", v)
 	}
-	_, _, _, contexts := mock.snapshot()
-	got = contexts[1]
-	cfg, _ := got["configuration"].(map[string]any)
+	attempts, _, _, contexts := mock.snapshot()
+	if attempts != 1 {
+		t.Fatalf("attempts: %d", attempts)
+	}
+	cfg, _ := contexts[0]["configuration"].(map[string]any)
 	if _, ok := cfg["server"]; !ok {
-		t.Errorf("retry context missing resolved server config: %v", cfg)
+		t.Errorf("attempt context missing resolved server config: %v", cfg)
 	}
 	if dec, _ := cfg["decode"].(map[string]any); dec["lane"] != "text" {
 		t.Errorf("caller's decode config point was clobbered by the merge: %v", cfg)
 	}
 }
 
-func TestOpResolverDeclineSurfaces(t *testing.T) {
-	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
+func TestOpPreflightResolverDeclineSurfaces(t *testing.T) {
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		return nil, nil
 	})
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
-	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
-		t.Fatal(err)
-	}
 	_, err := drainOutputs(t, call)
 	if codeOf(t, err) != ErrCodeContextRequired {
 		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
 	}
-	if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
-		t.Fatalf("attempts: %d", attempts)
+	if attempts, _, _, _ := mock.snapshot(); attempts != 0 {
+		t.Fatalf("declined preflight must not dispatch: %d attempts", attempts)
 	}
 }
 
 func TestOpResolverFailureIsRuntimeFailure(t *testing.T) {
-	t.Run("reactive challenge", func(t *testing.T) {
+	t.Run("live challenge does not reach the resolver", func(t *testing.T) {
 		mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
 		op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 			return nil, errors.New("credential broker unavailable")
@@ -912,16 +957,16 @@ func TestOpResolverFailureIsRuntimeFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err := drainOutputs(t, call)
-		if codeOf(t, err) != ErrCodeRuntime {
-			t.Fatalf("expected ERR_RUNTIME, got %v", err)
+		if codeOf(t, err) != ErrCodeContextRequired {
+			t.Fatalf("expected the challenge itself, got %v", err)
 		}
 		if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
-			t.Fatalf("resolver failure must not retry: %d attempts", attempts)
+			t.Fatalf("live challenge must not start another attempt: %d attempts", attempts)
 		}
 	})
 
 	t.Run("preflight challenge", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 			return nil, errors.New("credential broker unavailable")
 		})
@@ -937,7 +982,7 @@ func TestOpResolverFailureIsRuntimeFailure(t *testing.T) {
 }
 
 func TestMalformedPreflightDoesNotReachResolver(t *testing.T) {
-	mock := &malformedPreparerMock{&mockBindingInvoker{}}
+	mock := &malformedPreflighterMock{&mockBindingInvoker{}}
 	resolverCalls := 0
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		resolverCalls++
@@ -956,8 +1001,8 @@ func TestMalformedPreflightDoesNotReachResolver(t *testing.T) {
 	}
 }
 
-func TestOpUnchangedResolutionDoesNotRetry(t *testing.T) {
-	mock := &mockBindingInvoker{opts: mockOpts{challengeAlways: true}}
+func TestOpPreflightUnchangedResolutionSurfaces(t *testing.T) {
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{challengeAlways: true, preflight: true}}}
 	var resolverCalls int
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		resolverCalls++
@@ -970,40 +1015,19 @@ func TestOpUnchangedResolutionDoesNotRetry(t *testing.T) {
 		NewOperationSignature[any, any]("getUser"),
 		WithContext(map[string]any{"bearerToken": "unchanged"}),
 	)
-	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
-		t.Fatal(err)
-	}
 	_, err := drainOutputs(t, call)
 	if codeOf(t, err) != ErrCodeContextRequired {
 		t.Fatalf("expected unchanged challenge, got %v", err)
 	}
-	if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
-		t.Fatalf("unchanged resolution must not retry: %d attempts", attempts)
+	if attempts, _, _, _ := mock.snapshot(); attempts != 0 {
+		t.Fatalf("unchanged resolution must not dispatch: %d attempts", attempts)
 	}
 	if resolverCalls != 1 {
 		t.Fatalf("resolver calls = %d, want 1", resolverCalls)
 	}
 }
 
-func TestOpRetryRoundsAreCapped(t *testing.T) {
-	mock := &mockBindingInvoker{opts: mockOpts{challengeAlways: true}}
-	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
-		return map[string]any{"bearerToken": "never-enough"}, nil
-	})
-	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
-	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
-		t.Fatal(err)
-	}
-	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != ErrCodeContextRequired {
-		t.Fatalf("expected CONTEXT_REQUIRED after cap, got %v", err)
-	}
-	if attempts, _, _, _ := mock.snapshot(); attempts > maxContextRounds+2 {
-		t.Fatalf("retry loop not capped: %d attempts", attempts)
-	}
-}
-
-func TestOpMidStreamChallengeSurfaces(t *testing.T) { // SS — no retry after progress
+func TestOpMidStreamChallengeSurfaces(t *testing.T) { // SS: the delivered prefix survives
 	mock := &mockBindingInvoker{}
 	var resolverCalled bool
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
@@ -1015,11 +1039,11 @@ func TestOpMidStreamChallengeSurfaces(t *testing.T) { // SS — no retry after p
 	if len(vals) != 1 {
 		t.Fatalf("the delivered prefix must survive, got %v", vals)
 	}
-	if codeOf(t, err) != ErrCodeContextRequired {
-		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
+	if ContextRequiredFrom(AsInvocationError(err)) == nil {
+		t.Fatalf("expected CONTEXT_REQUIRED with details, got %v", err)
 	}
 	if resolverCalled {
-		t.Fatal("no retry after observable progress")
+		t.Fatal("resolver consulted for a live challenge")
 	}
 	if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
 		t.Fatalf("attempts: %d", attempts)
@@ -1027,7 +1051,7 @@ func TestOpMidStreamChallengeSurfaces(t *testing.T) { // SS — no retry after p
 }
 
 func TestOpPreflightCollapsesChallenge(t *testing.T) { // CS-friendly path
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	var resolverCalls int
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		resolverCalls++
@@ -1053,7 +1077,7 @@ func TestOpPreflightCollapsesChallenge(t *testing.T) { // CS-friendly path
 }
 
 func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
-	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	op := newOpInvoker(mock, nil)
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	_, err := drainOutputs(t, call)
@@ -1081,14 +1105,14 @@ func TestOperationInvokerDoesNotExposeBindingDiagnostics(t *testing.T) {
 	}
 }
 
-func TestPrepareOperation(t *testing.T) {
+func TestPreflightOperation(t *testing.T) {
 	// Reports the resolved binding's requirements without invoking (no attempt).
 	t.Run("reports requirements without invoking", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser")
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "getUser")
 		if err != nil {
-			t.Fatalf("PrepareOperation: %v", err)
+			t.Fatalf("PreflightOperation: %v", err)
 		}
 		if details == nil || details.Target != "api.example.com" {
 			t.Fatalf("expected bearer requirement, got %+v", details)
@@ -1100,23 +1124,23 @@ func TestPrepareOperation(t *testing.T) {
 
 	// Supplied context narrows the result to what remains unsatisfied.
 	t.Run("WithContext narrows to satisfied", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser",
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "getUser",
 			WithContext(map[string]any{"bearerToken": "tok"}))
 		if err != nil {
-			t.Fatalf("PrepareOperation: %v", err)
+			t.Fatalf("PreflightOperation: %v", err)
 		}
 		if details != nil {
 			t.Fatalf("bearer supplied; expected no remaining requirements, got %+v", details)
 		}
 	})
 
-	// A binding whose format exposes no static preparer reports nil (the
-	// always-satisfiable answer), same as PrepareBinding.
-	t.Run("no preparer yields nil", func(t *testing.T) {
+	// A binding whose format exposes no static preflighter reports nil (the
+	// always-satisfiable answer), same as PreflightBinding.
+	t.Run("no preflighter yields nil", func(t *testing.T) {
 		op := newOpInvoker(&mockBindingInvoker{}, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser")
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "getUser")
 		if err != nil || details != nil {
 			t.Fatalf("expected (nil, nil), got (%+v, %v)", details, err)
 		}
@@ -1124,12 +1148,12 @@ func TestPrepareOperation(t *testing.T) {
 
 	// Shares Invoke's resolution: alias-aware (OBI-T-12) + WithBindingKey pinning.
 	t.Run("alias and pinned binding", func(t *testing.T) {
-		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		mock := &preflighterMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 		op := newOpInvoker(mock, nil)
-		details, err := op.PrepareOperation(bg(), opTestInterface(), "fetchUser", // alias of getUser
+		details, err := op.PreflightOperation(bg(), opTestInterface(), "fetchUser", // alias of getUser
 			WithBindingKey("getUser.main"))
 		if err != nil {
-			t.Fatalf("PrepareOperation(alias, pinned): %v", err)
+			t.Fatalf("PreflightOperation(alias, pinned): %v", err)
 		}
 		if details == nil {
 			t.Fatal("expected requirements for the pinned binding")
@@ -1139,10 +1163,10 @@ func TestPrepareOperation(t *testing.T) {
 	// Wiring failures return an error, never a panic.
 	t.Run("wiring failures return errors", func(t *testing.T) {
 		op := newOpInvoker(&mockBindingInvoker{}, nil)
-		if _, err := op.PrepareOperation(bg(), opTestInterface(), "nope"); err == nil {
+		if _, err := op.PreflightOperation(bg(), opTestInterface(), "nope"); err == nil {
 			t.Fatal("expected error for unknown operation")
 		}
-		if _, err := op.PrepareOperation(bg(), nil, "getUser"); err == nil {
+		if _, err := op.PreflightOperation(bg(), nil, "getUser"); err == nil {
 			t.Fatal("expected error for nil interface")
 		}
 	})

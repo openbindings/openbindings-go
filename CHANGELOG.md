@@ -6,6 +6,42 @@
 
 ### Fixed
 
+- **Preflight failures remain visible.** OpenAPI now reports failed required
+  description loads, edition/selector checks and analysis during preflight,
+  including cancellation, instead of returning a successful unknown result.
+
+- **Context matching keeps the complete challenge's scheme identities.**
+  `MatchContextAlternative` exposes the same first-match decision used by
+  satisfaction and scoping so applications can retain it while applying a
+  resolution. Storage eligibility filtering no longer makes ambiguous flat
+  credentials appear to identify a single named scheme. Store-backed resolution
+  also preserves alternative order across storage keys while caching reads.
+- **Basic credential checks agree across representations and extraction.**
+  Both username and password must be strings; either may be explicitly empty
+  when the other is nonempty. Missing or wrongly typed members no longer pass
+  the flat or extraction paths when the named representation would reject them.
+- **Cancellation also reaches preflight and its context resolver.** Cancelling
+  an invocation after rejected input now cancels cooperative preflight and
+  resolution work, as well as binding execution.
+
+- **Named credential scoping preserves usable fallbacks.** Empty or malformed
+  named bearer, basic or OAuth credentials no longer suppress a valid flat
+  credential during `ScopeContext`. Admission shares the checks used to decide
+  which representation satisfies the challenge; valid named credentials keep
+  their precedence.
+
+- **Caller-owned context recovery example handles either challenge timing.**
+  It resolves challenges returned by a write or the output reader, reads the
+  outcome after input closure, retires every attempt, and merges scoped
+  resolution into existing context without discarding unrelated caller fields.
+  Requested configuration values and credentials are replaced whole, preserving
+  siblings while retiring stale credential aliases. Executable coverage also
+  checks ordinary failures, replacement boundaries and the single-redo limit.
+
+- **Output handoffs after termination skip capture.** A cancelled, completed or
+  failed invocation returns its existing outcome before invoking the submitted
+  value's codec. Accepted outputs and detached terminal details remain readable.
+
 - **Usage hook-table machine lane keeps exact JSON values.** `HookTable.Hooks()`
   decoded a JSON machine lane with `encoding/json` into `any`, collapsing every
   number to float64 (2^53+1 and 1e400 could not survive a CLI round trip). The
@@ -14,6 +50,58 @@
   SDK decode boundary.
 
 ### Changed
+
+- **The operation is named preflight and its documented contract is the
+  signal contract** (the preflight signal contract proposal, 2026-09-21).
+  `invoke.BindingPreparer` is `invoke.BindingPreflighter`;
+  `OperationInvoker.PrepareOperation` and `.PrepareBinding` are
+  `PreflightOperation` and `PreflightBinding`;
+  `CompiledBindingInvoker.PrepareBinding` is `PreflightBinding`;
+  `OperationMatch.Prepare` is `OperationMatch.Preflight`;
+  `sdk.Runtime.PrepareOperation` is `PreflightOperation`; `PREPARATION.md` is
+  `PREFLIGHT.md`. The static compilation family (`PrepareInterface`,
+  `PrepareProvider`, `Prepared*`) is unchanged. The result is advisory: it may
+  omit requirements, nil is always conformant, and the live `CONTEXT_REQUIRED`
+  remains authoritative. Invocation never requires a prior preflight. Context
+  supplied to preflight is supplied for that call alone. Preflight never
+  dispatches the requested operation, consumes its input, emits its outputs,
+  or spends an approval for it. An error means the binding could not answer
+  and carries no prediction. See `PREFLIGHT.md`.
+
+- **Invocation values now have snapshot ownership and finite per-value
+  limits** (breaking, pre-1.0 minor-release change). Ordinary typed/local paths
+  use private projection and checked construction instead of JSON text bridges.
+  Mutable producer storage can be reused after an accepted handoff; handlers,
+  evaluator callbacks and public readers receive detached values. Generic local
+  reference identity is no longer preserved. Bytes retain exact typed recovery
+  with Base64 logical meaning. Every single admitted, delivered, constructed or
+  exported value is bounded by `ValueLimits.MaxValueUnits` and `MaxDepth`; a
+  value over the allowance ends the invocation with `ERR_RUNTIME`, and accepted
+  output drains before that failure. Handoff queues are bounded and apply
+  blocking backpressure, but do not establish an aggregate memory bound:
+  concurrent pending handoffs, pipeline values, scratch and terminal data also
+  retain memory. Binding-specific buffering remains the binding's concern.
+- **A live `CONTEXT_REQUIRED` now ends the invocation instead of being
+  replayed** (breaking, pre-1.0 minor-release change; the context-challenge
+  replay removal ruling, 2026-09-21). The operation invoker still resolves
+  requirements a binding states before the first attempt (`PreflightBinding`)
+  through its `ContextResolver` and starts the one attempt with the merged
+  context. A `CONTEXT_REQUIRED` raised during the attempt surfaces as the
+  terminal error with its `ContextRequiredDetails` intact, whether or not any
+  input was forwarded or any output was produced; the resolver is not consulted
+  for it and no second attempt is started. The replay log, retry window and
+  retry cap are gone. A `Write` the SDK accepted is accepted into exactly one
+  attempt. Callers that relied on the invisible redo add their own loop around
+  `Invoke` (see the README's context section); `StoreContextResolver` is
+  unaffected. `OutputStream.Stop` is exactly `Cancel` again.
+- **Value configuration and export are explicit.** `invoke.ValueLimits`, runtime
+  and provider options, per-call `WithValueLimits`, low-level
+  `WithInvocationValueLimits`, local `ValueLimitError` causes and
+  `ValueConversionError` describe the new finite boundary. A failed output
+  conversion consumes only that result. `jsonvalue.MarshalWithOptions` supports
+  bounded, requested JSON display/export. Evaluator injection remains required.
+  See `INVOCATION_VALUES.md` and `VALUE_MIGRATION_QUALIFICATION.md`.
+
 
 - **The SDK can now prepare immutable provider revisions and expose bounded,
   process-local operation-validation diagnostics.** `Runtime` performs exact,
@@ -63,8 +151,7 @@
   from live preflight and invocation. The versioned reference policy reports
   provider and realization ambiguity separately and preserves exact or
   tri-state compatibility evidence. `PrepareLocalProvider`, `LocalUnary`, and
-  `LocalStream` use the same verified route; generic JSON-domain values remain
-  native references. The older operation-requirement family is transitional.
+  `LocalStream` use the same verified route; generic JSON-domain values use native container shapes with snapshot ownership. The older operation-requirement family is transitional.
 
 - **config.value requirements carry an engine-asserted `schema` instead of
   `choices`** (breaking; the 2026-08-20 working-draft amendment of the
@@ -219,8 +306,8 @@
   pairs an ordinary required OBI with a typed operation signature; an
   application supplies concrete interfaces and its explicitly installed
   `OperationInvoker`s. Matching is alias-aware, checks only the requested
-  operation against both complete schema graphs, performs side-effect-free
-  binding preflight, and carries advisory context requirements. The neutral
+  operation against both complete schema graphs, offers preflight, and
+  carries advisory context requirements. The neutral
   matcher returns every invocable match; the route-to-one convenience selects
   a unique highest caller preference and refuses a tie as
   `OperationRequirementAmbiguous`. Format modules remain optional and
@@ -428,12 +515,11 @@
   need missing runtime context fire `CONTEXT_REQUIRED` (details:
   `ContextRequiredDetails` — `Key` + disjunctive `Alternatives` over
   conjunctive `Requirements`, families
-  `auth.bearer`/`auth.apiKey`/`auth.basic`/`auth.oauth2`) BEFORE any observable
-  side effect. The `OperationInvoker` resolves challenges via a
-  composition-time `ContextResolver`, re-driving the binding against the same
-  input buffer (the already-forwarded prefix is replayed; once a binding shows
-  observable progress the challenge surfaces instead). Invokers that can derive
-  requirements from their source implement the side-effect-free `BindingPreparer`
+  `auth.bearer`/`auth.apiKey`/`auth.basic`/`auth.oauth2`) before output or observable
+  effects of the requested operation. The `OperationInvoker` resolves challenges known at preflight
+  via a composition-time `ContextResolver` (a live challenge surfaces to the
+  caller; see the replay-removal entry above). Invokers that can derive
+  requirements from their source implement optional `BindingPreflighter`
   preflight; `StoreContextResolver(store)`/`ContextSatisfies` compose the
   binding-invoker and context-store roles. `OperationInvoker.WithRuntime` now
   takes a `ContextResolver`.

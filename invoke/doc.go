@@ -8,7 +8,7 @@
 // bidirectional bindings. Creation is inert (no I/O until the handle is
 // driven), wiring failures surface as already-errored handles rather than
 // panics, and missing credentials surface as CONTEXT_REQUIRED terminal
-// errors raised before any side effect:
+// errors raised before output or observable effects of the requested operation:
 //
 //	opInv := invoke.NewOperationInvoker(openapi.NewInvoker())
 //	call := invoke.Invoke(ctx, opInv, iface,

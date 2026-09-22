@@ -50,6 +50,7 @@ type Invoker struct {
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BindingPreflighter = (*Invoker)(nil)
 
 // InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
@@ -156,9 +157,63 @@ func mcpBindingSpecInfos() []openbindings.BindingSpecInfo {
 // headers, cookies) as HTTP headers; an HTTP 401 from the server surfaces as
 // a terminal ERR_AUTH_REQUIRED.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
+}
+
+// PreflightBinding answers the preflight signal (the preflightBinding
+// operation of the openbindings.binding-invoker interface). It walks the
+// pre-dispatch gates the invocation walks before its context challenge
+// (binding specification, selector, and endpoint, all in-memory) and
+// reports the challenge the invocation would raise for these arguments, or
+// nil when it would proceed to the handshake. This implementation never
+// connects, reads input, or touches the filesystem.
+//
+// A gate the invocation would fail with a different error (a foreign
+// binding specification, an invalid selector, a non-HTTP endpoint) is
+// reported as no requirement: the invocation is the authority for that
+// refusal, and preflight is advisory. Resolution against a live listing
+// needs the handshake, but the family's only context requirement is
+// decided before it, so preflight is complete without it.
+func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	if args.Source.BindingSpec != BindingSpec {
+		return nil, nil
+	}
+	if _, _, err := parseSelector(args.Selector); err != nil {
+		return nil, nil
+	}
+	location := strings.TrimSpace(args.Source.Location)
+	if err := validateEndpoint(location); err != nil {
+		return nil, nil
+	}
+	return unplacedCredentialChallenge(location, args.Context), nil
+}
+
+// unplacedCredentialChallenge is the ONE place the family's context
+// challenge is built, so the live invocation and PreflightBinding cannot
+// drift. Credentials ride the Streamable HTTP requests as HTTP headers
+// (§9.4, MCP-P-07): a bearer token has a defined destination
+// (`Authorization: Bearer`), while an apiKey or basic credential must name
+// its header and is otherwise surfaced for context resolution rather than
+// placed on an invented header. It returns nil when the context carries no
+// such credential.
+func unplacedCredentialChallenge(location string, bindCtx map[string]any) *invoke.ContextRequiredDetails {
+	_, _, hasBasic := invoke.ContextBasicAuth(bindCtx)
+	if invoke.ContextAPIKey(bindCtx) == "" && !hasBasic {
+		return nil
+	}
+	return &invoke.ContextRequiredDetails{
+		Target: location,
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
+			Type: "auth.apiKey", Description: "supply the credential through an explicitly named HTTP header",
+		}}}},
+	}
 }
 
 // Synthesizer handles interface synthesis from MCP servers.

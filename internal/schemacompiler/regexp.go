@@ -1,4 +1,4 @@
-package openbindings
+package schemacompiler
 
 import (
 	"time"
@@ -8,10 +8,9 @@ import (
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
-// schemaRegexpEngine uses the existing ECMAScript Unicode implementation for
-// Core's JSON Schema boundary. The legacy exported engine remains untouched for
-// consumers outside this qualification, including Operation Graph.
-func schemaRegexpEngine(expression string) (jsonschema.Regexp, error) {
+// RegexpEngine uses the existing ECMAScript Unicode implementation for
+// the Core and Operation Graph JSON Schema boundaries.
+func RegexpEngine(expression string) (jsonschema.Regexp, error) {
 	re, err := regexp2.Compile(expression, regexp2.ECMAScript|regexp2.Unicode)
 	if err != nil {
 		return nil, err

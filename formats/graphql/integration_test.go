@@ -159,7 +159,7 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 	defer srv.Close()
 	invoker := NewInvoker()
 
-	details, err := invoker.PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
+	details, err := invoker.PreflightBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source: pinnedInvocationSource(t, srv.URL), Selector: "query/viewer",
 	})
 	if err != nil || details == nil || details.Alternatives[0].Requirements[0].Extra["point"] != "document" {

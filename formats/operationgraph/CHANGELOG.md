@@ -14,6 +14,17 @@
   an interface fails `ERR_VALIDATION_FAILED` instead of reaching the operation
   invoker with no interface.
 
+- **Root retention follows live lineage.** The engine retains a caller-written
+  root value for `$input` only when some node expression references `$input`
+  (a textual check over `transform`, `filter.transform` and `map.transform`
+  when the engine is built), and only while an event descending from it is
+  still held somewhere in the graph: a queue slot, buffer or combine state, an
+  in-flight `each` worker, or an `operation` conduit whose merged root it is.
+  The last holder's release drops the value; a graph with no such expression
+  roots nothing. There is no live value budget. The SDK's per-value limits
+  bound every capture, mutable view and construction, and events pass the
+  same immutable snapshot between SDK-owned handles without copying.
+
 - **Transparency rewrite.** The engine now implements the rewritten
   `openbindings.operation-graph@0.2.0` spec, governed by the identity law
   (`input → operation(y) → output` is observationally indistinguishable from

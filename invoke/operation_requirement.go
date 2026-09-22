@@ -63,8 +63,8 @@ type OperationImplementationAssessment struct {
 
 // OperationMatch is a compatible, invocable realization of one requirement.
 //
-// KnownContextRequirements is the advisory result of side-effect-free
-// preflight. Nil means no requirement was knowable during resolution, not a
+// KnownContextRequirements is the result of the binding's preflight. It is
+// advisory: it may omit requirements, and nil means none reported, not a
 // guarantee that live invocation cannot raise CONTEXT_REQUIRED.
 type OperationMatch[I, O any] struct {
 	Requirement              OperationRequirement[I, O]
@@ -87,10 +87,17 @@ func (m *OperationMatch[I, O]) Invoke(ctx context.Context, opts ...InvokeOption)
 	return Invoke(ctx, m.Implementation.Invoker, m.Implementation.Interface, m.Requirement.Signature, opts...)
 }
 
-// Prepare repeats side-effect-free preflight, optionally with caller context
-// or binding selection supplied through InvokeOption.
-func (m *OperationMatch[I, O]) Prepare(ctx context.Context, opts ...InvokeOption) (*ContextRequiredDetails, error) {
-	return m.Implementation.Invoker.PrepareOperation(
+// Preflight resolves this match's operation as Invoke would and asks the selected
+// binding which context requirements it can already identify. Supply
+// context with WithContext; it is used for this call alone. A non-nil
+// result has the shape a live CONTEXT_REQUIRED carries and may omit
+// requirements; nil means none reported, not ready. An error means the
+// binding could not answer and predicts nothing. Invoke preflights on its
+// own before every attempt and consults ContextResolver then; this explicit
+// call never does. Discard a result once the operation, binding or context
+// changes.
+func (m *OperationMatch[I, O]) Preflight(ctx context.Context, opts ...InvokeOption) (*ContextRequiredDetails, error) {
+	return m.Implementation.Invoker.PreflightOperation(
 		ctx,
 		m.Implementation.Interface,
 		m.Requirement.Signature.Key(),
@@ -135,8 +142,8 @@ type preferredOperationMatch[I, O any] struct {
 // Matching is deliberately conservative:
 //  1. the required identifier must correspond by key or alias;
 //  2. its schemas must satisfy the reference comparison profile;
-//  3. the supplied operation invoker must resolve a concrete binding without
-//     side effects.
+//  3. the supplied operation invoker must resolve a concrete binding and its
+//     preflight must return without error.
 //
 // The returned matches are ordered by caller-owned preference, but this
 // function selects nothing. Applications whose operation semantics aggregate,
@@ -160,7 +167,7 @@ func MatchOperationRequirement[I, O any](
 	matches := make([]preferredOperationMatch[I, O], 0)
 
 	for _, implementation := range implementations {
-		// Honor cancellation between candidates: each PrepareOperation below
+		// Honor cancellation between candidates: each PreflightOperation below
 		// may do real work (schema compilation, discovery), so a cancelled
 		// context must stop the assessment loop rather than run to
 		// completion. Parity with the TS SDK, which throwIfAborted()s per
@@ -218,7 +225,7 @@ func MatchOperationRequirement[I, O any](
 			continue
 		}
 
-		knownRequirements, err := implementation.Invoker.PrepareOperation(
+		knownRequirements, err := implementation.Invoker.PreflightOperation(
 			ctx,
 			implementation.Interface,
 			requirement.Signature.Key(),

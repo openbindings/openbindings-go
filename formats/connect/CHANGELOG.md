@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Preflight (`PreflightBinding`)**: the invoker implements the
+  `openbindings.binding-invoker` `preflightBinding` operation. It reports the
+  §9.6 / CONN-P-07 challenge (an apiKey with no consumer-named header)
+  before invocation, from the same in-memory pre-dispatch gates (selector,
+  target, schema-mode method resolution) and the same shared function as the
+  live challenge, so the two cannot drift. It never dispatches, reads input,
+  or touches the filesystem; supplied context that the binding can place
+  narrows the result to nil.
+
 - **Configurable delivery-unit bound**: the unary response body and each
   streaming envelope payload honor
   `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
@@ -14,6 +23,18 @@
 > A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
 
 ### Changed
+
+- **The operation is named preflight and its documented contract is the signal
+  contract** (the preflight signal contract proposal, 2026-09-21):
+  `Invoker.PrepareBinding` is `Invoker.PreflightBinding` and the
+  `invoke.BindingPreparer` assertion is `invoke.BindingPreflighter`. The
+  result is advisory: it may omit requirements, nil is always conformant, and
+  the live `CONTEXT_REQUIRED` remains authoritative. Invocation never requires
+  a prior preflight. Context supplied to preflight is supplied for that call
+  alone. Preflight never dispatches the requested operation, consumes its
+  input, emits its outputs, or spends an approval for it. An error means the
+  binding could not answer and carries no prediction. See the README's
+  Preflight section for what this adapter does to answer.
 
 - **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
   `bindings[*].selector`): bindings ride

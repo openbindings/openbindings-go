@@ -90,6 +90,7 @@ func NewInvoker() *Invoker {
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BindingPreflighter = (*Invoker)(nil)
 var _ invoke.BuiltinHooksProvider = (*Invoker)(nil)
 
 // cachedLoadSpec loads and parses a bare usage artifact — inline content,
@@ -310,9 +311,26 @@ func usageBindingSpecInfos() []openbindings.BindingSpecInfo {
 // as environment variables in the binding context (the well-known
 // "environment" field), not as a separate security mechanism.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
+}
+
+// PreflightBinding answers the preflight signal (the preflightBinding
+// operation of the openbindings.binding-invoker interface). The family's
+// only context requirement is decided from the binding context alone,
+// before the descriptor is loaded and before any process is spawned, so
+// this implementation reports exactly the challenge the invocation would
+// raise for these arguments, or nil when it would proceed to load. It never
+// reads input, dereferences an exec address, touches the filesystem, or
+// spawns.
+func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	return genericCredentialChallenge(args), nil
 }
 
 // Synthesizer handles interface synthesis from usage specs.

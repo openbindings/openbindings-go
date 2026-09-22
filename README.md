@@ -319,7 +319,9 @@ exhaustive diagnostics path. Custom policies make that staging explicit with
 
 Native implementations use the same verified route and operation substrate,
 addressed only by exact OBI binding key. Generic JSON-domain maps and slices
-retain reference identity and are not serialized:
+are snapshotted at public handoffs without a JSON text round trip. Handlers and
+callers own detached mutable values. See [invocation values](INVOCATION_VALUES.md)
+for byte recovery, limits, conversion failures and explicit export:
 
 ```go
 local, err := invoke.PrepareLocalProvider(invoke.PrepareLocalProviderOptions{
@@ -364,20 +366,20 @@ for {
 }
 ```
 
-For an operation you are confident yields exactly one output, the one blessed
-terminal is `invoke.Single`:
+For an operation you are confident yields exactly one output, use
+`invoke.Single`. After supplying input and arranging cancellation as in the
+complete flow below, the output-reading step is:
 
 ```go
-call := invoke.Invoke(ctx, opInv, iface, invoke.NewOperationSignature[any, any]("getItem"))
-_ = call.Write(ctx, map[string]any{"id": "item_1"})
 item, err := invoke.Single(ctx, call.Outputs())
 ```
 
-`Write`'s error contract makes both styles above safe: every error it returns
-is truthful — your ctx error, a flow signal, or, when a terminal has already
-fired, the terminal error itself — and the output side always carries the
-authoritative verdict. Checking a write error is optional fast-fail, never
-required for correctness, and `Close()` never fails.
+Every error `Write` returns is truthful — an input-capture error, your ctx
+error, a flow signal, or, when a terminal has already fired, the terminal error
+itself. Check write errors: a rejected input need not terminate the invocation.
+An input-closed or invocation-closed signal alone is not the operation's outcome;
+read the output side for that verdict. `Close()` never fails. See the context
+recovery example below for handling both write failures and output outcomes.
 
 Two idioms worth knowing. For an operation with **no input**, call `Close()`
 (or nothing at all — bindings that need no input dispatch without one). For
@@ -389,8 +391,25 @@ Client-streaming and bidirectional callers own `Close()` (and drive input and
 output from separate goroutines); `Cancel()` tears the invocation down.
 Protocol metadata remains inside artifact runtimes and binding-specific
 interpretation. Missing runtime context
-surfaces as a `CONTEXT_REQUIRED` terminal error raised before any side effect,
-resolved by the operation invoker's `ContextResolver` when one is configured.
+surfaces as a `CONTEXT_REQUIRED` terminal error raised before output or observable effects of the requested operation.
+Requirements a binding can state up front are resolved at preflight by the
+operation invoker's `ContextResolver` when one is configured; a challenge
+raised during the attempt ends the invocation for the caller to resolve.
+
+## Preflighting an operation
+
+Call `PreflightOperation` when an operation becomes likely to be used,
+supplying the context you would supply to `Invoke`. Core resolves the operation
+as `Invoke` would and asks the selected binding which context requirements it
+can already identify. A non-nil result is the same shape a live
+`CONTEXT_REQUIRED` carries and may omit requirements; nil means none reported,
+not ready; an error means the binding could not answer and predicts nothing.
+Invocation never requires a prior preflight: `Invoke` preflights on its own
+before its attempt and consults the `ContextResolver` then, while the explicit
+call never does. Context supplied to preflight is used for that call alone.
+Preflight never dispatches the requested operation; what an adapter does to
+answer is in its README. See [preflighting an operation](PREFLIGHT.md) for the
+application flow.
 
 ## Binding invokers
 
@@ -476,7 +495,9 @@ family the challenge declares:
 | `auth.basic` | `basic` (a `{"username","password"}` object) |
 | `auth.oauth2` | `accessToken` (plus `refreshToken`, `clientSecret`) |
 
-so satisfying a bearer challenge is one complete call:
+An application using `StoreContextResolver` can store a bearer token for later
+resolution of a durable requirement. Storing it does not itself resume or redo
+an invocation; the resolver must be configured as shown below:
 
 ```go
 _ = store.Set(ctx, invoke.NormalizeContextKey("https://api.example.com"),
@@ -484,8 +505,97 @@ _ = store.Set(ctx, invoke.NormalizeContextKey("https://api.example.com"),
 ```
 
 A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
-challenge before any side effect; the operation invoker resolves challenges
-through its configured `ContextResolver` and re-drives the binding.
+challenge before output or observable effects of the requested operation. Context resolution runs in one lane: before
+the attempt, the operation invoker asks the binding for its known requirements
+(`PreflightBinding`), consults its configured `ContextResolver`, and starts the
+one attempt with the merged context. A live `CONTEXT_REQUIRED` raised during
+the attempt terminates the invocation with its `ContextRequiredDetails` intact;
+the invoker never consults the resolver for it and never starts a second
+attempt on the caller's behalf. The caller owns the redo. This application
+chooses at most one redo for an operation with one input and one output, using
+the same reusable input value. Try once, retire the attempt, resolve and scope
+a challenge, then try once more. A challenge can reach either `Write` or the
+output reader; closing input alone may precede the challenge:
+
+```go
+given := initialContext // May be nil; the merge below does not modify it.
+for attempt := 0; ; attempt++ {
+    out, err := func() (any, error) {
+        call := invoke.Invoke(ctx, opInv, iface, sig, invoke.WithContext(given))
+        defer call.Cancel() // Cancel this attempt before resolving or returning.
+        if err := call.Write(ctx, input); err != nil {
+            ie := invoke.AsInvocationError(err)
+            if ie.Code != invoke.ErrCodeInputClosed && ie.Code != invoke.ErrCodeInvocationClosed {
+                return nil, err
+            }
+            // Closure alone is not the outcome; a challenge may follow it.
+        }
+        _ = call.Close() // This application supplies exactly one input.
+        return invoke.Single(ctx, call.Outputs())
+    }()
+    if err == nil {
+        return use(out)
+    }
+    details := invoke.ContextRequiredFrom(invoke.AsInvocationError(err))
+    if details == nil || attempt == 1 {
+        return err
+    }
+    resolved, rerr := resolve(ctx, details) // prompt, keychain, store
+    if rerr != nil {
+        return rerr
+    }
+    selected, ok := invoke.MatchContextAlternative(resolved, details)
+    if !ok {
+        return err // No alternative was satisfied.
+    }
+    scoped := invoke.ScopeContext(resolved, details)
+    if len(scoped) == 0 || !invoke.ContextSatisfies(scoped, details) {
+        return err // The resolver declined or supplied no usable fields.
+    }
+    given = mergeExampleContext(given, scoped, details.Alternatives[selected])
+}
+```
+
+`mergeExampleContext` is application code in the
+[complete executable example](invoke/context_recovery_example_test.go), not an
+SDK function. `MatchContextAlternative` and `ScopeContext` use the same rules
+against the complete challenge. Keep the selected index when applying the
+resolution: checking alternatives in isolation can change whether a flat
+credential identifies a scheme unambiguously. The application helper applies
+that selected alternative:
+
+- A `config.value` replaces the complete value at its named configuration
+  point and object-member JSON Pointer path, including a whole object or array. Siblings outside that
+  path are preserved; old members inside a replacement object are discarded.
+- A credential replaces the previous representation for that requirement,
+  including old named or flat fallbacks that could otherwise shadow it.
+  Other named credentials are preserved.
+- Other scoped fields replace their complete values.
+
+The helper copies containers along changed paths and does not modify either
+source map. Retained leaves may still be shared; this is not a detached copy.
+Scope the resolver result **before** applying it. `ScopeContext` understands the
+standard credential families, `config.value`, and type-named non-auth
+extensions. Applications supporting other requirement conventions need a
+resolver and scoping/application policy that understands those conventions.
+The default helpers and this example traverse object members in configuration
+paths; they do not resolve array-element paths such as `/0/url`. Arrays remain
+valid whole values. Array-element resolution needs application-specific
+handling; invocation itself does not restrict data to these helper capabilities.
+
+The application's `resolve` callback also decides whether stored context may
+be reused or newly acquired context persisted, honoring each requirement's
+`durable` flag (omitted means one-shot). `ScopeContext` filters fields; it does
+not enforce storage permissions. `StoreContextResolver` enforces the reuse
+rule described below. Interactive resolution of one-shot values is allowed.
+
+The executable example and regression tests cover the challenge timings,
+replacement boundaries, and cleanup after input and output conversion failures.
+Ordinary failures do not trigger context resolution, and a second context
+challenge is returned to the application.
+
+For a streaming call the caller re-runs its producer; nothing a `Write`
+accepted is ever replayed by the SDK.
 `invoke.StoreContextResolver(store)` is an optional store-backed
 realization of the published binding-invoker challenge. It treats a challenge
 as a scope, not a hint: via `ScopeContext` it returns only
@@ -506,7 +616,7 @@ opInv := invoke.NewOperationInvoker(openapi.NewInvoker()).
 Apps that resolve interactively (prompts, browser redirects, keychains) supply
 their own resolver instead. Format invokers that can derive requirements from
 their source (e.g. OpenAPI `securitySchemes`) also implement the
-side-effect-free `BindingPreparer` preflight.
+optional `BindingPreflighter` capability; see [preflighting an operation](PREFLIGHT.md).
 
 ## Transforms (invoking tools only)
 

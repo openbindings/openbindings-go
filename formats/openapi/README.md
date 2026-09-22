@@ -302,6 +302,18 @@ single `apiKey` convenience.
 
 A scheme outside this table is **surfaced, never dropped**: it emits a requirement typed from the artifact's own scheme (`http`/`digest` → `auth.http.digest`; any other type `T` → `auth.<T>`, e.g. `auth.mutualTLS`) that this package cannot itself apply. The alternative stays discoverable — unselectable only for runtimes without a resolver for that family — and a document whose every alternative is unmapped produces a readable challenge instead of an unauthenticated dispatch into a blind 401.
 
+### Preflight
+
+`PreflightBinding` answers the SDK's preflight signal by retrieving and
+analyzing the OpenAPI description and reporting the requirements the
+standalone client's preflight identifies for the selected operation under the
+supplied context: unsatisfied security alternatives and the configuration
+points above. It never sends the selected operation's request. The bounded
+client cache retains only self-contained embedded JSON content today, so a
+location-only source is loaded at preflight and again at invocation. A load,
+edition or selection failure is returned as an error. Context supplied to
+preflight is not retained.
+
 ### Consumer hooks
 
 HTTP leaves wire questions the OpenAPI document does not settle: which bytes-to-value rule to apply, whether a given response counts as success, and where the payload lives. This format **consults the consumer hooks seam** (`InvokeHooks`) for all three:
@@ -329,13 +341,13 @@ both reference SDKs emit an identical OBI for the same artifact:
 - **Output schemas** conservatively union every value-bearing success lane that can govern a 2xx response: exact 2xx entries, `2XX`, and an unshadowed `default`. Exact and ranged JSON declarations contribute their schemas, text/SSE declarations contribute strings, artifact-authorized raw-byte lanes contribute canonical Base64 strings, and a schema-less JSON lane leaves output unspecified rather than inventing a shape.
 - **Schema projection** targets JSON Schema 2020-12 (spec OBI-D-06), keyed on the artifact's declared `openapi` version and operation direction. OpenAPI 3.0.x schemas are translated from their subset dialect and ignore Reference Object siblings; 3.1.x Schema Object `$ref` siblings compose under JSON Schema semantics before typed resolution, while legal non-schema Reference Object descriptions remain local to each reference site. A per-load synthesis sidecar preserves authored null, empty, zero, false, and `x-*` Schema Object values that the typed parser otherwise cannot distinguish from absence; typed OpenAPI objects remain authoritative for structure and invocation never consults the sidecar. Request and response contracts preserve `readOnly` and `writeOnly` annotations and their members; those annotations do not authorize the binding to delete application data. An operation whose projected contract inherits a custom 3.1 schema dialect that cannot be losslessly projected to 2020-12 is excluded by tolerant synthesis and fails strict synthesis explicitly; schema-free operations and supported per-schema overrides remain available, and the dialect does not by itself prevent artifact-native invocation.
 - **Unrealizable targets fail synthesis**: declaration-complex form, multipart, text, raw, and media-range schemas without one artifact-defined carriage; case-colliding HTTP header declarations; and required bodies with no supported media candidate make the whole strict synthesis call fail. Exact JSON-family declaration-complex bodies use whole-value carriage. An optional body may be omitted with a warning only when the remaining no-body operation is still faithfully invocable.
-- **No security metadata is written to the OBI**; `securitySchemes` are honored at invocation time via context negotiation (`CONTEXT_REQUIRED` challenges and the `BindingPreparer` preflight).
+- **No security metadata is written to the OBI**; `securitySchemes` are honored at invocation time via context negotiation (`CONTEXT_REQUIRED` challenges and the `BindingPreflighter` preflight).
 
 ## How it works
 
 ### Invocation flow
 
-1. Loads the OpenAPI document (JSON or YAML, local or remote), checking Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, or 3.2.0 against the exact sibling named by the source. A bounded cache reuses only self-contained embedded JSON revisions. URL sources, YAML, and documents with external references or resource identifiers load afresh; location-only advisory preflight remains unknown.
+1. Loads the OpenAPI document (JSON or YAML, local or remote), checking Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, or 3.2.0 against the exact sibling named by the source. A bounded cache reuses only self-contained embedded JSON revisions. URL sources, YAML, and documents with external references or resource identifiers load afresh at preflight and at invocation. `PreflightBinding` performs this same load and returns load, edition and selection failures as errors; it never sends the selected operation request. Qualifying embedded analysis can be reused by an earlier preflight on the same adapter.
 2. Parses the selector as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
 4. Accepts the public `{parameters?, body?}` caller envelope, lowers it internally to the standalone client's routes, serializes parameters per the governing edition, and selects an artifact-declared request media candidate

@@ -46,8 +46,8 @@ type Invoker struct {
 }
 
 var (
-	_ invoke.BindingInvoker  = (*Invoker)(nil)
-	_ invoke.BindingPreparer = (*Invoker)(nil)
+	_ invoke.BindingInvoker     = (*Invoker)(nil)
+	_ invoke.BindingPreflighter = (*Invoker)(nil)
 )
 
 // NewInvoker creates a new AsyncAPI binding invoker with a default HTTP
@@ -124,7 +124,12 @@ func asyncAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
 //     the adapter forwards application values and lifecycle without adding
 //     WebSocket-shaped fields to Core frames
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
 			inv.FireError(invoke.AsInvocationError(err))
@@ -201,21 +206,31 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	return nil
 }
 
-// PrepareBinding is the side-effect-free preflight: it reports the context
-// this binding would require, or nil when the binding can proceed (or the
-// answer is not knowable without network I/O). Only inline source content
-// and the warm doc cache are consulted; nothing is fetched.
-func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+// PreflightBinding answers the preflight signal (the preflightBinding
+// operation of the openbindings.binding-invoker interface): it reports the
+// context requirements it can already identify, or nil. It performs the
+// same document load the invocation performs before any protocol I/O
+// (the warm document cache first), so a cold location-only source reports
+// its requirements here; reading the description artifact touches no
+// operation target. A live CONTEXT_REQUIRED terminates the invocation for
+// the caller to resolve, so a configured resolver only ever sees the
+// requirements this preflight reports.
+func (e *Invoker) PreflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	options, err := enginePrepareOptions(args, e.httpClient)
 	if err != nil {
 		return nil, nil
 	}
+	// Inline content and a warm document cache answer without I/O; a cold
+	// location-only source is loaded once, which also warms the cache.
 	prepared, err := e.engine.PrepareCached(ctx, options)
 	if err != nil {
 		return nil, nil
 	}
 	if prepared == nil {
-		return nil, nil
+		prepared, err = e.engine.Prepare(ctx, options)
+		if err != nil || prepared == nil {
+			return nil, nil
+		}
 	}
 	return toCorePrerequisites(prepared.Prerequisites()), nil
 }

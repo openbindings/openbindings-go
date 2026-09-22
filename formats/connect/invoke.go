@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -202,7 +203,7 @@ func decodeSchemaModeOutput(mi *methodInfo, payload []byte) (any, *invoke.Invoca
 		return nil, &invoke.InvocationError{Code: invoke.ErrCodeResponseError}
 	}
 	var out any
-	if err := json.Unmarshal(rendered, &out); err != nil {
+	if err := jsonvalue.Unmarshal(rendered, &out); err != nil {
 		return nil, &invoke.InvocationError{Code: invoke.ErrCodeResponseError}
 	}
 	return out, nil
@@ -316,7 +317,7 @@ func (e *Invoker) runUnary(ctx context.Context, inv invoke.BindingHandle[any, an
 			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeResponseError})
 			return
 		}
-		if err := json.Unmarshal(respBody, &output); err != nil {
+		if err := jsonvalue.Unmarshal(respBody, &output); err != nil {
 			inv.FireError(&invoke.InvocationError{
 				Code: invoke.ErrCodeResponseError,
 			})

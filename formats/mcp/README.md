@@ -47,6 +47,15 @@ templates, and prompts are coverage exclusions. Their MCP-native result
 shapes are not recompiled into application schemas merely to make them
 bindable.
 
+## Preflight
+
+`PreflightBinding` answers the SDK's preflight signal from the supplied context
+and the in-memory gates the invocation walks before its context challenge
+(binding specification, selector, endpoint). It uses no network and opens no
+session; resolution against the live tool listing waits for the invocation's
+handshake. Supplied context that the binding can place narrows the result to
+nil. Context supplied to preflight is not retained.
+
 ## Synthesis
 
 ```go

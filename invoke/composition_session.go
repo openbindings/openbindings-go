@@ -133,7 +133,9 @@ func (r *PreparedDependencyRoute[I, O]) Invoke(ctx context.Context, opts ...Invo
 	return NewTypedInvocation[I, O](r.realization.Invoke(ctx, opts...))
 }
 
-// Preflight evaluates current context separately from static route closure.
+// Preflight asks the route's binding which context requirements it can
+// already identify, under BindingPreflighter, separately from static route
+// closure.
 func (r *PreparedDependencyRoute[I, O]) Preflight(ctx context.Context, opts ...InvokeOption) (*ContextRequiredDetails, error) {
 	return r.realization.Preflight(ctx, opts...)
 }

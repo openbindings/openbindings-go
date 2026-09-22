@@ -33,7 +33,7 @@ func TestNativeCacheRetrievesChangingDocumentClosure(t *testing.T) {
 			}
 			invoker := NewInvoker()
 			for n := 1; n <= 2; n++ {
-				client, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+				client, err := invoker.runtime.loadNativeClient(t.Context(), args)
 				if err != nil {
 					t.Fatal(err)
 				}

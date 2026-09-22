@@ -73,6 +73,98 @@ func TestScopeContext_NilInput(t *testing.T) {
 	}
 }
 
+func TestScopeContext_NamedCredentialUsesValidRepresentation(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind string
+		valid      any
+		fallback   map[string]any
+	}{
+		{"bearer", "auth.bearer", "named", map[string]any{"bearerToken": "fallback"}},
+		{"api-key", "auth.apiKey", "named", map[string]any{"apiKey": "fallback"}},
+		{"basic", "auth.basic", map[string]any{"username": "named", "password": "secret"}, map[string]any{"basic": map[string]any{"username": "fallback", "password": "secret"}}},
+		{"oauth-access", "auth.oauth2", map[string]any{"accessToken": "named"}, map[string]any{"accessToken": "fallback", "refreshToken": "refresh"}},
+		{"oauth-bearer", "auth.oauth2", map[string]any{"accessToken": "named"}, map[string]any{"bearerToken": "fallback"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			details := &ContextRequiredDetails{Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: tc.kind, Name: "service"}}}}}
+			for _, named := range []any{nil, "", 42, map[string]any{}, map[string]any{"username": "incomplete"}, tc.valid} {
+				stored := map[string]any{"credentials": map[string]any{"service": named, "unrelated": "withheld"}, "headers": "withheld"}
+				for key, value := range tc.fallback {
+					stored[key] = value
+				}
+				if !ContextSatisfies(stored, details) {
+					t.Fatalf("fixture does not satisfy challenge: %v", stored)
+				}
+				want := tc.fallback
+				if reflect.DeepEqual(named, tc.valid) {
+					want = map[string]any{"credentials": map[string]any{"service": named}}
+				}
+				got := ScopeContext(stored, details)
+				if !reflect.DeepEqual(got, want) || !ContextSatisfies(got, details) {
+					t.Errorf("named=%v: scoped=%v, want %v satisfying the challenge", named, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestMatchContextAlternativeKeepsChallengeAmbiguity(t *testing.T) {
+	details := &ContextRequiredDetails{Alternatives: []ContextAlternative{
+		{Requirements: []ContextRequirement{{Type: "auth.bearer", Name: "a"}}},
+		{Requirements: []ContextRequirement{{Type: "auth.bearer", Name: "b"}}},
+		{Requirements: []ContextRequirement{{Type: "auth.oauth2", Name: "oauth"}}},
+	}}
+	resolved := map[string]any{"bearerToken": "fresh"}
+	for _, values := range []map[string]any{resolved, ScopeContext(resolved, details)} {
+		if index, ok := MatchContextAlternative(values, details); !ok || index != 2 {
+			t.Fatalf("matched %d, %v; want OAuth alternative 2", index, ok)
+		}
+	}
+	if _, ok := MatchContextAlternative(nil, details); ok {
+		t.Fatal("empty context matched")
+	}
+	if _, ok := MatchContextAlternative(resolved, nil); ok {
+		t.Fatal("nil challenge has no alternative to select")
+	}
+}
+
+func TestBasicCredentialRepresentationAgreement(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value map[string]any
+		valid bool
+	}{
+		{"complete", map[string]any{"username": "u", "password": "p"}, true},
+		{"empty-password", map[string]any{"username": "u", "password": ""}, true},
+		{"empty-username", map[string]any{"username": "", "password": "p"}, true},
+		{"both-empty", map[string]any{"username": "", "password": ""}, false},
+		{"missing", map[string]any{"username": "u"}, false},
+		{"wrong-type", map[string]any{"username": "u", "password": 42}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, named := range []bool{false, true} {
+				name := ""
+				values := map[string]any{"basic": tc.value}
+				if named {
+					name = "service"
+					values = map[string]any{"credentials": map[string]any{name: tc.value}}
+				}
+				details := &ContextRequiredDetails{Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.basic", Name: name}}}}}
+				_, _, extracted := ContextBasicAuthFor(values, name)
+				if extracted != tc.valid || ContextSatisfies(values, details) != tc.valid || (len(ScopeContext(values, details)) > 0) != tc.valid {
+					t.Fatalf("named=%v: extraction, satisfaction or scoping disagrees with validity %v", named, tc.valid)
+				}
+			}
+			if !tc.valid {
+				values := map[string]any{"credentials": map[string]any{"service": tc.value}, "basic": map[string]any{"username": "fallback", "password": "p"}}
+				if user, _, ok := ContextBasicAuthFor(values, "service"); !ok || user != "fallback" {
+					t.Fatal("invalid named Basic value blocked usable fallback")
+				}
+			}
+		})
+	}
+}
+
 // TestScopeContext_AdmitsOnlyTheNamedAPIKey is the R2.e ruling's core test:
 // a stored context carrying apiKeys entries for TWO names, challenged by an
 // alternative naming only ONE of them, must scope to exactly that one entry

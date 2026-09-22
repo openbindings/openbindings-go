@@ -228,8 +228,8 @@ type Invoker struct {
 }
 
 var (
-	_ invoke.BindingInvoker  = (*Invoker)(nil)
-	_ invoke.BindingPreparer = (*Invoker)(nil)
+	_ invoke.BindingInvoker     = (*Invoker)(nil)
+	_ invoke.BindingPreflighter = (*Invoker)(nil)
 )
 
 func newInvokerRuntime(options InvokerOptions) *invokerRuntime {
@@ -359,9 +359,14 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // HTTP work is scheduled on its own goroutine. Input messages flow through
 // the handle's Write channel. All pre-dispatch failures (bad selector, missing
 // server URL, unresolvable operation, missing context) terminate the handle
-// BEFORE any network side effect.
+// before dispatch of the requested operation. Description retrieval may occur.
 func (e *invokerRuntime) invokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
 			inv.FireError(invoke.AsInvocationError(err))
@@ -374,23 +379,19 @@ func (e *invokerRuntime) run(ctx context.Context, args *invoke.BindingInvocation
 	return e.runNative(ctx, args, inv)
 }
 
-// PrepareBinding adapts the SDK binding preflight to the artifact runtime.
-func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	return e.runtime.prepareBinding(ctx, args)
+// PreflightBinding adapts the SDK preflight signal to the artifact runtime.
+func (e *Invoker) PreflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	return e.runtime.preflightBinding(ctx, args)
 }
 
-// prepareBinding is the side-effect-free preflight (the prepareBinding
-// operation of the openbindings.binding-invoker interface): it derives the
-// operation's auth requirements from the document's securitySchemes and
-// reports the context the invocation would require, or nil when it can
-// proceed.
-//
-// It uses the source content or a previously cached document; it never
-// fetches. When the document would have to be fetched to learn its security
-// schemes, it reports no requirement and lets the invocation raise the
-// challenge instead.
-func (e *invokerRuntime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	return e.prepareNativeBinding(ctx, args)
+// preflightBinding loads and analyzes the description to report the context
+// requirements it can already identify, without dispatching the selected
+// operation. Qualifying self-contained embedded descriptions reuse the
+// existing bounded client cache; location-only descriptions load afresh here
+// and again at invocation. A load or analysis failure is returned as an
+// error, which carries no prediction; nil details are not readiness.
+func (e *invokerRuntime) preflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	return e.preflightNativeBinding(ctx, args)
 }
 
 // Synthesizer handles interface synthesis from OpenAPI documents.

@@ -102,7 +102,12 @@ func operationGraphBindingSpecInfos() []openbindings.BindingSpecInfo {
 // returns synchronously and the document load (a potential network fetch)
 // happens on the driving goroutine, per the core invocation contract.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	// Cross-graph nesting bound (spec: Security considerations). A
 	// graph-bound operation can invoke operations bound to further graphs,
 	// including mutually recursive ones; per-graph budgets reset at each
@@ -137,8 +142,8 @@ func nestingDepth(ctx context.Context) int {
 	return 0
 }
 
-// drive performs the preflight (load, resolve, version-check, validate) and
-// runs the engine, firing preflight failures as terminal errors on the
+// drive performs the source load (load, resolve, version-check, validate)
+// and runs the engine, firing source-load failures as terminal errors on the
 // handle.
 func (e *Invoker) drive(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	doc, err := e.loadDocument(ctx, args.Source.Location, args.Source.Content)

@@ -2,6 +2,7 @@ package operationgraph
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -14,10 +15,10 @@ import (
 )
 
 // Creation is inert: InvokeBinding returns the handle synchronously and
-// preflight failures (here: an unloadable source) surface as a terminal
+// source-load failures (here: an unloadable source) surface as a terminal
 // error THROUGH the handle, never as a synchronous load before the handle
 // exists (the load may be a network fetch).
-func TestInvokeBinding_PreflightErrorsThroughHandle(t *testing.T) {
+func TestInvokeBinding_SourceLoadErrorsThroughHandle(t *testing.T) {
 	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: filepath.Join(t.TempDir(), "missing.json")},
 		Selector: "#/graphs/g",
@@ -27,7 +28,7 @@ func TestInvokeBinding_PreflightErrorsThroughHandle(t *testing.T) {
 	}
 	_, err := invoke.Single[any](context.Background(), inv.Outputs())
 	if err == nil {
-		t.Fatal("expected the preflight failure as a terminal error")
+		t.Fatal("expected the source-load failure as a terminal error")
 	}
 	ierr := invoke.AsInvocationError(err)
 	if ierr == nil || ierr.Code != invoke.ErrCodeSourceLoadFailed {
@@ -72,9 +73,8 @@ func TestNewInvokerWithClient(t *testing.T) {
 	if requestCount != 1 {
 		t.Errorf("expected custom transport to be called exactly once, got %d", requestCount)
 	}
-	// The engine passes the written value through as-is (no JSON round-trip),
-	// so the int survives.
-	if m, ok := out.(map[string]any); !ok || m["n"] != 1 {
+	// The admitted logical tree preserves the exact numeric value.
+	if m, ok := out.(map[string]any); !ok || m["n"] != json.Number("1") {
 		t.Errorf("unexpected pass-through output: %#v", out)
 	}
 }

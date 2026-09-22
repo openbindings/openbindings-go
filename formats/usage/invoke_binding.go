@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"sort"
@@ -17,6 +18,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // run drives the invocation handle: it reads the single flag/arg object the
@@ -33,16 +35,11 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
-	if usageGenericCredentialPresent(args.Context) {
-		inv.FireError(invoke.NewContextRequiredError(
-
-			&invoke.ContextRequiredDetails{
-				Target: args.Source.Location,
-				Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
-					Type: "auth.apiKey", Description: "supply an explicitly named process-environment mapping",
-				}}}},
-			},
-		))
+	// A generic runtime credential without an environment-variable name is
+	// surfaced before any load or spawn (§9.1, USAGE-P-06), with the
+	// challenge PreflightBinding reports for the same arguments.
+	if challenge := genericCredentialChallenge(args); challenge != nil {
+		inv.FireError(invoke.NewContextRequiredError(challenge))
 		return
 	}
 
@@ -348,6 +345,27 @@ func metadataBinary(ctx map[string]any) string {
 		return b
 	}
 	return ""
+}
+
+// genericCredentialChallenge is the ONE place the family's context
+// challenge is built, so the live invocation and PreflightBinding cannot
+// drift. A usage descriptor declares no credential-to-environment mapping
+// and this specification invents none (§9.1, USAGE-P-06): credential
+// material never rides argv, and a generic runtime credential (a flat
+// apiKey or any scheme-scoped apiKeys entry) that names no process
+// environment variable is surfaced for consumer resolution rather than
+// silently mapped. It returns nil when the context carries no such
+// credential.
+func genericCredentialChallenge(args *invoke.BindingInvocationArgs) *invoke.ContextRequiredDetails {
+	if !usageGenericCredentialPresent(args.Context) {
+		return nil
+	}
+	return &invoke.ContextRequiredDetails{
+		Target: args.Source.Location,
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
+			Type: "auth.apiKey", Description: "supply an explicitly named process-environment mapping",
+		}}}},
+	}
 }
 
 func usageGenericCredentialPresent(ctx map[string]any) bool {
@@ -1013,6 +1031,19 @@ func formatFlagWithDef(name string, value any, flagDef Flag) ([]string, error) {
 		switch v := value.(type) {
 		case int:
 			count = v
+		case json.Number:
+			if err := jsonvalue.CheckNumericWork(v); err != nil {
+				return nil, fmt.Errorf("count flag %s: %w", flagName, err)
+			}
+			number, ok := new(big.Rat).SetString(string(v))
+			if !ok || !number.IsInt() || !number.Num().IsInt64() {
+				return nil, fmt.Errorf("count flag %s requires an in-range integer", flagName)
+			}
+			parsed := number.Num().Int64()
+			count = int(parsed)
+			if int64(count) != parsed {
+				return nil, fmt.Errorf("count flag %s requires an in-range integer", flagName)
+			}
 		case int64:
 			count = int(v)
 		case float64:

@@ -61,7 +61,7 @@ const (
 	ErrCodeTransportClosed = "ERR_TRANSPORT_CLOSED"
 
 	// ErrCodeContextRequired indicates missing runtime context (credentials,
-	// configuration). Raised by a binding BEFORE any observable side effect;
+	// configuration). Raised by a binding before output or observable effects of the requested operation;
 	// Details carries a ContextRequiredDetails. Un-prefixed: it is a
 	// negotiation signal, not a failure of the operation.
 	ErrCodeContextRequired = "CONTEXT_REQUIRED"

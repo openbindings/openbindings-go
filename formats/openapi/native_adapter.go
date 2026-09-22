@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
@@ -26,7 +25,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	if err := assertNativeBindingSpec(args); err != nil {
 		return err
 	}
-	client, err := e.loadNativeClient(ctx, args, true)
+	client, err := e.loadNativeClient(ctx, args)
 	if err != nil {
 		return nativeInvocationError(err)
 	}
@@ -119,7 +118,8 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 		if !open {
 			break
 		}
-		output := nativePortableValue(event.Data)
+		// Admission retains native byte leaves; public logical views still use Base64.
+		output := event.Data
 		if event.SSE != nil && args.Source.BindingSpec != BindingSpecOpenAPI32 {
 			frame := map[string]any{"data": output}
 			if event.SSE.Event != "" {
@@ -148,35 +148,28 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	return nil
 }
 
-func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+func (e *invokerRuntime) preflightNativeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := assertNativeBindingSpec(args); err != nil {
 		return nil, err
 	}
-	// The Core preflight is explicitly side-effect-free. An inline source can
-	// be analyzed locally; a location-only source remains unknown until the
-	// authoritative invocation load.
-	if args.Source.Content == nil {
-		if _, present := e.cachedNativeClient(args); !present {
-			return nil, nil
-		}
+	// Loading the description is required for both preflight and invocation.
+	// Retain reusable analysis under the existing client-cache policy; this call
+	// never dispatches the selected operation or resolves missing context.
+	client, err := e.loadNativeClient(ctx, args)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	client, err := e.loadNativeClient(ctx, args, false)
 	if err != nil {
-		mapped := nativeInvocationError(err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeInvocationError(err)
 	}
 	if err := acceptedNativeEdition(args.Source.BindingSpec, client.Edition()); err != nil {
-		return nil, nil
+		return nil, err
 	}
 	if _, err := client.Operation(openapiclient.OperationRef(args.Selector)); err != nil {
-		mapped := nativeSelectionInvocationError(args, err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeSelectionInvocationError(args, err)
 	}
 	options, err := e.nativeCallOptions(args, client)
 	if err != nil {
@@ -188,28 +181,23 @@ func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.
 	}
 	names, err := nativeCredentialNames(ctx, client, args.Selector, configured, options)
 	if err != nil {
-		mapped := nativeSelectionInvocationError(args, err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeSelectionInvocationError(args, err)
 	}
 	options.Auth, err = e.nativeCredentials(args.Context, names, options.Auth)
 	if err != nil {
 		return nil, err
 	}
 	requirements, err := client.Preflight(ctx, openapiclient.OperationRef(args.Selector), configured, options)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err != nil {
-		mapped := nativeSelectionInvocationError(args, err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeSelectionInvocationError(args, err)
 	}
 	return nativeBindingRequirements(requirements)
 }
 
-func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.BindingInvocationArgs, allowDocumentFetch bool) (*openapiclient.Client, error) {
+func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.BindingInvocationArgs) (*openapiclient.Client, error) {
 	if args == nil {
 		return nil, &openapiclient.ClientError{Kind: openapiclient.ErrorSource, Code: "SOURCE_LOAD_FAILED", Message: "OpenAPI invocation arguments are nil"}
 	}
@@ -224,12 +212,8 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 			return nil, err
 		}
 	}
-	documentClient := e.client
-	if !allowDocumentFetch {
-		documentClient = &http.Client{Transport: nativeNoDocumentFetchTransport{}}
-	}
 	client, err := openapiclient.Load(ctx, openapiclient.Source{Location: args.Source.Location, Content: content}, openapiclient.Options{
-		DocumentHTTPClient:         documentClient,
+		DocumentHTTPClient:         e.client,
 		HTTPClient:                 e.client,
 		Auth:                       e.nativeHandlerCredentials(),
 		Redirect:                   e.redirect,
@@ -242,7 +226,7 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 	if err != nil {
 		return nil, err
 	}
-	if key := nativeSourceClientKey(args); allowDocumentFetch && key != "" {
+	if key := nativeSourceClientKey(args); key != "" {
 		e.nativeClientsMu.Lock()
 		if present := e.nativeClients[key]; present != nil {
 			client = present
@@ -258,12 +242,6 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 		e.nativeClientsMu.Unlock()
 	}
 	return client, nil
-}
-
-type nativeNoDocumentFetchTransport struct{}
-
-func (nativeNoDocumentFetchTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, errors.New("PrepareBinding does not retrieve external OpenAPI resources")
 }
 
 func assertNativeBindingSpec(args *invoke.BindingInvocationArgs) *invoke.InvocationError {

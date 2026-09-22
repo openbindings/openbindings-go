@@ -354,7 +354,7 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	nativeClient, err := nativeRuntime.loadNativeClient(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1upload/post",
-	}, true)
+	})
 	if err != nil {
 		t.Fatalf("load native analysis: %v", err)
 	}
