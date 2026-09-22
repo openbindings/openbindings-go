@@ -12,6 +12,13 @@ TypeScript alignment is pending for both the rename (`prepareBinding` to
 `preflightBinding`) and the contract; the corresponding names below do not
 claim that the revised behavior has already been implemented there.
 
+Document validation reports the core's §10.5 conformance conclusion in Go:
+`Interface.Validate()` and `ValidateDocument(data)` return a
+`ValidationReport` with per-rule evidence, findings, and OBI-T-02
+diagnostics. TypeScript applies OBI-T-17 to caller evidence through
+`concludeConformance`, but `validateInterface` still returns violations
+alone; TypeScript alignment is pending.
+
 | Concept | Go | TypeScript |
 |---|---|---|
 | binding implementation | `BindingInvoker` | `BindingInvoker` |
@@ -21,6 +28,8 @@ claim that the revised behavior has already been implemented there.
 | artifact → OBI | `InterfaceSynthesizer.SynthesizeInterface(...)` | `InterfaceSynthesizer.synthesizeInterface(...)` |
 | artifact → OBI + exhaustiveness-qualified disposition evidence | `CoverageSynthesizer.SynthesizeInterfaceWithCoverage(...)` | `CoverageSynthesizer.synthesizeInterfaceWithCoverage(...)` |
 | inspect bindable targets | `SourceInspector.InspectSource(...)` | `SourceInspector.inspectSource(...)` |
+| validate a document, with its conformance conclusion | `Interface.Validate()` / `ValidateDocument(...)` | `validateInterface(...)` (report pending) |
+| apply OBI-T-17 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
 | source-less scaffold | `SynthesisSkeleton(...)` | `synthesisSkeleton(...)` |
 | shared authoring directives + validation | `FinalizeSynthesis(...)` | `finalizeSynthesis(...)` |
 | exact named dependency lookup | `LookupDependency(...)` | `lookupDependency(...)` |

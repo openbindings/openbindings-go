@@ -57,8 +57,8 @@ func SynthesisSkeleton(in *SynthesizeInput) (openbindings.Interface, error) {
 		Description:  description,
 		Operations:   map[string]openbindings.Operation{},
 	}
-	if err := iface.Validate(); err != nil {
-		return openbindings.Interface{}, fmt.Errorf("source-less synthesis target is invalid: %w", err)
+	if _, err := iface.Validate(); err != nil {
+		return openbindings.Interface{}, fmt.Errorf("source-less synthesis target: %w", err)
 	}
 	return iface, nil
 }
@@ -113,8 +113,8 @@ func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defau
 			}
 		}
 	}
-	if err := iface.Validate(); err != nil {
-		return fmt.Errorf("synthesized interface is invalid: %w", err)
+	if _, err := iface.Validate(); err != nil {
+		return fmt.Errorf("synthesized interface: %w", err)
 	}
 	return nil
 }

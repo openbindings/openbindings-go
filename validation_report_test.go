@@ -27,11 +27,11 @@ func TestValidateAgainstSchemaDistinguishesGraphUnavailable(t *testing.T) {
 	}
 }
 
-func TestConcludeVerification(t *testing.T) {
+func TestConcludeConformance(t *testing.T) {
 	tests := []struct {
 		name     string
 		evidence map[string]RuleEvidenceStatus
-		want     VerificationReport
+		want     ValidationReport
 	}{
 		{
 			name: "complete success",
@@ -39,30 +39,30 @@ func TestConcludeVerification(t *testing.T) {
 				"OBI-D-02": EvidenceSatisfied,
 				"OBI-D-13": EvidenceNotApplicable,
 			},
-			want: VerificationReport{Conclusion: ConclusionConformant},
+			want: ValidationReport{Conclusion: ConclusionConformant},
 		},
 		{
 			name: "incomplete without violation",
 			evidence: map[string]RuleEvidenceStatus{
 				"OBI-D-02": EvidenceSatisfied,
-				"OBI-D-11": EvidenceUnverified,
+				"OBI-D-11": EvidenceInconclusive,
 			},
-			want: VerificationReport{
-				Conclusion: ConclusionConformanceUndetermined,
-				Unverified: []string{"OBI-D-11"},
+			want: ValidationReport{
+				Conclusion:   ConclusionConformanceUndetermined,
+				Inconclusive: []string{"OBI-D-11"},
 			},
 		},
 		{
 			name: "violation is decisive and incompleteness is retained",
 			evidence: map[string]RuleEvidenceStatus{
-				"OBI-D-17": EvidenceUnverified,
+				"OBI-D-17": EvidenceInconclusive,
 				"OBI-D-03": EvidenceViolated,
 				"OBI-D-02": EvidenceViolated,
 			},
-			want: VerificationReport{
-				Conclusion: ConclusionNonConformant,
-				Violated:   []string{"OBI-D-02", "OBI-D-03"},
-				Unverified: []string{"OBI-D-17"},
+			want: ValidationReport{
+				Conclusion:   ConclusionNonConformant,
+				Violated:     []string{"OBI-D-02", "OBI-D-03"},
+				Inconclusive: []string{"OBI-D-17"},
 			},
 		},
 		{
@@ -70,16 +70,18 @@ func TestConcludeVerification(t *testing.T) {
 			evidence: map[string]RuleEvidenceStatus{
 				"OBI-D-02": RuleEvidenceStatus("misspelled"),
 			},
-			want: VerificationReport{
-				Conclusion: ConclusionConformanceUndetermined,
-				Unverified: []string{"OBI-D-02"},
+			want: ValidationReport{
+				Conclusion:   ConclusionConformanceUndetermined,
+				Inconclusive: []string{"OBI-D-02"},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ConcludeVerification(tt.evidence); !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("ConcludeVerification() = %#v; want %#v", got, tt.want)
+			// The report carries the evidence it concluded from.
+			tt.want.Evidence = tt.evidence
+			if got := ConcludeConformance(tt.evidence); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ConcludeConformance() = %#v; want %#v", got, tt.want)
 			}
 		})
 	}

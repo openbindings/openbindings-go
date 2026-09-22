@@ -147,7 +147,7 @@ func operationSchemaDefect(doc *document, op *asyncOperation) *authoringExclusio
 		Version:      "0.0.0",
 		Operations:   map[string]openbindings.Operation{"probe": probeOp},
 	}
-	if err := probe.Validate(); err != nil {
+	if _, err := probe.Validate(); err != nil {
 		return &authoringExclusion{"invalid", "asyncapi.payload_schema_invalid", "ASYNC-P-05", "the payload declaration does not project to a well-formed OBI schema: " + err.Error()}
 	}
 	return nil

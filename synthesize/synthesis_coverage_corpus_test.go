@@ -47,7 +47,7 @@ func TestSynthesisCoverageCorpus(t *testing.T) {
 	for _, tc := range corpus.Tests {
 		tc := tc
 		t.Run(tc.Description, func(t *testing.T) {
-			iface, err := openbindings.ValidateDocument(tc.Interface)
+			iface, _, err := openbindings.ValidateDocument(tc.Interface)
 			if err != nil {
 				t.Fatalf("fixture interface does not validate: %v", err)
 			}

@@ -18,12 +18,23 @@
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	if err := iface.Validate(); err != nil {
+//	if _, err := iface.Validate(); err != nil {
 //	    log.Fatal(err)
 //	}
 //
 // (json.Unmarshal into Interface also works and is lossless, but only
 // ParseDocument enforces OBI-D-01 on wire bytes.)
+//
+// Validate returns a *ValidationError listing every violation it establishes,
+// which makes it a gate. A nil error is not conformance: a rule this SDK
+// cannot decide is inconclusive, not violated. The report beside the error
+// carries the conclusion:
+//
+//	iface, report, err := openbindings.ValidateDocument(data)
+//	// report.Conclusion is conformant, non-conformant, or
+//	// conformance-undetermined (§10.5); err is a *ValidationError when a
+//	// violation was established, and a *VersionRefusalError when the declared
+//	// version is outside the supported set.
 //
 // JSON schema fields are represented as JSON objects (map[string]any); this
 // preserves structure but does not capture non-object schema roots. Every

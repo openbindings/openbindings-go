@@ -8,7 +8,11 @@ import (
 
 func TestPublicDocumentReadersRetainNumbers(t *testing.T) {
 	for _, token := range []string{"9007199254740993", "0.10000000000000000001", "1e400", "1e-400"} {
-		for name, read := range map[string]func([]byte) (*Interface, error){"parse": ParseDocument, "validate": ValidateDocument} {
+		validate := func(data []byte) (*Interface, error) {
+			iface, _, err := ValidateDocument(data)
+			return iface, err
+		}
+		for name, read := range map[string]func([]byte) (*Interface, error){"parse": ParseDocument, "validate": validate} {
 			t.Run(name+"/"+token, func(t *testing.T) {
 				raw := []byte(fmt.Sprintf(`{"openbindings":"0.2.0","operations":{"test":{"input":{"type":"number","minimum":%s},"examples":{"exact":{"input":%s}}}},"x-exact":%s}`, token, token, token))
 				iface, err := read(raw)
@@ -38,7 +42,7 @@ func TestPublicDocumentReadersRetainNumbers(t *testing.T) {
 func TestPublicDocumentValidationDistinguishesAdjacentExactBounds(t *testing.T) {
 	for _, tc := range []struct {
 		bound, input string
-		valid        bool
+		conforms     bool
 	}{
 		{"9007199254740993", "9007199254740992", false},
 		{"9007199254740993", "9007199254740993", true},
@@ -46,8 +50,8 @@ func TestPublicDocumentValidationDistinguishesAdjacentExactBounds(t *testing.T) 
 		{"0.10000000000000000002", "0.10000000000000000002", true},
 	} {
 		raw := []byte(fmt.Sprintf(`{"openbindings":"0.2.0","operations":{"test":{"input":{"minimum":%s},"examples":{"test":{"input":%s}}}}}`, tc.bound, tc.input))
-		if _, err := ValidateDocument(raw); (err == nil) != tc.valid {
-			t.Fatalf("bound=%s input=%s expectedValid=%v err=%v", tc.bound, tc.input, tc.valid, err)
+		if _, _, err := ValidateDocument(raw); (err == nil) != tc.conforms {
+			t.Fatalf("bound=%s input=%s expectConforms=%v err=%v", tc.bound, tc.input, tc.conforms, err)
 		}
 	}
 }

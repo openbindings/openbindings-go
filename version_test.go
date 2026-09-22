@@ -96,7 +96,7 @@ func TestIsSupportedVersion_MatchesValidateAndParseRefusal(t *testing.T) {
 
 			// Interface.Validate path: only the version decision is tagged
 			// "(OBI-T-04)", so it is isolable from any other shape problems.
-			verr := (Interface{OpenBindings: v, Operations: map[string]Operation{}}).Validate()
+			_, verr := (Interface{OpenBindings: v, Operations: map[string]Operation{}}).Validate()
 			validateVersionRefuses := verr != nil && strings.Contains(verr.Error(), "(OBI-T-04)")
 			if accepted == validateVersionRefuses {
 				t.Errorf("drift: IsSupportedVersion(%q)=%v but Validate version-refuses=%v (%v)", v, accepted, validateVersionRefuses, verr)

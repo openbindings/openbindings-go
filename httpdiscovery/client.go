@@ -136,7 +136,7 @@ func Discover(ctx context.Context, origin string, opts ...Option) (*openbindings
 	}
 	var raw map[string]any
 	if err := jsonvalue.Unmarshal(body, &raw); err != nil {
-		return nil, false, fmt.Errorf("http discovery: invalid OBI response: %w", err)
+		return nil, false, fmt.Errorf("http discovery: response is not JSON: %w", err)
 	}
 	if !openbindings.IsOBInterface(raw) {
 		return nil, false, fmt.Errorf("http discovery: response is not an OBI document")
@@ -147,7 +147,7 @@ func Discover(ctx context.Context, origin string, opts ...Option) (*openbindings
 	}
 	iface, err := openbindings.ParseDocument(body)
 	if err != nil {
-		return nil, false, fmt.Errorf("http discovery: invalid OBI response: %w", err)
+		return nil, false, fmt.Errorf("http discovery: OBI response: %w", err)
 	}
 	return iface, true, nil
 }
