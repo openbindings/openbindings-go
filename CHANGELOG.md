@@ -6,6 +6,16 @@
 
 ### Fixed
 
+- **`canonicaljson` refuses numbers it cannot carry exactly.** A JSON number
+  whose exact value is not representable in IEEE 754 binary64 (for example
+  `9007199254740993`, or a decimal with more precision than a double holds)
+  has no RFC 8785 serialization; `Marshal` now returns a
+  `*NumberNotRepresentableError` instead of silently rounding, per Appendix A
+  of the core specification. Spelling differences that carry the same value
+  (`1.10`, `1e2`) still canonicalize. Consumers that hash documents through
+  this package now fail loudly on such input rather than attesting rounded
+  data.
+
 - **Preflight failures remain visible.** OpenAPI now reports failed required
   description loads, edition/selector checks and analysis during preflight,
   including cancellation, instead of returning a successful unknown result.

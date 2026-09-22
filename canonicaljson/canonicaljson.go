@@ -10,8 +10,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +45,9 @@ import (
 //   - Strings are serialized using JSON string syntax per RFC 8785 §3.2.2.2: \b, \t, \n, \f, \r use
 //     shorthand escapes; remaining control characters use \u00XX (lowercase hex).
 //   - Numbers are serialized using ECMAScript-compatible number serialization (as required by RFC 8785).
+//     A number token whose exact value is not representable in IEEE 754 binary64 has no JCS
+//     serialization; Marshal returns a *NumberNotRepresentableError rather than rounding
+//     (RFC 8785 input is the I-JSON subset; see OpenBindings Appendix A).
 //   - Output is compact (no extra whitespace).
 func Marshal(v any) ([]byte, error) {
 	var b []byte
@@ -203,13 +208,48 @@ func writeJCSString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 }
 
+// NumberNotRepresentableError reports a JSON number token whose value is not
+// exactly representable in IEEE 754 binary64, so no JCS serialization of the
+// carried value exists. RFC 8785 constrains its input to the I-JSON subset;
+// an implementation that rounded would be computing some other serialization,
+// so this package reports the input as incompatible instead (OpenBindings
+// Appendix A).
+type NumberNotRepresentableError struct {
+	Token string
+}
+
+func (e *NumberNotRepresentableError) Error() string {
+	return fmt.Sprintf("canonicaljson: number %s is not exactly representable in IEEE 754 binary64", e.Token)
+}
+
 func formatJCSNumber(s string) (string, error) {
 	// Parse as float64 per RFC 8785 requirement (IEEE-754 double).
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
+		var numErr *strconv.NumError
+		if errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange) {
+			return "", &NumberNotRepresentableError{Token: s}
+		}
 		return "", err
 	}
-	return formatJCSFloat64(f)
+	out, err := formatJCSFloat64(f)
+	if err != nil {
+		return "", err
+	}
+	// The serialization must carry the token's exact value. A token such as
+	// 9007199254740993 parses to a neighbouring double whose shortest
+	// round-trip form is a different number; that is loss, not
+	// canonicalization. Compare the input and output as exact rationals,
+	// so spelling differences (1.10 versus 1.1, 1e2 versus 100) still pass.
+	in, ok := new(big.Rat).SetString(s)
+	if !ok {
+		return "", &NumberNotRepresentableError{Token: s}
+	}
+	got, ok := new(big.Rat).SetString(out)
+	if !ok || in.Cmp(got) != 0 {
+		return "", &NumberNotRepresentableError{Token: s}
+	}
+	return out, nil
 }
 
 func formatJCSFloat64(f float64) (string, error) {
