@@ -63,9 +63,11 @@
 
 - **Non-Core helpers moved out of the Go root package.** Binding
   implementation support types and exact-match checking moved to
-  `bindingsupport`; URI location utilities moved to `internal/location`; and
-  generic JSON helpers moved to `jsonvalue`. Import those packages instead of
-  the root package for the moved APIs. No document or runtime semantics changed.
+  `bindingsupport`, and generic JSON helpers moved to `jsonvalue`. Import those
+  packages for the moved APIs. URI location utilities moved to
+  `internal/location` for SDK use and no longer have a public replacement;
+  external callers must supply their own URI handling. This is a Go source
+  break for direct callers, with no document or runtime semantics changed.
 
 - **A name or alias correspondence is the provider's compatibility claim;
   composition only sets a candidate aside on a proven contradiction.** The
