@@ -61,6 +61,12 @@
 
 ### Changed
 
+- **Non-Core helpers moved out of the Go root package.** Binding
+  implementation support types and exact-match checking moved to
+  `bindingsupport`; URI location utilities moved to `internal/location`; and
+  generic JSON helpers moved to `jsonvalue`. Import those packages instead of
+  the root package for the moved APIs. No document or runtime semantics changed.
+
 - **A name or alias correspondence is the provider's compatibility claim;
   composition only sets a candidate aside on a proven contradiction.** The
   reference composition policy treats a profile verdict of `indeterminate`
