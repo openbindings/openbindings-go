@@ -36,31 +36,45 @@ func TestEarlyPreflightDoesNotResolveOrInvoke(t *testing.T) {
 	}
 }
 
-func TestPreflightFailureStopsOnlyCurrentCall(t *testing.T) {
+// A preflight error means the binding could not answer and predicts nothing:
+// the explicit call reports it, and ordinary invocation proceeds to its one
+// attempt as if preflight had reported nothing. The outcome is the attempt's.
+func TestPreflightErrorDoesNotStopInvocation(t *testing.T) {
 	requiredFailure := NewInvocationError(ErrCodeSourceLoadFailed)
-	failing := true
 	binding := &cancellationPreflighter{prepare: func(context.Context) (*ContextRequiredDetails, error) {
-		if failing {
-			return nil, requiredFailure
-		}
-		return nil, nil
+		return nil, requiredFailure
 	}}
-	invoker := newOpInvoker(binding, nil)
+	resolved := 0
+	invoker := newOpInvoker(binding, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		resolved++
+		return nil, nil
+	})
 	if _, err := invoker.PreflightOperation(t.Context(), opTestInterface(), "ping"); !errors.Is(err, requiredFailure) {
 		t.Fatalf("explicit preflight hid its error: %v", err)
 	}
 	call := Invoke(t.Context(), invoker, opTestInterface(), NewOperationSignature[any, any]("ping"))
 	defer call.Cancel()
-	if _, err := drainOutputs(t, call); codeOf(t, err) != ErrCodeSourceLoadFailed {
-		t.Fatalf("automatic preflight hid its error: %v", err)
+	outputs, err := drainOutputs(t, call)
+	if err != nil || len(outputs) != 1 {
+		t.Fatalf("preflight error stopped invocation: outputs=%v err=%v", outputs, err)
 	}
-	if attempts, _, _, _ := binding.snapshot(); attempts != 0 {
-		t.Fatal("execution started after preflight failed")
+	if attempts, _, _, _ := binding.snapshot(); attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
-	failing = false // The later invocation reassesses current conditions.
-	later := Invoke(t.Context(), invoker, opTestInterface(), NewOperationSignature[any, any]("ping"))
+	if resolved != 0 {
+		t.Fatalf("resolver consulted %d time(s) with no details", resolved)
+	}
+
+	// The attempt's own outcome surfaces, including its failure.
+	failing := &cancellationPreflighter{
+		mockBindingInvoker: mockBindingInvoker{opts: mockOpts{nativeFailure: true}},
+		prepare: func(context.Context) (*ContextRequiredDetails, error) {
+			return nil, requiredFailure
+		},
+	}
+	later := Invoke(t.Context(), newOpInvoker(failing, nil), opTestInterface(), NewOperationSignature[any, any]("ping"))
 	defer later.Cancel()
-	if _, err := drainOutputs(t, later); err != nil {
-		t.Fatalf("earlier preflight failure disabled invocation: %v", err)
+	if _, err := drainOutputs(t, later); codeOf(t, err) != ErrCodeExecutionFailed {
+		t.Fatalf("attempt outcome was not the invocation's outcome: %v", err)
 	}
 }

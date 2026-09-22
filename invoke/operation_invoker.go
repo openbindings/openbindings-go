@@ -81,6 +81,10 @@ type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) 
 //   - CONTEXT_REQUIRED negotiation: challenges a binding can state before
 //     the first attempt (its PreflightBinding answer) are resolved via
 //     ContextResolver and the one attempt starts with the merged context. A
+//     preflight that returns an error could not answer and predicts
+//     nothing: the attempt proceeds as if preflight had reported no
+//     requirement, and the outcome is the attempt's. Only the lane's own
+//     facts stop it earlier (no invoker for the format, cancellation). A
 //     live CONTEXT_REQUIRED raised by the binding during the attempt
 //     terminates the invocation with its ContextRequiredDetails intact,
 //     regardless of what was forwarded or produced; the invoker does not
@@ -553,8 +557,18 @@ func (e *OperationInvoker) runCompiled(
 		details, err = e.invoker.preflightBinding(innerCtx, bindingArgs())
 	}
 	if err != nil {
-		caller.FireError(wireError(err))
-		return
+		// An unsuccessful preflight means the binding could not answer and
+		// carries no prediction (PREFLIGHT.md), so it does not stop the
+		// attempt: proceed as if preflight reported nothing, without
+		// consulting the resolver. The lane's own facts still terminate
+		// here: no invoker handles the format (ERR_BINDING_NOT_FOUND), and
+		// cancellation.
+		wired := wireError(err)
+		if wired.Code == ErrCodeBindingNotFound || innerCtx.Err() != nil {
+			caller.FireError(wired)
+			return
+		}
+		details = nil
 	}
 	if details != nil {
 		if !ValidContextRequiredDetails(details) {

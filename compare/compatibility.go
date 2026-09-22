@@ -18,12 +18,24 @@ const (
 	CompatibilityInputIncompatible  CompatibilityIssueKind = "input_incompatible"
 )
 
-// CompatibilityIssue describes a single incompatibility between a required
-// and provided interface.
+// CompatibilityIssue describes a single finding about a required operation
+// against a provided interface.
+//
+// Undecidable classifies the finding. False is a proven contradiction of the
+// provider's correspondence claim: the operation is missing, or the profile
+// read a differing keyword and found the schemas incompatible. True means
+// the profile could not decide the position at all (a differing keyword
+// outside the profile, a $ref the SDK declines to fetch, a schema that does
+// not normalize or is not a JSON Schema object or boolean); such an issue
+// reports the profile's inability, not a contradiction, and its Detail
+// carries the profile's finding under the "input schema check failed:" /
+// "output schema check failed:" prefix. Consumers decide on this field, not
+// on the Detail text.
 type CompatibilityIssue struct {
-	Operation string
-	Kind      CompatibilityIssueKind
-	Detail    string
+	Operation   string
+	Kind        CompatibilityIssueKind
+	Detail      string
+	Undecidable bool
 }
 
 type requiredOperationEntry struct {
@@ -152,15 +164,17 @@ func checkCompatibility(required *openbindings.Interface, requiredOperations []r
 				}
 			} else if reqOut, provOut, bothOK := schemaObjectForms(reqOp.Output, provOp.Output); !bothOK {
 				issues = append(issues, CompatibilityIssue{
-					Operation: opKey,
-					Kind:      CompatibilityOutputIncompatible,
-					Detail:    "output schema check failed: schema is not a JSON Schema object or boolean",
+					Operation:   opKey,
+					Kind:        CompatibilityOutputIncompatible,
+					Detail:      "output schema check failed: schema is not a JSON Schema object or boolean",
+					Undecidable: true,
 				})
 			} else if compatible, reason, err := normalizedCompatible(reqNorm, provNorm, reqOut, provOut, false); err != nil {
 				issues = append(issues, CompatibilityIssue{
-					Operation: opKey,
-					Kind:      CompatibilityOutputIncompatible,
-					Detail:    fmt.Sprintf("output schema check failed: %v", err),
+					Operation:   opKey,
+					Kind:        CompatibilityOutputIncompatible,
+					Detail:      fmt.Sprintf("output schema check failed: %v", err),
+					Undecidable: true,
 				})
 			} else if !compatible {
 				detail := "provided output does not satisfy the required output schema"
@@ -186,15 +200,17 @@ func checkCompatibility(required *openbindings.Interface, requiredOperations []r
 				}
 			} else if reqIn, provIn, bothOK := schemaObjectForms(reqOp.Input, provOp.Input); !bothOK {
 				issues = append(issues, CompatibilityIssue{
-					Operation: opKey,
-					Kind:      CompatibilityInputIncompatible,
-					Detail:    "input schema check failed: schema is not a JSON Schema object or boolean",
+					Operation:   opKey,
+					Kind:        CompatibilityInputIncompatible,
+					Detail:      "input schema check failed: schema is not a JSON Schema object or boolean",
+					Undecidable: true,
 				})
 			} else if compatible, reason, err := normalizedCompatible(reqNorm, provNorm, reqIn, provIn, true); err != nil {
 				issues = append(issues, CompatibilityIssue{
-					Operation: opKey,
-					Kind:      CompatibilityInputIncompatible,
-					Detail:    fmt.Sprintf("input schema check failed: %v", err),
+					Operation:   opKey,
+					Kind:        CompatibilityInputIncompatible,
+					Detail:      fmt.Sprintf("input schema check failed: %v", err),
+					Undecidable: true,
 				})
 			} else if !compatible {
 				detail := "provided input is not compatible with the required input schema"

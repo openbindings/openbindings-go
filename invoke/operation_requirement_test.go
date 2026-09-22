@@ -70,10 +70,11 @@ func operationRequirementCandidate(bindingSpec string, output openbindings.JSONS
 }
 
 type operationRequirementBinding struct {
-	bindingSpec string
-	prefix      string
-	requirement *ContextRequiredDetails
-	invocations int
+	bindingSpec  string
+	prefix       string
+	requirement  *ContextRequiredDetails
+	preflightErr error
+	invocations  int
 }
 
 func (b *operationRequirementBinding) BindingSpecs() []openbindings.BindingSpecInfo {
@@ -85,6 +86,9 @@ func (b *operationRequirementBinding) CheckBindingSpecs(bindingSpecs []string) [
 }
 
 func (b *operationRequirementBinding) PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+	if b.preflightErr != nil {
+		return nil, b.preflightErr
+	}
 	return b.requirement, nil
 }
 
@@ -351,6 +355,84 @@ func TestResolveOperationRequirementRefusesIncompatibleSchema(t *testing.T) {
 		len(resolution.Assessments[0].Issues) != 1 ||
 		resolution.Assessments[0].Issues[0].Kind != compare.CompatibilityOutputIncompatible {
 		t.Fatalf("assessments = %#v", resolution.Assessments)
+	}
+}
+
+// The correspondence is the provider's compatibility claim. A position the
+// profile cannot read does not contradict it: the candidate stays a match
+// and the undecidable findings ride it as evidence.
+func TestMatchOperationRequirementCarriesUndecidableIssues(t *testing.T) {
+	undecidableOutput := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id": map[string]any{"type": "string", "pattern": "^t"},
+		},
+		"required": []any{"id"},
+	}
+	result, err := MatchOperationRequirement(
+		context.Background(),
+		newCreateRequirement(t),
+		[]OperationImplementation{
+			operationRequirementImplementation("example.local@1", "undecided", 0, undecidableOutput, nil),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Assessments) != 0 {
+		t.Fatalf("undecidable issue excluded the candidate: %#v", result.Assessments)
+	}
+	if len(result.Matches) != 1 ||
+		len(result.Matches[0].Issues) != 1 ||
+		!result.Matches[0].Issues[0].Undecidable ||
+		result.Matches[0].Issues[0].Kind != compare.CompatibilityOutputIncompatible {
+		t.Fatalf("matches = %#v", result.Matches)
+	}
+
+	// A proven contradiction still excludes, and its assessment carries the
+	// profile's findings with a reason.
+	contradiction := operationRequirementImplementation("example.local@1", "contradicted", 0, map[string]any{"type": "array"}, nil)
+	result, err = MatchOperationRequirement(context.Background(), newCreateRequirement(t), []OperationImplementation{contradiction})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 0 || len(result.Assessments) != 1 ||
+		result.Assessments[0].Reason == "" || len(result.Assessments[0].Issues) != 1 ||
+		result.Assessments[0].Issues[0].Undecidable {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+// A preflight that cannot answer predicts nothing: the match stands with no
+// known context requirements. A resolution fact (the binding is not
+// invocable) still excludes.
+func TestMatchOperationRequirementKeepsMatchOnPreflightError(t *testing.T) {
+	ctx := context.Background()
+	requirement := newCreateRequirement(t)
+	cannotAnswer := operationRequirementImplementation("example.local@1", "silent", 0, nil, &ContextRequiredDetails{Target: "unused"})
+	cannotAnswer.Invoker = NewOperationInvoker(&operationRequirementBinding{
+		bindingSpec:  "example.local@1",
+		preflightErr: NewInvocationError(ErrCodeSourceLoadFailed),
+	})
+	result, err := MatchOperationRequirement(ctx, requirement, []OperationImplementation{cannotAnswer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Assessments) != 0 || len(result.Matches) != 1 || result.Matches[0].KnownContextRequirements != nil {
+		t.Fatalf("result = %#v", result)
+	}
+
+	notInvocable := operationRequirementImplementation("example.local@1", "unbound", 0, nil, nil)
+	notInvocable.Invoker = NewOperationInvoker(&operationRequirementBinding{
+		bindingSpec:  "example.local@1",
+		preflightErr: &InvocationError{Code: ErrCodeBindingNotFound},
+	})
+	result, err = MatchOperationRequirement(ctx, requirement, []OperationImplementation{notInvocable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 0 || len(result.Assessments) != 1 || result.Assessments[0].Reason == "" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

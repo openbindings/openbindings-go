@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/compare"
@@ -161,7 +160,7 @@ func (referenceCompositionPolicy) AssessContract(
 		return ContractEvidence{}, err
 	}
 	for _, issue := range issues {
-		if strings.Contains(issue.Detail, "schema check failed:") {
+		if issue.Undecidable {
 			return ContractEvidence{
 				Verdict: ContractIndeterminate,
 				Method:  "directional-profile",

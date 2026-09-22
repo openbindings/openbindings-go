@@ -25,7 +25,9 @@ overlapping calls are valid; debounce as you would any query.
 
 Explicit preflight never consults your `ContextResolver`, never prompts, and
 never retries. Ordinary invocation preflights again before its attempt and does
-consult the resolver. What preflight does for a given binding, and what it
+consult the resolver; a preflight error does not stop that invocation, which
+proceeds to its attempt as if preflight had reported nothing, and the outcome
+is the attempt's. What preflight does for a given binding, and what it
 retains, is in that adapter's README.
 
 A live `CONTEXT_REQUIRED` during invocation ends that invocation with its

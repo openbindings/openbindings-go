@@ -59,7 +59,21 @@
   and its evidence rides the resolved route. `contract_indeterminate` is no
   longer an assessment code; `contract_incompatible` remains one. The
   composition corpus case `SCOMP-F04-indeterminate-keyword` now expects
-  `available`.
+  `available`. Undecidable compatibility issues are classified explicitly:
+  `compare.CompatibilityIssue.Undecidable` is set for the profile's
+  outside-profile finding, an external `$ref` the SDK declines to fetch, and
+  a schema that does not normalize (detail text unchanged), and consumers
+  decide on the field rather than on the `schema check failed:` prefix. The
+  deprecated `MatchOperationRequirement` family carries undecidable issues
+  on `OperationMatch.Issues` as evidence instead of excluding the candidate;
+  only a proven contradiction, or a preflight that reports a resolution
+  fact (`ERR_OPERATION_NOT_FOUND`, `ERR_BINDING_NOT_FOUND`,
+  `ERR_BINDING_SELECTION_REQUIRED`, `ERR_UNKNOWN_SOURCE`), excludes, and
+  any other preflight error leaves the match with no known context
+  requirements. A preflight error no longer stops ordinary invocation: the
+  binding could not answer and predicts nothing, so the one attempt runs as
+  if preflight had reported nothing and the outcome is the attempt's
+  (`ERR_BINDING_NOT_FOUND` and cancellation still end the invocation).
 
 - **The schema-comparison profile decides identity first and fails closed
   at comparison time** (Schema Comparison Profile `OB-2020-12`, amended

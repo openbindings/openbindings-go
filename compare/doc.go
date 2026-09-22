@@ -14,8 +14,17 @@
 // are compatible whatever keywords they carry, so identical contracts —
 // including ones using pattern or other outside-profile keywords — report
 // no issue. A position that differs and is marked outside the profile on
-// either side cannot be decided; it surfaces as an issue whose detail
-// begins "input schema check failed:" or "output schema check failed:"
-// carrying the profile's outside-profile finding, which consumers treat as
-// indeterminate rather than incompatible.
+// either side cannot be decided.
+//
+// Every issue is classified by CompatibilityIssue.Undecidable. A proven
+// contradiction (a missing operation, or a differing keyword the profile
+// reads and finds incompatible) is not undecidable. An undecidable issue
+// reports the profile's inability to decide, never a contradiction: a
+// differing keyword outside the profile, a $ref the SDK declines to fetch,
+// or a schema that does not normalize or is not a JSON Schema object or
+// boolean. Its detail begins "input schema check failed:" or
+// "output schema check failed:" and carries the profile's finding. A name or
+// alias correspondence is the provider's compatibility claim; consumers set a
+// candidate aside on a proven contradiction and let the claim stand on an
+// undecidable issue, keeping it as evidence.
 package compare
