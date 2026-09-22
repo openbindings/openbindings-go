@@ -19,7 +19,9 @@ import (
 
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -95,16 +97,16 @@ func (e *Invoker) Close() error {
 }
 
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI invoker.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return asyncAPIBindingSpecInfos()
 }
 
-func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, asyncAPIBindingSpecInfos())
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, asyncAPIBindingSpecInfos())
 }
 
-func asyncAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI event-driven APIs"}}
+func asyncAPIBindingSpecInfos() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI event-driven APIs"}}
 }
 
 // InvokeBinding invokes an AsyncAPI binding, returning the invocation handle
@@ -390,12 +392,12 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI synthesizer.
-func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+func (c *Synthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return asyncAPIBindingSpecInfos()
 }
 
-func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, asyncAPIBindingSpecInfos())
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, asyncAPIBindingSpecInfos())
 }
 
 // SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.
@@ -455,7 +457,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 		if embedErr != nil {
 			return nil, fmt.Errorf("embed AsyncAPI source: %w", embedErr)
 		}
-		artifactContent = openbindings.TextContent(string(data))
+		artifactContent = jsonvalue.TextContent(string(data))
 	}
 	doc, err := loadDocument(ctx, c.httpClient, loadLocation, artifactContent)
 	if err != nil {

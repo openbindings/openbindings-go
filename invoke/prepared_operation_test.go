@@ -8,16 +8,17 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 type preparedEchoBinding struct{ calls atomic.Int64 }
 
-func (b *preparedEchoBinding) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: "example.prepared@1"}}
+func (b *preparedEchoBinding) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: "example.prepared@1"}}
 }
 
-func (b *preparedEchoBinding) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
+func (b *preparedEchoBinding) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
 }
 
 func (b *preparedEchoBinding) PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {

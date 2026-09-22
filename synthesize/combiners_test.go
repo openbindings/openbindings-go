@@ -6,20 +6,21 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 type supportTestSynthesizer struct {
-	listed    []openbindings.BindingSpecInfo
-	warranted []openbindings.BindingSpecInfo
+	listed    []bindingsupport.BindingSpecInfo
+	warranted []bindingsupport.BindingSpecInfo
 	name      string
 }
 
-func (s *supportTestSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return append([]openbindings.BindingSpecInfo(nil), s.listed...)
+func (s *supportTestSynthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return append([]bindingsupport.BindingSpecInfo(nil), s.listed...)
 }
 
-func (s *supportTestSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, s.warranted)
+func (s *supportTestSynthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, s.warranted)
 }
 
 func (s *supportTestSynthesizer) SynthesizeInterface(context.Context, *SynthesizeInput) (*openbindings.Interface, error) {
@@ -28,18 +29,18 @@ func (s *supportTestSynthesizer) SynthesizeInterface(context.Context, *Synthesiz
 
 func TestCombineSynthesizersChecksAuthoritativeSupport(t *testing.T) {
 	hidden := &supportTestSynthesizer{
-		warranted: []openbindings.BindingSpecInfo{{BindingSpec: "example.hidden@1"}},
+		warranted: []bindingsupport.BindingSpecInfo{{BindingSpec: "example.hidden@1"}},
 		name:      "hidden",
 	}
 	listed := &supportTestSynthesizer{
-		listed:    []openbindings.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
-		warranted: []openbindings.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
+		listed:    []bindingsupport.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
+		warranted: []bindingsupport.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
 		name:      "listed",
 	}
 	combined := CombineSynthesizers(hidden, listed)
 
 	input := []string{"example.hidden@1", "example.hidden", "example.listed@1", "example.hidden@1"}
-	want := []openbindings.BindingSpecVerdict{
+	want := []bindingsupport.BindingSpecVerdict{
 		{BindingSpec: "example.hidden@1", Supported: true},
 		{BindingSpec: "example.hidden", Supported: false},
 		{BindingSpec: "example.listed@1", Supported: true},

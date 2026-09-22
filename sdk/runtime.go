@@ -9,6 +9,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/acquire"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -94,13 +95,13 @@ func (r *Runtime) OperationInvoker() *invoke.OperationInvoker {
 
 // BindingSpecs returns the exact binding specifications registered by this
 // runtime's providers.
-func (r *Runtime) BindingSpecs() []openbindings.BindingSpecInfo {
+func (r *Runtime) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return r.operationInvoker.BindingSpecs()
 }
 
 // CheckBindingSpecs authoritatively checks exact binding-specification
 // identifiers against the registered providers.
-func (r *Runtime) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+func (r *Runtime) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
 	return r.operationInvoker.CheckBindingSpecs(bindingSpecs)
 }
 

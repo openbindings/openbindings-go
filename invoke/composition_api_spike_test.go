@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -29,7 +30,7 @@ type realizationBehavior interface {
 // providerRuntime supplies behavior for an SDK-selected descriptor. There is
 // intentionally no returned operation/binding/spec metadata to trust.
 type providerRuntime interface {
-	BindingSpecs() []openbindings.BindingSpecInfo
+	BindingSpecs() []bindingsupport.BindingSpecInfo
 	Close(context.Context, *openbindings.PreparedInterface, openbindings.PreparedBindingDescriptor) (realizationBehavior, error)
 }
 

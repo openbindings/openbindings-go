@@ -18,11 +18,11 @@ import (
 	"os"
 	"sync"
 
-	"github.com/openbindings/openbindings-go/invoke"
-	"github.com/openbindings/openbindings-go/synthesize"
-
 	openapiclient "github.com/openbindings/openapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // Registered OpenAPI binding-specification identifiers. Swagger 2.0 and
@@ -284,16 +284,16 @@ func NewInvokerWithOptions(options InvokerOptions) *Invoker {
 }
 
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return openAPIBindingSpecInfos()
 }
 
-func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, openAPIBindingSpecInfos())
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, openAPIBindingSpecInfos())
 }
 
-func openAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{
+func openAPIBindingSpecInfos() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{
 		{BindingSpec: BindingSpecOpenAPI20, Description: "OpenAPI 2.0 (Swagger) HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI30, Description: "OpenAPI 3.0 HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI31, Description: "OpenAPI 3.1 HTTP APIs"},
@@ -436,12 +436,12 @@ func (c *Synthesizer) resolverClient() *http.Client {
 }
 
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
-func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+func (c *Synthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return openAPIBindingSpecInfos()
 }
 
-func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, openAPIBindingSpecInfos())
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, openAPIBindingSpecInfos())
 }
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.

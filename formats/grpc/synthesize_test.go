@@ -5,14 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
-
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestSynthesizeInterface_RefusesLossyReflectionEmbed(t *testing.T) {
@@ -34,7 +32,7 @@ message Reply {}
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
-			Content:     openbindings.TextContent(proto),
+			Content:     jsonvalue.TextContent(proto),
 		}},
 	})
 	if err != nil {
@@ -979,7 +977,7 @@ service TestService {
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    "grpc://127.0.0.1:50051",
-			Content:     openbindings.TextContent(proto),
+			Content:     jsonvalue.TextContent(proto),
 		}},
 	})
 	if err != nil {
@@ -1016,7 +1014,7 @@ service Health {
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    "grpc://127.0.0.1:1",
-			Content:     openbindings.TextContent(proto),
+			Content:     jsonvalue.TextContent(proto),
 		}},
 	})
 	if err != nil {

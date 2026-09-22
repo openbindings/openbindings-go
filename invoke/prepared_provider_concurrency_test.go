@@ -10,6 +10,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 type testCompiledBehavior struct{}
@@ -29,8 +30,8 @@ type testProviderRuntime struct {
 	closed  atomic.Int32
 }
 
-func (r *testProviderRuntime) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: "example.concurrent@1"}}
+func (r *testProviderRuntime) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: "example.concurrent@1"}}
 }
 
 func (r *testProviderRuntime) CompileRealization(

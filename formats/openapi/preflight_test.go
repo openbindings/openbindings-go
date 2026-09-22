@@ -15,6 +15,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func preflightDocument(server string) string {
@@ -49,7 +50,7 @@ func TestPreflightRequiredFailuresSurface(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			source := invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI31, Location: server.URL + "/description"}
 			if tc.content != "" {
-				source.Content = openbindings.TextContent(tc.content)
+				source.Content = jsonvalue.TextContent(tc.content)
 			}
 			details, err := NewInvoker().PreflightBinding(t.Context(), &invoke.BindingInvocationArgs{Source: source, Selector: tc.selector})
 			var invocationErr *invoke.InvocationError
@@ -71,7 +72,7 @@ func TestPreflightReusesEmbeddedSourceWithoutExecuting(t *testing.T) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer server.Close()
-	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(preflightDocument(server.URL))}
+	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: jsonvalue.TextContent(preflightDocument(server.URL))}
 	iface := preflightInterface(source)
 	adapter := NewAdapter()
 	invoker := invoke.NewOperationInvoker(adapter)
@@ -173,7 +174,7 @@ func TestPreflightConcurrentContextIsolation(t *testing.T) {
 		go func(supplied bool) {
 			defer wg.Done()
 			args := &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(artifact))},
+				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(string(artifact))},
 				Selector: "#/paths/~1items/get",
 			}
 			if supplied {
@@ -203,7 +204,7 @@ func BenchmarkOperationPreflight(b *testing.B) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer server.Close()
-	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(preflightDocument(server.URL))}
+	source := openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Content: jsonvalue.TextContent(preflightDocument(server.URL))}
 	iface := preflightInterface(source)
 	for _, mode := range []string{"cold", "early-client-setup", "early-operation-preflight"} {
 		b.Run(mode, func(b *testing.B) {

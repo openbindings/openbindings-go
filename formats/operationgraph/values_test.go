@@ -10,6 +10,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -38,11 +39,11 @@ type echoBindingInvoker struct{}
 
 const echoSpec = "echo@1"
 
-func (echoBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: echoSpec}}
+func (echoBindingInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: echoSpec}}
 }
-func (e echoBindingInvoker) CheckBindingSpecs(specs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(specs, e.BindingSpecs())
+func (e echoBindingInvoker) CheckBindingSpecs(specs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(specs, e.BindingSpecs())
 }
 func (echoBindingInvoker) InvokeBinding(ctx context.Context, _ *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	inv := invoke.NewInvocationImpl[any, any](ctx)

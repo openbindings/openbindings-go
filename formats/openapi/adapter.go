@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -49,13 +50,13 @@ func NewAdapterWithOptions(configured AdapterOptions) *Adapter {
 }
 
 // BindingSpecs returns the four exact OAS-family binding identifiers.
-func (a *Adapter) BindingSpecs() []openbindings.BindingSpecInfo {
+func (a *Adapter) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return a.invoker.BindingSpecs()
 }
 
 // CheckBindingSpecs authoritatively checks exact identifiers against the OAS
 // family implemented by this adapter.
-func (a *Adapter) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+func (a *Adapter) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
 	return a.invoker.CheckBindingSpecs(bindingSpecs)
 }
 

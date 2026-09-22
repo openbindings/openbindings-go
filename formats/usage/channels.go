@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // The exec channel vocabulary: the value space of a FieldRouter for this
@@ -72,7 +72,7 @@ func routeFields(site invoke.InvokeSite, hooks *invoke.InvokeHooks, cmd *Command
 	if input == nil {
 		return out, nil
 	}
-	inputMap, ok := openbindings.ToStringAnyMap(input)
+	inputMap, ok := jsonvalue.ToStringAnyMap(input)
 	if !ok {
 		// A present non-object input is out of contract: §9.1 pins the
 		// caller-facing input as one JSON object (or absent), and

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // A grpc location naming a local FILE (a compiled binary FileDescriptorSet,
@@ -50,7 +50,7 @@ message PingMsg { string msg = 1; }
 
 	// No location, no configuration.target: refuse, naming both remedies.
 	h := inv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(proto)},
 		Selector: "tiny.Tiny/Ping",
 	})
 	_, err := invoke.Single(context.Background(), h.Outputs())
@@ -71,7 +71,7 @@ message PingMsg { string msg = 1; }
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	h2 := inv.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(proto)},
 		Selector: "tiny.Tiny/Ping",
 		Context:  map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:1"}},
 	})

@@ -13,14 +13,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/openbindings/openbindings-go/invoke"
-	"github.com/openbindings/openbindings-go/jsonvalue"
-
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/yosida95/uritemplate/v3"
-
 	openbindings "github.com/openbindings/openbindings-go"
+	locationutil "github.com/openbindings/openbindings-go/internal/location"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
+	"github.com/yosida95/uritemplate/v3"
 )
 
 const (
@@ -161,7 +160,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 				// Absent input value: omit the arguments member entirely
 				// (§9.1) — never send arguments: {}.
 			case entityType == "tools":
-				m, ok := openbindings.ToStringAnyMap(first)
+				m, ok := jsonvalue.ToStringAnyMap(first)
 				if !ok {
 					// A supplied input MUST be a JSON object (§9.1,
 					// MCP-P-03); null included — absent means "never
@@ -611,7 +610,7 @@ func expandTemplateInput(
 
 	values := uritemplate.Values{}
 	if supplied {
-		m, ok := openbindings.ToStringAnyMap(first)
+		m, ok := jsonvalue.ToStringAnyMap(first)
 		if !ok {
 			return "", &invoke.InvocationError{
 				Code: invoke.ErrCodeValidationFailed,
@@ -690,7 +689,7 @@ func expandTemplateInput(
 // member value MUST be a string — a non-object input or a non-string member
 // is refused loudly before prompts/get is dispatched, never coerced.
 func promptArguments(v any) (map[string]string, *invoke.InvocationError) {
-	m, ok := openbindings.ToStringAnyMap(v)
+	m, ok := jsonvalue.ToStringAnyMap(v)
 	if !ok {
 		return nil, &invoke.InvocationError{
 			Code: invoke.ErrCodeValidationFailed,
@@ -756,7 +755,7 @@ func validateEndpoint(location string) error {
 	if location == "" {
 		return fmt.Errorf("MCP source requires a location (endpoint URL): a content-only source addresses nothing (MCP-D-02)")
 	}
-	if !openbindings.IsHTTPURL(location) {
+	if !locationutil.IsHTTPURL(location) {
 		return fmt.Errorf("MCP source location must be an absolute HTTP or HTTPS URL, got %q (MCP-D-02)", location)
 	}
 	return nil

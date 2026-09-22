@@ -11,6 +11,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 const compositionTestSpec = "example.local@1"
@@ -40,14 +41,14 @@ func (b compositionTestBehavior) Preflight(context.Context, ...InvokeOption) (*C
 }
 
 type compositionTestRuntime struct {
-	specs      []openbindings.BindingSpecInfo
+	specs      []bindingsupport.BindingSpecInfo
 	compiled   atomic.Int64
 	preflights atomic.Int64
 	fail       bool
 }
 
-func (r *compositionTestRuntime) BindingSpecs() []openbindings.BindingSpecInfo {
-	return append([]openbindings.BindingSpecInfo(nil), r.specs...)
+func (r *compositionTestRuntime) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return append([]bindingsupport.BindingSpecInfo(nil), r.specs...)
 }
 
 func (r *compositionTestRuntime) CompileRealization(
@@ -107,7 +108,7 @@ func compositionProvider(t *testing.T, bindings int, input openbindings.JSONSche
 }
 
 func compositionRuntime() *compositionTestRuntime {
-	return &compositionTestRuntime{specs: []openbindings.BindingSpecInfo{{BindingSpec: compositionTestSpec}}}
+	return &compositionTestRuntime{specs: []bindingsupport.BindingSpecInfo{{BindingSpec: compositionTestSpec}}}
 }
 
 func TestCompositionSessionCapturesImmutableConfiguration(t *testing.T) {

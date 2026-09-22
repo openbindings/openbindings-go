@@ -1,14 +1,8 @@
-package openbindings
+package jsonvalue
 
 import (
 	"encoding/json"
-	"strings"
 )
-
-// IsHTTPURL reports whether s starts with http:// or https://.
-func IsHTTPURL(s string) bool {
-	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
-}
 
 // TextContent encodes text as a JSON string for Source.Content. A binding
 // specification decides whether text is an accepted source representation.

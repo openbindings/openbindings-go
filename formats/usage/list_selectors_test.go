@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func TestInspectSource_BasicSelectors(t *testing.T) {
@@ -17,7 +18,7 @@ cmd "farewell" help="Say goodbye"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +44,7 @@ cmd "config" {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +78,7 @@ arg "<pattern>" help="Search pattern"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +117,7 @@ cmd "mike" help="M"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +160,7 @@ cmd "farewell" help="Say goodbye"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +188,7 @@ cmd "config" subcommand_required=#true {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +221,7 @@ func TestInspectSource_EmptySpec(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +237,7 @@ func TestInspectSource_DoesNotInventTargetIdentityFromName(t *testing.T) {
 cmd "run" help="Run it"`
 
 	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)

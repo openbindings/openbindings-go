@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -44,7 +45,7 @@ func TestInspectSource_BasicSelectors(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +83,7 @@ func TestInspectSource_JSONPointerFormat(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +127,7 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +171,7 @@ func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 }`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +184,7 @@ func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +220,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +234,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 
 	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +263,7 @@ func TestInspectSource_NoPaths(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpecOpenAPI30,
-		Content:     openbindings.TextContent(content),
+		Content:     jsonvalue.TextContent(content),
 	})
 	if err == nil {
 		t.Fatal("expected the §3 part-2 whole-source refusal for a 3.0 document with no paths")
@@ -281,7 +282,7 @@ func TestInspectSource_NoPaths(t *testing.T) {
 }`
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpecOpenAPI31,
-		Content:     openbindings.TextContent(componentsOnly),
+		Content:     jsonvalue.TextContent(componentsOnly),
 	})
 	if err != nil {
 		t.Fatal(err)

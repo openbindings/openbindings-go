@@ -1,4 +1,4 @@
-package openbindings
+package bindingsupport
 
 // BindingSpecInfo describes a binding specification supported by an
 // invoker, by exact identifier.

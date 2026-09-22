@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -671,7 +671,7 @@ cmd "database" {
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
-			Content:     openbindings.TextContent(content),
+			Content:     jsonvalue.TextContent(content),
 		}},
 	})
 	if err != nil {
@@ -710,7 +710,7 @@ cmd "beta" {
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
-			Content:     openbindings.TextContent(content),
+			Content:     jsonvalue.TextContent(content),
 		}},
 	})
 	if err != nil {

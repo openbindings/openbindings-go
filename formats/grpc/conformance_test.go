@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/openbindings/openbindings-go/invoke"
-
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -29,8 +29,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/durationpb"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -132,7 +130,7 @@ import "google/protobuf/duration.proto";
 service Clock { rpc Wait(google.protobuf.Duration) returns (WaitReply); }
 message WaitReply { string status = 1; }
 `
-	disc, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
+	disc, err := discoverFromContent(context.Background(), jsonvalue.TextContent(proto))
 	if err != nil {
 		t.Fatalf("google/protobuf/* imports must resolve from bundled copies (§3): %v", err)
 	}
@@ -148,7 +146,7 @@ import "corp/shared.proto";
 service S { rpc Do(Req) returns (Req); }
 message Req { string id = 1; }
 `
-	_, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
+	_, err := discoverFromContent(context.Background(), jsonvalue.TextContent(proto))
 	if err == nil {
 		t.Fatal("a non-google/protobuf import must refuse loudly at load (§3)")
 	}
@@ -274,7 +272,7 @@ message Menu { string items = 1; }
 	if err != nil {
 		t.Fatalf("a packageless selector is legal (GRPC-D-03): %v", err)
 	}
-	disc, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
+	disc, err := discoverFromContent(context.Background(), jsonvalue.TextContent(proto))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +306,7 @@ message PingMsg { string msg = 1; }
 		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
 			// The location is a valid form but unreachable: the refusal must
 			// fire from offline resolution, never a dial.
-			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: jsonvalue.TextContent(proto)},
 			Selector: selector,
 		})
 		_, terr := drainInvocation(t, inv)
@@ -689,7 +687,7 @@ service S { rpc Do(Req) returns (Resp); }
 	defer invoker.Close()
 
 	inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: jsonvalue.TextContent(proto)},
 		Selector: "p2.S/Do",
 	})
 	_, terr := drainInvocation(t, inv)

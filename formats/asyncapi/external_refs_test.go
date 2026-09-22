@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 type countingRejectTransport struct{ calls int }
@@ -32,7 +32,7 @@ func TestLoadDocumentResolvesExternalServerChannelAndMessageClosure(t *testing.T
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	content := openbindings.TextContent(`asyncapi: 3.0.0
+	content := jsonvalue.TextContent(`asyncapi: 3.0.0
 info: {title: External, version: "1"}
 servers:
   events: {$ref: "./servers.yaml#/servers/events"}
@@ -70,7 +70,7 @@ func TestLoadDocumentHoistsDirectExternalOperationChannel(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	content := openbindings.TextContent(`asyncapi: 3.0.0
+	content := jsonvalue.TextContent(`asyncapi: 3.0.0
 info: {title: External, version: "1"}
 servers:
   events: {host: example.test, protocol: wss}
@@ -113,7 +113,7 @@ func TestLoadDocumentRetainsDraft07PlainNameIDsAndDanglingSchemaFragments(t *tes
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	content := openbindings.TextContent(`asyncapi: 3.0.0
+	content := jsonvalue.TextContent(`asyncapi: 3.0.0
 info: {title: External schema, version: "1"}
 servers:
   api: {host: api.example.test, protocol: https}
@@ -143,7 +143,7 @@ operations:
 }
 
 func TestLoadDocumentRejectsRelativeExternalRefWithoutBase(t *testing.T) {
-	content := openbindings.TextContent(`asyncapi: 3.0.0
+	content := jsonvalue.TextContent(`asyncapi: 3.0.0
 info: {title: External, version: "1"}
 channels:
   events: {$ref: "./channels.yaml#/channels/events"}
@@ -158,7 +158,7 @@ operations: {}
 func TestLoadDocumentDiscriminatesUnsupportedEditionBeforeExternalRefs(t *testing.T) {
 	transport := &countingRejectTransport{}
 	client := &http.Client{Transport: transport}
-	content := openbindings.TextContent(`asyncapi: 3.2.0
+	content := jsonvalue.TextContent(`asyncapi: 3.2.0
 info: {title: Future external schema, version: "1"}
 channels: {}
 components:
@@ -199,7 +199,7 @@ func TestLoadDocumentComposesTopLevelAvroUnionExternalDocument(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	content := openbindings.TextContent(`asyncapi: 2.6.0
+	content := jsonvalue.TextContent(`asyncapi: 2.6.0
 info: {title: Avro union, version: "1"}
 channels:
   files:
@@ -252,7 +252,7 @@ func TestLoadDocumentComposesTopLevelAvroUnionAtWrapperSchemaRef(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	content := openbindings.TextContent(`asyncapi: 3.0.0
+	content := jsonvalue.TextContent(`asyncapi: 3.0.0
 info: {title: Avro union wrapper, version: "1"}
 channels:
   files:
@@ -294,7 +294,7 @@ func TestLoadDocumentRejectsNonObjectExternalDocumentAtStructuralPosition(t *tes
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	content := openbindings.TextContent(`asyncapi: 3.0.0
+	content := jsonvalue.TextContent(`asyncapi: 3.0.0
 info: {title: Bad structural ref, version: "1"}
 channels:
   events: {$ref: "./channel.json"}
@@ -345,7 +345,7 @@ channels: {}
 		t.Run(testCase.name, func(t *testing.T) {
 			transport := &countingRejectTransport{}
 			client := &http.Client{Transport: transport}
-			_, err := loadDocument(context.Background(), client, "https://example.test/root.yaml", openbindings.TextContent(testCase.content))
+			_, err := loadDocument(context.Background(), client, "https://example.test/root.yaml", jsonvalue.TextContent(testCase.content))
 			if err == nil || !strings.Contains(err.Error(), "does not admit a Reference Object") {
 				t.Fatalf("err = %v, want the position-admission refusal", err)
 			}
@@ -360,7 +360,7 @@ channels: {}
 // is legal from 2.4.0 (Server Object | Reference Object), and the Channel
 // Item's own $ref field is legal in every 2.x edition.
 func TestLoadDocumentAdmitsV2ReferenceObjectAtAdmittingPositions(t *testing.T) {
-	content := openbindings.TextContent(`asyncapi: 2.4.0
+	content := jsonvalue.TextContent(`asyncapi: 2.4.0
 info: {title: Fine, version: "1"}
 servers:
   main: {$ref: "#/components/x-servers/main"}

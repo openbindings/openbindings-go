@@ -13,6 +13,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 const testProto = `
@@ -55,7 +56,7 @@ func unaryArgs(location string, content any, selector string) *invoke.BindingInv
 	switch c := content.(type) {
 	case nil:
 	case string:
-		raw = openbindings.TextContent(c)
+		raw = jsonvalue.TextContent(c)
 	case json.RawMessage:
 		raw = c
 	default:
@@ -320,7 +321,7 @@ message PingMsg { string msg = 1; }
 	// message must be the embedded-content-aware variant, distinct from the
 	// no-content-at-all message.
 	h := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(proto)},
 		Selector: "tiny.Tiny/Ping",
 	})
 	ierr := mustTerminalError(t, ctx, h, invoke.ErrCodeSourceConfigError)
@@ -332,7 +333,7 @@ message PingMsg { string msg = 1; }
 	// past the config gate (failing later at the unreachable endpoint, not
 	// at configuration).
 	h2 := invokeWith(t, ctx, invoker, &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(proto)},
 		Selector: "tiny.Tiny/Ping",
 		Context:  map[string]any{"configuration": map[string]any{"target": "http://127.0.0.1:1"}},
 	}, map[string]any{"msg": "hi"})

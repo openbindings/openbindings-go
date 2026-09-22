@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // TestInvokeBinding_OperationNodeWithoutInterfaceRefused pins C3f / OG-V-11:
@@ -27,7 +27,7 @@ func TestInvokeBinding_OperationNodeWithoutInterfaceRefused(t *testing.T) {
 	}}}`
 
 	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(graphDoc)},
 		Selector: "#/graphs/g",
 		// No Interface: a direct binding invocation supplies no operations map.
 	})
@@ -55,7 +55,7 @@ func TestInvokeBinding_PureTransformGraphRunsWithoutInterface(t *testing.T) {
 		"edges":[{"from":"in","to":"out"}]
 	}}}`
 	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(graphDoc)},
 		Selector: "#/graphs/g",
 	})
 	if err := inv.Write(context.Background(), map[string]any{"ok": true}); err != nil {

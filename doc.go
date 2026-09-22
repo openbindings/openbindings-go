@@ -36,8 +36,7 @@
 //	// violation was established, and a *VersionRefusalError when the declared
 //	// version is outside the supported set.
 //
-// JSON schema fields are represented as JSON objects (map[string]any); this
-// preserves structure but does not capture non-object schema roots. Every
+// JSON Schema fields preserve object and boolean schema roots. Every
 // OBI declares its target spec version via the top-level openbindings
 // field, checked against [MinSupportedVersion] through [MaxTestedVersion].
 //

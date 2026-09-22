@@ -11,6 +11,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/httpdiscovery"
+	locationutil "github.com/openbindings/openbindings-go/internal/location"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -82,7 +83,7 @@ func Resolve(ctx context.Context, target string, opts ...Option) (*Result, error
 	// statement of what was tried or how to fix it.
 	var trail []string
 
-	if openbindings.IsHTTPURL(target) {
+	if locationutil.IsHTTPURL(target) {
 		iface, err := tryFetchOBI(ctx, o.client, target)
 		if err == nil && iface != nil {
 			return &Result{Interface: iface}, nil

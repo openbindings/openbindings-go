@@ -15,11 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openbindings/openbindings-go/invoke"
-
 	"github.com/coder/websocket"
-
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 const testSecret = "test-token-123"
@@ -326,7 +325,7 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 	for _, opSelector := range []string{"#/operations/refScheme", "#/operations/inlineScheme"} {
 		t.Run(opSelector, func(t *testing.T) {
 			details, err := binv.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(docJSON)},
 				Selector: opSelector,
 			})
 			if err != nil {
@@ -344,7 +343,7 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 
 			// A bearer token in context satisfies the challenge.
 			ok, err := binv.PreflightBinding(bg(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(docJSON)},
 				Selector: opSelector,
 				Context:  map[string]any{"bearerToken": "t"},
 			})
@@ -392,7 +391,7 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(docJSON)},
 		Selector: "#/operations/notifyOp",
 	})
 	if err := call.Write(bg(), map[string]any{}); err != nil {
@@ -416,7 +415,7 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 	// The consumer may supply the concrete address at the configuration
 	// point; the publish then dispatches to exactly that address.
 	call = binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(docJSON)},
 		Selector: "#/operations/notifyOp",
 		Context:  map[string]any{"configuration": map[string]any{"address": "/inbox"}},
 	})
@@ -664,7 +663,7 @@ func TestWiringErrors(t *testing.T) {
 			Source: httpSource(srv), Selector: "",
 		}, invoke.ErrCodeInvalidSelector},
 		{"unparsable source", &invoke.BindingInvocationArgs{
-			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent("not asyncapi")},
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent("not asyncapi")},
 			Selector: "#/operations/sendMessage",
 		}, invoke.ErrCodeSourceLoadFailed},
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // Inspection reaches every edition the family implements. Until 2026-09-01 it
@@ -32,7 +33,7 @@ func TestInspectSourceReachesEveryImplementedEdition(t *testing.T) {
 		t.Run(testCase.bindingSpec, func(t *testing.T) {
 			inspection, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
 				BindingSpec: testCase.bindingSpec,
-				Content:     openbindings.TextContent(testCase.document),
+				Content:     jsonvalue.TextContent(testCase.document),
 			})
 			if err != nil {
 				t.Fatalf("inspect: %v", err)
@@ -63,7 +64,7 @@ func TestInspectSourceRefusesAnEditionTheBindingSpecDoesNotAdmit(t *testing.T) {
 			 "paths":{"/p":{"get":{"operationId":"g","responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}}}}}`, testCase.edition)
 			if _, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
 				BindingSpec: testCase.bindingSpec,
-				Content:     openbindings.TextContent(document),
+				Content:     jsonvalue.TextContent(document),
 			}); err == nil {
 				t.Fatalf("%s inspected a %s document, want a refusal", testCase.bindingSpec, testCase.edition)
 			}

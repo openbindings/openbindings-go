@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,8 +29,6 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/durationpb"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // bufconnLocation is the conformant dial address (GRPC-D-02: explicit
@@ -474,7 +473,7 @@ service ItemService {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{
-			{BindingSpec: BindingSpec, Location: "localhost:50051", Content: openbindings.TextContent(proto)},
+			{BindingSpec: BindingSpec, Location: "localhost:50051", Content: jsonvalue.TextContent(proto)},
 		},
 	})
 	if err != nil {

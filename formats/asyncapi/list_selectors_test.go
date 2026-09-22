@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func TestInspectSource_BasicRefs(t *testing.T) {
@@ -33,7 +34,7 @@ func TestInspectSource_BasicRefs(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +71,7 @@ func TestInspectSource_RefFormat(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +123,7 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +163,7 @@ func TestInspectSource_Description(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +193,7 @@ func TestInspectSource_NoOperations(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +219,7 @@ func TestInspectSource_AlphabeticallySorted(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		Content: jsonvalue.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)

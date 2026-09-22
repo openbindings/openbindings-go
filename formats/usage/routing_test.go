@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // This file activates the exec routing subsystem and the HookTable, which
@@ -234,7 +234,7 @@ func TestRouting_ByteCapRefused(t *testing.T) {
 
 // sourceKDL builds a bare-kdl fixture source from inline KDL text.
 func sourceKDL(kdl string) invoke.InvocationSource {
-	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(kdl)}
+	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(kdl)}
 }
 
 func TestRouting_BoolFlagSlotRefused(t *testing.T) {

@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 func selectionCorpusDir(t *testing.T) string {
@@ -78,16 +79,16 @@ type selectionSpecStub struct {
 	lastSite *InvokeSite
 }
 
-func (s *selectionSpecStub) BindingSpecs() []openbindings.BindingSpecInfo {
-	infos := make([]openbindings.BindingSpecInfo, 0, len(s.specs))
+func (s *selectionSpecStub) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	infos := make([]bindingsupport.BindingSpecInfo, 0, len(s.specs))
 	for _, spec := range s.specs {
-		infos = append(infos, openbindings.BindingSpecInfo{BindingSpec: spec})
+		infos = append(infos, bindingsupport.BindingSpecInfo{BindingSpec: spec})
 	}
 	return infos
 }
 
-func (s *selectionSpecStub) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
+func (s *selectionSpecStub) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
 }
 
 func (s *selectionSpecStub) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {

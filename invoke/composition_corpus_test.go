@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 type compositionCorpusProvider struct {
@@ -74,9 +75,9 @@ func TestPortableRuntimeCompositionCorpus(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				infos := make([]openbindings.BindingSpecInfo, 0, len(candidate.RuntimeBindingSpecs))
+				infos := make([]bindingsupport.BindingSpecInfo, 0, len(candidate.RuntimeBindingSpecs))
 				for _, bindingSpec := range candidate.RuntimeBindingSpecs {
-					infos = append(infos, openbindings.BindingSpecInfo{BindingSpec: bindingSpec})
+					infos = append(infos, bindingsupport.BindingSpecInfo{BindingSpec: bindingSpec})
 				}
 				runtime := &compositionTestRuntime{specs: infos}
 				provider, err := PrepareProvider(PreparedProviderOptions{

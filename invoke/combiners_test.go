@@ -8,17 +8,18 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 type supportTestInvoker struct {
-	listed    []openbindings.BindingSpecInfo
-	warranted []openbindings.BindingSpecInfo
+	listed    []bindingsupport.BindingSpecInfo
+	warranted []bindingsupport.BindingSpecInfo
 	calls     int
 }
 
 func TestOperationInvokerSelectionUsesAuthoritativeSupport(t *testing.T) {
 	hidden := &supportTestInvoker{
-		warranted: []openbindings.BindingSpecInfo{{BindingSpec: "example.hidden@1"}},
+		warranted: []bindingsupport.BindingSpecInfo{{BindingSpec: "example.hidden@1"}},
 	}
 	invoker := NewOperationInvoker(hidden)
 	iface := &openbindings.Interface{
@@ -46,12 +47,12 @@ func TestOperationInvokerSelectionUsesAuthoritativeSupport(t *testing.T) {
 	}
 }
 
-func (s *supportTestInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return append([]openbindings.BindingSpecInfo(nil), s.listed...)
+func (s *supportTestInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return append([]bindingsupport.BindingSpecInfo(nil), s.listed...)
 }
 
-func (s *supportTestInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, s.warranted)
+func (s *supportTestInvoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, s.warranted)
 }
 
 func (s *supportTestInvoker) InvokeBinding(ctx context.Context, _ *BindingInvocationArgs) Invocation[any, any] {
@@ -66,16 +67,16 @@ func (s *supportTestInvoker) InvokeBinding(ctx context.Context, _ *BindingInvoca
 
 func TestCombineInvokersChecksAuthoritativeSupport(t *testing.T) {
 	hidden := &supportTestInvoker{
-		warranted: []openbindings.BindingSpecInfo{{BindingSpec: "example.hidden@1"}},
+		warranted: []bindingsupport.BindingSpecInfo{{BindingSpec: "example.hidden@1"}},
 	}
 	listed := &supportTestInvoker{
-		listed:    []openbindings.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
-		warranted: []openbindings.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
+		listed:    []bindingsupport.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
+		warranted: []bindingsupport.BindingSpecInfo{{BindingSpec: "example.listed@1"}},
 	}
 	combined := CombineInvokers(hidden, listed)
 
 	input := []string{"example.hidden@1", "example.hidden", "example.listed@1", "example.hidden@1"}
-	want := []openbindings.BindingSpecVerdict{
+	want := []bindingsupport.BindingSpecVerdict{
 		{BindingSpec: "example.hidden@1", Supported: true},
 		{BindingSpec: "example.hidden", Supported: false},
 		{BindingSpec: "example.listed@1", Supported: true},

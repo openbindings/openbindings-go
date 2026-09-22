@@ -7,6 +7,7 @@ import (
 	"log"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -16,12 +17,12 @@ import (
 // this is the entire seam a format implements.
 type echoInvoker struct{}
 
-func (echoInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: "echo@1.0", Description: "example echo format"}}
+func (echoInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: "echo@1.0", Description: "example echo format"}}
 }
 
-func (e echoInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, e.BindingSpecs())
+func (e echoInvoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, e.BindingSpecs())
 }
 
 func (echoInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {

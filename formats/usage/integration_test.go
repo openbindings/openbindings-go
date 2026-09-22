@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/recolabs/gnata"
-
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
+	"github.com/recolabs/gnata"
 )
 
 // testBinary is the path to the compiled test CLI binary.
@@ -95,7 +95,7 @@ cmd "prose" {
 
 // testSource is the bare-kdl fixture source: the artifact IS the source.
 func testSource() invoke.InvocationSource {
-	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(testSpecKDL())}
+	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(testSpecKDL())}
 }
 
 // driver abstracts the two entry points tests exercise: the format
@@ -271,7 +271,7 @@ cmd "config" subcommand_required=#true {
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
-			Content:     openbindings.TextContent(spec),
+			Content:     jsonvalue.TextContent(spec),
 		}},
 	})
 	if err != nil {
@@ -319,7 +319,7 @@ cmd "config" subcommand_required=#true {
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("source format = %q, want the bare usage token", src.BindingSpec)
 	}
-	if string(src.Content) != string(openbindings.TextContent(spec)) {
+	if string(src.Content) != string(jsonvalue.TextContent(spec)) {
 		t.Fatal("expected the pristine kdl text as embedded content")
 	}
 	binding := iface.Bindings["config.get."+DefaultSourceName]
@@ -393,7 +393,7 @@ arg "<words>..." help="Words to echo"
 `
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rootKDL)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(rootKDL)},
 		Selector: "",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
@@ -532,7 +532,7 @@ func TestIntegration_NoInputOperationThroughOperationLayer(t *testing.T) {
 		Sources: map[string]openbindings.Source{
 			// The command answers either way, which is the shape of a real
 			// machine lane: a bare listing, or the same listing with a flag.
-			"cli": {BindingSpec: BindingSpec, Content: openbindings.TextContent(
+			"cli": {BindingSpec: BindingSpec, Content: jsonvalue.TextContent(
 				"bin \"" + testBinary + "\"\ncmd \"json\" {\n    help \"Output JSON\"\n    arg \"[pairs]...\" help=\"key=value pairs\"\n}\n")},
 		},
 		Bindings: map[string]openbindings.BindingEntry{

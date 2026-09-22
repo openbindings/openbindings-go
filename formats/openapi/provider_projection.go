@@ -119,7 +119,7 @@ func (c *Synthesizer) synthesizeProviderProjection(
 		if readErr != nil {
 			return nil, fmt.Errorf("embed OpenAPI source: %w", readErr)
 		}
-		artifactContent = openbindings.TextContent(string(data))
+		artifactContent = jsonvalue.TextContent(string(data))
 	}
 	observed, err := analyzeProviderProjection(
 		ctx,

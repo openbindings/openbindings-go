@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // This file implements the server and address configuration points of
@@ -719,7 +719,7 @@ func evaluatePayloadLocation(location string, payload any, name string) (string,
 		}
 		for _, raw := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
 			segment := strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
-			object, ok := openbindings.ToStringAnyMap(current)
+			object, ok := jsonvalue.ToStringAnyMap(current)
 			if !ok {
 				return "", fmt.Errorf("runtime expression %q did not resolve against the outgoing payload", location)
 			}

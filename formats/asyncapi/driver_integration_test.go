@@ -13,8 +13,8 @@ import (
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	kafkadriver "github.com/openbindings/asyncapi-client/go/kafka"
 	mqttdriver "github.com/openbindings/asyncapi-client/go/mqtt"
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 type bridgeTestDriver struct{ seen []any }
@@ -43,7 +43,7 @@ func TestOpenBindingsAdapterDelegatesArbitraryProtocolDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	artifact := openbindings.TextContent(`{
+	artifact := jsonvalue.TextContent(`{
   "asyncapi":"3.1.0",
   "info":{"title":"MQTT bridge","version":"1"},
   "defaultContentType":"application/json",
@@ -306,7 +306,7 @@ func mqttBridgeArtifactAt(t *testing.T, host, address string) json.RawMessage {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return openbindings.TextContent(string(content))
+	return jsonvalue.TextContent(string(content))
 }
 
 func kafkaBridgeArtifact(t *testing.T, host, topic, groupID string) json.RawMessage {
@@ -353,5 +353,5 @@ func kafkaBridgeArtifactWithSecurity(t *testing.T, host, topic, groupID string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return openbindings.TextContent(string(content))
+	return jsonvalue.TextContent(string(content))
 }

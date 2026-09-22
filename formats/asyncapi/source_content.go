@@ -4,14 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // sourceContentBytes translates AsyncAPI's string source representation to
 // YAML text and passes other JSON values to the AsyncAPI loader. The loader
 // owns document-shape validation and its error classification.
 func sourceContentBytes(content json.RawMessage) ([]byte, error) {
-	switch openbindings.ContentKind(content) {
+	switch jsonvalue.ContentKind(content) {
 	case "string":
 		var text string
 		if err := json.Unmarshal(content, &text); err != nil {

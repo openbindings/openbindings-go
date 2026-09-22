@@ -17,12 +17,10 @@ import (
 
 	openapiclient "github.com/openbindings/openapi-client/go"
 	"github.com/openbindings/openbindings-go/invoke"
-	"github.com/openbindings/openbindings-go/synthesize"
-
 	jsonataevaluator "github.com/openbindings/openbindings-go/invoke/jsonata"
-
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // TestOpenAPINativeDifferential is the independent-client gate for the
@@ -237,7 +235,7 @@ func TestOpenAPIV2CollisionDifferential(t *testing.T) {
 	  }}}
 	}`, server.URL)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: jsonvalue.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("revision-2 synthesis failed: %v", err)
@@ -332,7 +330,7 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	  }}}
 	}`, server.URL)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: jsonvalue.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -352,7 +350,7 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	}
 	nativeRuntime := newInvokerRuntime(InvokerOptions{HTTPClient: server.Client()})
 	nativeClient, err := nativeRuntime.loadNativeClient(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: jsonvalue.TextContent(spec)},
 		Selector: "#/paths/~1upload/post",
 	})
 	if err != nil {

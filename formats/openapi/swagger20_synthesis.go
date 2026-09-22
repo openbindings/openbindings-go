@@ -45,7 +45,7 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 		if readErr != nil {
 			return nil, nil, nil, fmt.Errorf("embed Swagger 2.0 source: %w", readErr)
 		}
-		artifactContent = openbindings.TextContent(string(data))
+		artifactContent = jsonvalue.TextContent(string(data))
 	}
 	var content []byte
 	if artifactContent != nil {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -26,7 +27,7 @@ func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
 	}
 	return buildInterfaceFromSpec(spec, openbindings.Source{
 		BindingSpec: BindingSpec,
-		Content:     openbindings.TextContent(text),
+		Content:     jsonvalue.TextContent(text),
 	})
 }
 

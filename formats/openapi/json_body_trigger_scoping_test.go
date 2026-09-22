@@ -24,7 +24,7 @@ import (
 	"reflect"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -94,7 +94,7 @@ func TestSharedJSONBodyTriggerScopingSynthesis(t *testing.T) {
 			}
 			document := jsonBodyTriggerDocument(t, fixture)
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(document), Content: openbindings.TextContent(document)}},
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(document), Content: jsonvalue.TextContent(document)}},
 			})
 			if err != nil {
 				t.Fatalf("synthesis: %v", err)

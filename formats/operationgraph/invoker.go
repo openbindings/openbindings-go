@@ -11,7 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
+	locationutil "github.com/openbindings/openbindings-go/internal/location"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -78,16 +79,16 @@ func NewInvokerWithClient(invoker *invoke.OperationInvoker, client *http.Client)
 const maxGraphDocBytes = 8 << 20 // 8 MiB
 
 // Formats returns the binding format tokens this invoker supports.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return operationGraphBindingSpecInfos()
 }
 
-func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, operationGraphBindingSpecInfos())
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, operationGraphBindingSpecInfos())
 }
 
-func operationGraphBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenBindings operation graphs"}}
+func operationGraphBindingSpecInfos() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenBindings operation graphs"}}
 }
 
 // InvokeBinding invokes an operation graph binding. The handle is returned
@@ -278,7 +279,7 @@ func sourceContentBytes(content json.RawMessage) ([]byte, error) {
 // the fetch runs under ctx (the invocation's lifetime), per the core
 // contract that the caller controls cancellation via context.
 func (e *Invoker) loadLocation(ctx context.Context, location string) ([]byte, error) {
-	if openbindings.IsHTTPURL(location) {
+	if locationutil.IsHTTPURL(location) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 		if err != nil {
 			return nil, fmt.Errorf("invalid location %q: %w", location, err)
