@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	openapiprovider "github.com/openbindings/openapi-client/go/provider"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func bindingSpecCorpusDir(t *testing.T, family string) string {
@@ -160,7 +159,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 		if src.Content != nil {
 			switch bindingSpec {
 			case BindingSpecOpenAPI20:
-				content, err := openbindings.ContentToBytes(src.Content)
+				content, err := sourceContentBytes(src.Content)
 				if err != nil {
 					return err
 				}
@@ -170,7 +169,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 				}
 				swagger20 = loaded.Document()
 			default:
-				data, err := openbindings.ContentToBytes(src.Content)
+				data, err := sourceContentBytes(src.Content)
 				if err != nil {
 					return err
 				}

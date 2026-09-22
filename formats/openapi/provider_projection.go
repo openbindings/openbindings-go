@@ -170,7 +170,7 @@ func analyzeProviderProjection(
 	var bytes []byte
 	var err error
 	if content != nil {
-		bytes, err = openbindings.ContentToBytes(content)
+		bytes, err = sourceContentBytes(content)
 		if err != nil {
 			return nil, err
 		}

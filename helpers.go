@@ -2,7 +2,6 @@ package openbindings
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 )
 
@@ -11,27 +10,8 @@ func IsHTTPURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
-// ContentToBytes converts a source content value (raw JSON, presence-aware —
-// see Source.Content) to artifact bytes: a JSON string yields its text
-// verbatim (an embedded artifact rides as a JSON string), any other present
-// value (object, array, number, boolean, null) yields its raw JSON bytes
-// unchanged. Absent content (nil) is an error — presence is the caller's
-// question, answered before decoding.
-func ContentToBytes(content json.RawMessage) ([]byte, error) {
-	if content == nil {
-		return nil, errors.New("openbindings: source content is absent")
-	}
-	var s string
-	if err := json.Unmarshal(content, &s); err == nil {
-		return []byte(s), nil
-	}
-	return []byte(content), nil
-}
-
-// TextContent renders artifact text as an embedded content value (a JSON
-// string) — the inverse of ContentToBytes' string lane. Formats and tools
-// that embed an artifact's text into Source.Content use this so the carrier
-// stays raw JSON end to end.
+// TextContent encodes text as a JSON string for Source.Content. A binding
+// specification decides whether text is an accepted source representation.
 func TextContent(text string) json.RawMessage {
 	b, err := json.Marshal(text)
 	if err != nil {

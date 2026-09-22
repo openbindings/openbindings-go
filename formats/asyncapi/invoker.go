@@ -246,7 +246,7 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 	var content []byte
 	var err error
 	if args.Source.Content != nil {
-		content, err = openbindings.ContentToBytes(args.Source.Content)
+		content, err = sourceContentBytes(args.Source.Content)
 		if err != nil {
 			return asyncapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
 		}

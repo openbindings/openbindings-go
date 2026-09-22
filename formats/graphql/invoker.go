@@ -542,12 +542,8 @@ func parseIntrospectionContent(content json.RawMessage) (*introspectionSchema, e
 	if openbindings.ContentKind(content) != "object" {
 		return nil, fmt.Errorf("content must be an introspection execution-result object, got %s", openbindings.ContentKind(content))
 	}
-	raw, err := openbindings.ContentToBytes(content)
-	if err != nil {
-		return nil, fmt.Errorf("convert content: %w", err)
-	}
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	if err := json.Unmarshal(content, &value); err != nil {
 		return nil, fmt.Errorf("parse introspection execution result: %w", err)
 	}
 	result, ok := value.(map[string]any)

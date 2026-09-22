@@ -80,7 +80,7 @@ func TestSynthesizeInterface_FilePathEmitsInvocableFileURI(t *testing.T) {
 	if got, want := iface.Sources[DefaultSourceName].Location, "file://"+path; got != want {
 		t.Fatalf("emitted location = %q, want %q", got, want)
 	}
-	if got, err := openbindings.ContentToBytes(iface.Sources[DefaultSourceName].Content); err != nil || string(got) != content {
+	if got, err := sourceContentBytes(iface.Sources[DefaultSourceName].Content); err != nil || string(got) != content {
 		t.Fatalf("embed directive did not preserve the artifact: %s (%v)", got, err)
 	}
 }
@@ -464,7 +464,7 @@ func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	if src.Content == nil {
 		t.Fatal("content-fed synthesis must embed the artifact")
 	}
-	if got, err := openbindings.ContentToBytes(src.Content); err != nil || string(got) != content {
+	if got, err := sourceContentBytes(src.Content); err != nil || string(got) != content {
 		t.Error("embedded content must be the provided artifact verbatim")
 	}
 }

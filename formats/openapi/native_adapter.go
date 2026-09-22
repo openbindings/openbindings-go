@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -207,7 +206,7 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 	var content []byte
 	var err error
 	if args.Source.Content != nil {
-		content, err = openbindings.ContentToBytes(args.Source.Content)
+		content, err = sourceContentBytes(args.Source.Content)
 		if err != nil {
 			return nil, err
 		}
@@ -259,7 +258,7 @@ func nativeSourceClientKey(args *invoke.BindingInvocationArgs) string {
 		return ""
 	}
 	if args.Source.Content != nil {
-		content, err := openbindings.ContentToBytes(args.Source.Content)
+		content, err := sourceContentBytes(args.Source.Content)
 		if err != nil {
 			return ""
 		}
@@ -938,7 +937,7 @@ func nativeSelectorIsDeclared(args *invoke.BindingInvocationArgs) bool {
 	if args == nil || args.Source.Content == nil {
 		return false
 	}
-	content, err := openbindings.ContentToBytes(args.Source.Content)
+	content, err := sourceContentBytes(args.Source.Content)
 	if err != nil {
 		return false
 	}

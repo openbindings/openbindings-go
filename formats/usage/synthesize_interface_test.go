@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -229,7 +230,8 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("bindingSpec = %q, want %q", src.BindingSpec, BindingSpec)
 	}
-	if got, err := openbindings.ContentToBytes(src.Content); err != nil || string(got) != `name "mycli"` {
+	var got string
+	if err := json.Unmarshal(src.Content, &got); err != nil || got != `name "mycli"` {
 		t.Errorf("expected the pristine kdl text, got %s", src.Content)
 	}
 }
@@ -427,7 +429,8 @@ func TestSynthesizeInterface_FilePathEmitsEmbeddedContent(t *testing.T) {
 			if src.Location != "" {
 				t.Errorf("emitted location = %q, want empty (a file path is not a conformant OBI-D-05 location)", src.Location)
 			}
-			if got, err := openbindings.ContentToBytes(src.Content); err != nil || string(got) != emissionTestKDL {
+			var got string
+			if err := json.Unmarshal(src.Content, &got); err != nil || got != emissionTestKDL {
 				t.Errorf("emitted content must be the pristine artifact text, got %s", src.Content)
 			}
 			if err := iface.Validate(); err != nil {

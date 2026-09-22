@@ -238,7 +238,7 @@ func validateDocumentAddress(location string) error {
 
 func sourceToBytes(ctx context.Context, client *http.Client, location string, content json.RawMessage) ([]byte, error) {
 	if content != nil {
-		return openbindings.ContentToBytes(content)
+		return sourceContentBytes(content)
 	}
 	if location == "" {
 		return nil, fmt.Errorf("source must have location or content")

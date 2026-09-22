@@ -291,8 +291,8 @@ type Source struct {
 	// Content is the embedded source material: ANY JSON value, carried as
 	// raw JSON because member PRESENCE is distinct from value (core §7) —
 	// nil means the member is absent, a `null` literal is a PRESENT null.
-	// The core carries content opaquely; the governing binding-spec family
-	// interprets it per its own pins (see ContentToBytes).
+	// The core carries content opaquely; the governing binding specification
+	// determines which values are valid and how to interpret them.
 	Content     json.RawMessage `json:"content,omitempty"`
 	Description string          `json:"description,omitempty"`
 

@@ -217,8 +217,8 @@ func (e *Invoker) drive(ctx context.Context, args *invoke.BindingInvocationArgs,
 // loadDocument loads and parses an operation graph source document into a
 // generic JSON value (the host document's shape is unconstrained by the
 // format). Parsed documents are cached by location when content is absent.
-// Content arrives as raw JSON (a JSON string is the document's text, any
-// other present value is the document itself — ContentToBytes' lanes).
+// This binding interprets string content as document text and other present
+// JSON values as the document itself.
 func (e *Invoker) loadDocument(ctx context.Context, location string, content json.RawMessage) (any, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
@@ -232,7 +232,7 @@ func (e *Invoker) loadDocument(ctx context.Context, location string, content jso
 	var data []byte
 	if content != nil {
 		var err error
-		data, err = openbindings.ContentToBytes(content)
+		data, err = sourceContentBytes(content)
 		if err != nil {
 			return nil, fmt.Errorf("decode content: %w", err)
 		}
@@ -260,6 +260,17 @@ func (e *Invoker) loadDocument(ctx context.Context, location string, content jso
 		e.mu.Unlock()
 	}
 	return doc, nil
+}
+
+func sourceContentBytes(content json.RawMessage) ([]byte, error) {
+	if content == nil {
+		return nil, fmt.Errorf("operation graph source content is absent")
+	}
+	var text string
+	if err := json.Unmarshal(content, &text); err == nil {
+		return []byte(text), nil
+	}
+	return content, nil
 }
 
 // loadLocation reads a graph document from an http(s) URL or a local file

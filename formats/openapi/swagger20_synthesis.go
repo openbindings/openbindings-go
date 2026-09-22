@@ -49,7 +49,7 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 	}
 	var content []byte
 	if artifactContent != nil {
-		content, err = openbindings.ContentToBytes(artifactContent)
+		content, err = sourceContentBytes(artifactContent)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("load Swagger 2.0 document: %w", err)
 		}
