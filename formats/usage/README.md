@@ -26,6 +26,7 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 import (
     openbindings "github.com/openbindings/openbindings-go"
     usage "github.com/openbindings/openbindings-go/formats/usage"
+    "github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 invoker := openbindings.NewOperationInvoker(usage.NewInvoker())
@@ -97,7 +98,7 @@ synthesizer := usage.NewSynthesizer()
 iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
         BindingSpec: usage.BindingSpec,
-        Content:     openbindings.TextContent(descriptor),
+        Content:     jsonvalue.TextContent(descriptor),
     }},
 })
 // iface retains the pristine artifact as its source, one operation per

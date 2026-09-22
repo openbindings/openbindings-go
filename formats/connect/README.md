@@ -26,6 +26,7 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 import (
     openbindings "github.com/openbindings/openbindings-go"
     connectbinding "github.com/openbindings/openbindings-go/formats/connect"
+    "github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 opInv := openbindings.NewOperationInvoker(connectbinding.NewInvoker())
@@ -83,7 +84,7 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
         BindingSpec: connectbinding.BindingSpec,
         Location:    "https://api.example.com",
-        Content:     openbindings.TextContent(protoSource),
+        Content:     jsonvalue.TextContent(protoSource),
     }},
 })
 ```
