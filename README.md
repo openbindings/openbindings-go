@@ -46,14 +46,16 @@ precision discarded before reaching the SDK.
 
 ## Layout
 
-This is a multi-module Go monorepo. The root module carries the core package
-plus its `invoke`, `synthesize`, and `compare` sub-packages; each `formats/*`
+This is a multi-module Go monorepo. The root module carries the Core package
+and independently usable companion and interface packages; each `formats/*`
 subdirectory is its own module:
 
 ```
 .                          ← github.com/openbindings/openbindings-go (the core SDK)
   invoke/                  ← .../invoke (binding-invoker / operation-invoker runtime)
-  synthesize/              ← .../synthesize (interface synthesis, source inspection, discovery)
+  synthesize/              ← .../synthesize (interface synthesis, source inspection)
+  httpdiscovery/           ← .../httpdiscovery (optional HTTP discovery of existing OBIs)
+  acquire/                 ← .../acquire (direct retrieval, discovery, optional synthesis)
   compare/                 ← .../compare (interface/operation compatibility checking)
   sdk/                     ← .../sdk (optional protocol-neutral composition facade)
 formats/
@@ -118,7 +120,8 @@ draft-only `replace` directives to an application intended for release.
 - **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
 - **Validation** with shape-level checks, strict mode for unknown fields, and exact binding-specification identifier validation
 - **Schema compatibility** checking under the OpenBindings Schema Comparison Profile `OB-2020-12` (covariant outputs, contravariant inputs) with diagnostic reasons
-- **`FetchInterface`** for resolving OBIs from URLs: well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied synthesizers
+- **`httpdiscovery.Discover`** for retrieving an existing OBI from an origin's well-known endpoint without requiring synthesis
+- **`acquire.Resolve`** for an optional direct-fetch, discovery, then synthesis sequence using supplied synthesizers
 - **Exhaustiveness-qualified synthesis accounting** through `CoverageSynthesizer`, pairing a creation-time-sound OBI with durable dispositions and an explicit claim about whether the upstream interaction inventory is complete
 - **`OperationInvoker`** that dispatches operations to binding-spec implementations and applies transforms
 - **`sdk.Runtime`** as an optional instance-scoped composition root over explicitly registered binding providers
@@ -151,7 +154,7 @@ import (
 
 // ParseDocument is the conformant front door for untrusted or wire bytes:
 // unlike a plain json.Unmarshal it also rejects duplicate object keys
-// (OBI-D-01). FetchInterface uses it internally.
+// (OBI-D-01). HTTP discovery and acquisition use it internally.
 iface, err := openbindings.ParseDocument(data)
 if err != nil {
     log.Fatal(err)

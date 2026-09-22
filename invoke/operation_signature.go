@@ -45,7 +45,7 @@ func NewOperationSignature[I, O any](key string) OperationSignature[I, O] {
 // invocation context is normally resolved by the invoker's ContextResolver at
 // preflight, and the binding is normally selected by
 // the operation-invoker contract's sole-candidate rule. The variadic-functional-option shape matches the rest of the SDK
-// (FetchOption, ValidateOption), so the common call passes no options at all.
+// (acquire.Option, ValidateOption), so the common call passes no options at all.
 type InvokeOption func(*invokeConfig)
 
 // invokeConfig is the resolved set of per-call options applied to one Invoke.

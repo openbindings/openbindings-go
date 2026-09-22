@@ -44,7 +44,7 @@ func ParseDocument(data []byte) (*Interface, error) {
 	// OBI-T-04 (spec §11.1): refuse to PARSE a document declaring a higher
 	// major version (pre-1.0: higher minor) than this SDK's MaxTested. This
 	// must hold on every entry point (ParseDocument, ValidateDocument,
-	// FetchInterface), not only Interface.Validate. The schema pattern above
+	// acquisition), not only Interface.Validate. The schema pattern above
 	// already rejects a malformed-version string, so a bad version surfaces as
 	// a schema error first; here the value is well-formed SemVer. The error is
 	// emitted identically to Interface.Validate so the diagnostic is the same
