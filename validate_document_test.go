@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -629,16 +630,27 @@ func TestParseDocument_RefusesWhatItCannotCheck(t *testing.T) {
 	}
 }
 
-// Input nested deeper than the decoder reads meets a resource limit: every
-// rule is inconclusive and none is violated (§10.5). Its declared version is
-// still read, however deep the input and wherever the member lies, so an
-// unsupported one is refused (OBI-T-04).
+// Input nested deeper than the decoder reads is still read in full for
+// OBI-D-01, a token at a time, but cannot be decoded: every other rule meets
+// a resource limit and is inconclusive (§10.5). Its declared version is read
+// however deep the input and wherever the member lies, so an unsupported one
+// is refused (OBI-T-04).
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 	nested := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
 	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + nested + `}`
 	_, report, err := ValidateDocument([]byte(deep), ValidateOptions{})
-	if err != nil || report.Evidence["OBI-D-01"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("err %v, OBI-D-01 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Conclusion)
+	if err != nil || report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+		t.Fatalf("err %v, OBI-D-01 %q, OBI-D-02 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Evidence["OBI-D-02"], report.Conclusion)
+	}
+	for name, input := range map[string]string{
+		"a repeated name before it": `{"openbindings":"0.2.0","a":1,"a":2,"x-deep":` + nested + `}`,
+		"a repeated name inside it": `{"openbindings":"0.2.0","x-deep":` + strings.Repeat("[", 10001) + `{"a":1,"a":2}` + strings.Repeat("]", 10001) + `}`,
+		"a syntax error after it":   `{"openbindings":"0.2.0","x-deep":` + nested + `,"a":}`,
+		"trailing data":             `{"openbindings":"0.2.0","x-deep":` + nested + `} []`,
+	} {
+		if _, report, err := ValidateDocument([]byte(input), ValidateOptions{}); !errors.As(err, new(*ValidationError)) || report.Evidence["OBI-D-01"] != EvidenceViolated {
+			t.Errorf("%s: OBI-D-01 %q, err %v", name, report.Evidence["OBI-D-01"], err)
+		}
 	}
 	if _, err := ParseDocument([]byte(deep)); err == nil || errors.As(err, new(*ValidationError)) {
 		t.Fatalf("want a refusal that is not a violation, got %v", err)
@@ -653,7 +665,8 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 }
 
 // The version is read from exactly one JSON value whose root object has one
-// openbindings member, as the decoder reads it, at any depth.
+// openbindings member, as the decoder reads it, at any depth and after any
+// leading byte-order mark.
 func FuzzDeclaredVersionOf(f *testing.F) {
 	for _, seed := range []string{`{"openbindings":"0.9.0"}`, `{"openbindings":"0.9.0","openbindings":"0.9.0"}`, `{"a":[{"openbindings":"0.9.0"}],"openbindings":"1.0.0"}`,
 		`{"openbindings":"0.9.0"} {}`, `{"openbindings":"0.9.0",}`, `{"\u006fpenbindings":"0.9.0"}`, `[{"openbindings":"0.9.0"}]`, `{"openbindings":{"a":1}}`, `{"openbindings":"0.9.0"`} {
@@ -665,7 +678,7 @@ func FuzzDeclaredVersionOf(f *testing.F) {
 		}
 		got, _ := declaredVersionOf(data).(map[string]any)
 		want := map[string]any(nil)
-		if json.Valid(data) { // splitObject reads valid JSON only
+		if data := bytes.TrimPrefix(data, byteOrderMark); json.Valid(data) { // splitObject reads valid JSON only
 			if entries, err := splitObject(data); err == nil {
 				var declared []json.RawMessage
 				for _, entry := range entries {
@@ -768,11 +781,19 @@ func TestValidateDocument_DuplicateNamesAreLocated(t *testing.T) {
 	}
 }
 
-// A leading byte-order mark is named as what OBI-D-01 refuses.
+// A leading byte-order mark is named as what OBI-D-01 refuses, and does not
+// hide the declared version, which is decided first.
 func TestValidateDocument_ByteOrderMarkIsNamed(t *testing.T) {
 	_, report, _ := ValidateDocument(append([]byte{0xef, 0xbb, 0xbf}, `{"openbindings":"0.2.0","operations":{}}`...), ValidateOptions{})
 	if violations := report.Violations(); len(violations) != 1 || !strings.Contains(violations[0].Message, "byte-order mark") {
 		t.Fatalf("violations %+v", violations)
+	}
+	unsupported := append([]byte{0xef, 0xbb, 0xbf}, `{"openbindings":"9.0.0","operations":{}}`...)
+	if _, _, err := ValidateDocument(unsupported, ValidateOptions{}); !errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("ValidateDocument: want a version refusal, got %v", err)
+	}
+	if _, err := ParseDocument(unsupported); !errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("ParseDocument: want a version refusal, got %v", err)
 	}
 }
 
@@ -786,6 +807,83 @@ func TestValidateDocument_DialectConstraintsAreWellFormedness(t *testing.T) {
 		_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"a":{"input":`+input+`}}}`), ValidateOptions{})
 		if report.Evidence[rule] != EvidenceViolated || report.Evidence["OBI-D-17"] != EvidenceViolated {
 			t.Errorf("%s: %s %q, OBI-D-17 %q", input, rule, report.Evidence[rule], report.Evidence["OBI-D-17"])
+		}
+	}
+}
+
+// allocated returns the bytes f allocates.
+func allocated(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// The work of validation stays linear in the document where hostile input
+// once made it quadratic: setting many members aside, walking a deeply
+// nested schema, and resolving many anchor references into one resource.
+func TestValidateDocument_WorkIsLinear(t *testing.T) {
+	scaled := func(name string, build func(n int) string) {
+		t.Helper()
+		small := []byte(build(1000))
+		large := []byte(build(4000))
+		ratio := float64(allocated(func() { ValidateDocument(large, ValidateOptions{}) })) / float64(allocated(func() { ValidateDocument(small, ValidateOptions{}) }))
+		if ratio > 6 {
+			t.Errorf("%s: 4 times the input allocated %.1f times the memory", name, ratio)
+		}
+	}
+	scaled("members set aside", func(n int) string {
+		var operations []string
+		for i := range n {
+			operations = append(operations, fmt.Sprintf(`"o%d":{"aliases":[1e10001]}`, i))
+		}
+		return `{"openbindings":"0.2.0","operations":{` + strings.Join(operations, ",") + `}}`
+	})
+	scaled("anchor references", func(n int) string {
+		var definitions, operations []string
+		for i := range n {
+			definitions = append(definitions, fmt.Sprintf(`"d%d":{"$anchor":"a%d"}`, i, i))
+			operations = append(operations, fmt.Sprintf(`"o%d":{"input":{"$ref":"https://ex.test/a#x"}}`, i))
+		}
+		return `{"openbindings":"0.2.0","schemas":{"A":{"$id":"https://ex.test/a","$anchor":"x","$defs":{` + strings.Join(definitions, ",") + `}}},"operations":{` + strings.Join(operations, ",") + `}}`
+	})
+
+	deep := `{"openbindings":"0.2.0","operations":{},"schemas":{"A":` + strings.Repeat(`{"not":`, 8000) + `{}` + strings.Repeat(`}`, 8000) + `}}`
+	view, err := decodeDocumentBytes([]byte(deep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes := allocated(func() { collectDocumentSchemas(view) }); bytes > 50*uint64(len(deep)) {
+		t.Errorf("collecting the schemas of a %d-byte document allocated %d bytes", len(deep), bytes)
+	}
+	if bytes := allocated(func() { ValidateDocument([]byte(deep), ValidateOptions{}) }); bytes > 1000*uint64(len(deep)) {
+		t.Errorf("validating a %d-byte document allocated %d bytes", len(deep), bytes)
+	}
+}
+
+// A schema nested deeper than the meta-schema validator checks quickly meets
+// a resource limit: OBI-D-17 is inconclusive there, not decided (§10.5).
+func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
+	nested := strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300)
+	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+nested+`}}`), ValidateOptions{})
+	if report.Evidence["OBI-D-17"] != EvidenceInconclusive || !strings.Contains(fmt.Sprint(report.Findings), "nests deeper than 256") {
+		t.Fatalf("OBI-D-17 %q, findings %v", report.Evidence["OBI-D-17"], report.Findings)
+	}
+}
+
+// OBI-D-16 judges a same-document fragment even when it is not a
+// well-formed URI reference, which OBI-D-05 reports.
+func TestValidateDocument_MalformedFragmentsAreStillResolved(t *testing.T) {
+	for ref, resolves := range map[string]bool{"#/schemas/Missing Thing": false, "#/schemas/A B": true} {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"A B":{}},"operations":{"op":{"input":{"$ref":"`+ref+`"}}}}`)
+		want := EvidenceViolated
+		if resolves {
+			want = EvidenceSatisfied
+		}
+		if report.Evidence["OBI-D-05"] != EvidenceViolated || report.Evidence["OBI-D-16"] != want {
+			t.Errorf("%s: OBI-D-05 %q, OBI-D-16 %q", ref, report.Evidence["OBI-D-05"], report.Evidence["OBI-D-16"])
 		}
 	}
 }

@@ -36,9 +36,9 @@ memory, where OBI-D-01 is inconclusive because a host object no longer
 carries the exact input bytes. The rules judge the JSON a document is, never
 its typed decoding, so a document the typed model cannot carry is still judged
 in full, with two exceptions the SDK cannot read in full: a document holding a
-string that escapes a lone UTF-16 surrogate, where OBI-D-01 is decided and
-every other rule is inconclusive, and input nested deeper than encoding/json
-reads (10000 levels), where every rule is inconclusive. Both return a `*ValidationError` beside the
+string that escapes a lone UTF-16 surrogate, and input nested deeper than
+encoding/json reads (10000 levels). For both, OBI-D-01 is decided and every
+other rule is inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).

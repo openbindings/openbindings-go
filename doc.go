@@ -25,9 +25,10 @@
 // The document rules judge the JSON a document is: ValidateDocument judges
 // the bytes, and Validate the encoding of a host object, so for the same
 // document both reach the same evidence on every rule but OBI-D-01, which
-// only the exact bytes decide and Validate leaves inconclusive. Validate returns a *ValidationError listing every violation it
-// establishes, which makes it a gate. A nil error is not conformance: a rule this SDK
-// cannot decide is inconclusive, not violated. OBI-D-18 takes a
+// only the exact bytes decide and Validate leaves inconclusive. Validate
+// returns a *ValidationError listing every violation it establishes, which
+// makes it a gate. A nil error is not conformance: a rule this SDK cannot
+// decide is inconclusive, not violated. OBI-D-18 takes a
 // [TransformParser], which the SDK does not carry: an application gives one
 // through [ValidateOptions], and without one the rule is inconclusive.
 // Evaluating transforms takes a [TransformEvaluator]; one implementation of
@@ -76,7 +77,8 @@
 // the document holds is not established; a document holding a lone
 // surrogate, where it decides OBI-D-01 and leaves the other rules
 // inconclusive; and input nested deeper than encoding/json reads (10000
-// levels), where every rule is inconclusive.
+// levels), where it likewise decides OBI-D-01 and leaves the other rules
+// inconclusive.
 //
 // A typed field alone states its member: an Unknown or Extensions entry
 // named like a typed member is never encoded, so a nil field is absent.

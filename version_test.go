@@ -59,6 +59,14 @@ func TestIsSupportedVersion(t *testing.T) {
 	}
 }
 
+// SupportedVersions' doc says the SDK supports no prerelease; naming one
+// means saying so there too.
+func TestSupportedVersions_StatesEveryPrerelease(t *testing.T) {
+	if len(supportedPrereleases) > 0 {
+		t.Fatalf("supportedPrereleases names %v: state them in SupportedVersions' doc and update this test", supportedPrereleases)
+	}
+}
+
 // A prerelease is supported only when named explicitly (§8.1): naming one
 // supports it, build metadata aside, and supports nothing else.
 func TestIsSupportedVersion_PrereleasesAreNamed(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 // TransformParser is a parser for the transform language the specification
 // pins (§5.5: JSONata 2.1 for OpenBindings 0.2): it decides whether an
 // expression is in the language, which is all OBI-D-18 asks and all
-// validation takes (§10.5). The SDK carries none.
+// validation takes (§10.2). The SDK carries none.
 type TransformParser interface {
 	// Parse reports whether expression is in the pinned language: nil when
 	// it parses, an error wrapping ErrTransformUndecided when the parser
@@ -30,8 +30,10 @@ type TransformEvaluator interface {
 	// environment is closed: the language's standard library and those
 	// bindings, nothing else.
 	//
-	// Success is exactly one JSON value, as generic decoding produces it
-	// (§5.5 clause 3). Every other outcome is a transform-evaluation failure
+	// Success is exactly one JSON value (§5.5 clause 3), in the form
+	// CompiledSchema.Validate accepts: nil, a bool, a string, a number (a
+	// json.Number, a finite float, or an integer type), a []any, or a
+	// map[string]any. Every other outcome is a transform-evaluation failure
 	// (clause 4): an expression that yields no result returns an error
 	// wrapping ErrTransformNoResult; a syntax error, a dynamic error, or a
 	// result that is not a JSON value returns any other error.

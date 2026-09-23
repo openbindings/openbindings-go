@@ -6,6 +6,34 @@
 
 ### Fixed
 
+- **An absolute URI names the resource it resolves to.** A `$id` or `$ref`
+  holding dot segments (`https://example.com/x/../a`) was compared as
+  written, while the schema library removes them (RFC 3986 §5.2.4). A
+  reference to the embedded schema by the other spelling was read as
+  external: a violating example was skipped and the document concluded
+  conformant, validation of a value reported the graph unavailable, and a
+  fragment that resolves nowhere in the resource satisfied OBI-D-16.
+- **OBI-D-01 is decided at any depth.** Input nested deeper than
+  encoding/json reads (10,000 levels) is read a token at a time, so a
+  repeated name, a syntax error, or trailing data anywhere in it violates
+  OBI-D-01. Input that satisfies OBI-D-01 still cannot be decoded, so every
+  other rule is inconclusive. The duplicate and lone-surrogate scan keeps its
+  own stack rather than recursing.
+- **A leading byte-order mark does not hide the declared version.** A
+  BOM-prefixed document declaring an unsupported version is refused
+  (OBI-T-04), as one with invalid UTF-8 already was, rather than judged
+  under 0.2's OBI-D-01.
+- **OBI-D-16 resolves a malformed same-document fragment.** A `$ref` of
+  `#/schemas/Missing Thing` violates OBI-D-05 and, resolving nowhere, now
+  OBI-D-16 as well; it satisfied OBI-D-16.
+- **Validation work stays linear on hostile input.** Setting members aside
+  for OBI-D-02 copied the document once per member (232 KB allocated 5 GB);
+  collecting schema resources and walking schemas for OBI-D-05/06/07/16
+  copied the path at every node (62 KB allocated 640 MB); and every anchor
+  reference re-walked its resource (232 KB took 3.3 s). Each now does one
+  pass. OBI-D-17 is inconclusive for a schema nesting deeper than 256
+  levels, the limit compilation already applies, since the meta-schema
+  validator's work grows faster than linearly with depth.
 - **A document with a large number in its aliases no longer crashes
   validation.** An operation's `aliases` or a dependency's `bindingSpecs`
   holding more than 20 items, one of them a number beyond the numeric limits
@@ -242,7 +270,7 @@
   is supported only when named explicitly (§8.1); it was inferred from the
   tested range, which would have admitted `0.2.1-rc.1` once the range reached
   0.2.1. None is named, so what the SDK accepts is unchanged, and a refusal
-  names the supported line (`0.2.x`).
+  of a version outside the line names the line (`0.2.x`).
 - **Core's tests use only core.** The operation-contract witnesses from the
   interfaces repository's comparison corpus are checked in `schemaprofile`,
   which owns that profile, and the `canonicaljson` example is in
@@ -284,7 +312,7 @@
   accepts is the expression that runs. `Interface.Validate` and
   `ValidateDocument` take a `ValidateOptions`, whose `Transforms` field is a
   `TransformParser`. OBI-D-18 is decided by that parser; without one it is
-  inconclusive at every expression, as §10.5 provides for a validator
+  inconclusive at every expression, as §10.2 provides for a validator
   without a parser, so a document with transforms is
   conformance-undetermined rather than conformant. Core no longer imports
   the JSONata syntax package. `ErrTransformNoResult` marks an expression

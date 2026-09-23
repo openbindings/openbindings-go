@@ -3,10 +3,15 @@ package openbindings
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
 // An escape of a lone UTF-16 surrogate is RFC 8259 JSON, so it breaks no
@@ -99,5 +104,78 @@ func TestVerifyExactJSON_WorkIsLinear(t *testing.T) {
 	runtime.ReadMemStats(&after)
 	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 20*uint64(len(data)) {
 		t.Fatalf("verifyExactJSON allocated %d bytes for %d bytes of input", allocated, len(data))
+	}
+}
+
+// The exact scan walks with its own stack. It finds exactly what a recursive
+// walk of the same input finds: the first repeated name and the first lone
+// surrogate, at the same locations.
+func FuzzExactScan(f *testing.F) {
+	for _, seed := range []string{`{}`, `[]`, `{"a":[1,{"b":2,"b":3}]}`, `[[],[{}],{"\ud800":1}]`, `{"a":{"x":"\udc00"},"a":2}`, `[0,"\ud800",[1,2,{"c":{"c":1,"c":2}}]]`, `"x"`, `{"":{"":[{"":1,"":2}]}}`} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		b := []byte(input)
+		if !utf8.Valid(b) || !json.Valid(b) {
+			return
+		}
+		var scan exactScan
+		got := scan.run(b)
+		var want recursiveScan
+		_, wantErr := want.value(b, skipJSONSpace(b, 0), nil)
+		if fmt.Sprint(got) != fmt.Sprint(wantErr) || fmt.Sprint(scan.lone) != fmt.Sprint(want.lone) {
+			t.Fatalf("%s: scan %v / %v, recursive walk %v / %v", input, got, scan.lone, wantErr, want.lone)
+		}
+	})
+}
+
+// recursiveScan is the recursive walk the exact scan replaced, kept as the
+// reference it is checked against.
+type recursiveScan struct{ lone *loneSurrogateError }
+
+func (s *recursiveScan) value(b []byte, i int, tokens []string) (int, error) {
+	switch b[i] {
+	case '{':
+		seen := map[string]bool{}
+		i = skipJSONSpace(b, i+1)
+		for b[i] != '}' {
+			nameEnd := jsonValueEnd(b, i)
+			name, lone := exactString(b[i:nameEnd])
+			if lone && s.lone == nil {
+				s.lone = &loneSurrogateError{location: jsonpointer.Format(tokens...), name: true}
+			}
+			if seen[name] {
+				return 0, &duplicateNameError{location: jsonpointer.Format(tokens...), name: name}
+			}
+			seen[name] = true
+			end, err := s.value(b, skipJSONSpace(b, skipJSONSpace(b, nameEnd)+1), append(slices.Clip(tokens), name))
+			if err != nil {
+				return 0, err
+			}
+			if i = skipJSONSpace(b, end); b[i] == ',' {
+				i = skipJSONSpace(b, i+1)
+			}
+		}
+		return i + 1, nil
+	case '[':
+		i = skipJSONSpace(b, i+1)
+		for index := 0; b[i] != ']'; index++ {
+			end, err := s.value(b, i, append(slices.Clip(tokens), strconv.Itoa(index)))
+			if err != nil {
+				return 0, err
+			}
+			if i = skipJSONSpace(b, end); b[i] == ',' {
+				i = skipJSONSpace(b, i+1)
+			}
+		}
+		return i + 1, nil
+	case '"':
+		end := jsonValueEnd(b, i)
+		if _, lone := exactString(b[i:end]); lone && s.lone == nil {
+			s.lone = &loneSurrogateError{location: jsonpointer.Format(tokens...)}
+		}
+		return end, nil
+	default:
+		return jsonValueEnd(b, i), nil
 	}
 }

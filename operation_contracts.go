@@ -306,13 +306,14 @@ func (o *operationContracts) resolve(ref, at string) (target, outside string, ex
 	}
 	id, fragment := o.resourceAt(at), parsed.Fragment
 	if !strings.HasPrefix(ref, "#") {
+		var base *url.URL
 		if !parsed.IsAbs() {
 			if id == "" {
 				return "", "", false, "is relative, with no base to resolve against"
 			}
-			base, _ := url.Parse(id)
-			parsed = base.ResolveReference(parsed)
+			base, _ = url.Parse(id)
 		}
+		parsed = resolveURI(base, parsed)
 		fragment = parsed.Fragment
 		parsed.Fragment, parsed.RawFragment = "", ""
 		id = parsed.String()
@@ -336,7 +337,7 @@ func (o *operationContracts) resolve(ref, at string) (target, outside string, ex
 	}
 	within := fragment
 	if fragment != "" && !strings.HasPrefix(fragment, "/") {
-		switch anchors := anchorLocations(resource.schema, fragment); len(anchors) {
+		switch anchors := resource.anchors[fragment]; len(anchors) {
 		case 1:
 			within = anchors[0]
 		case 0:

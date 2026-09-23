@@ -315,15 +315,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 		} else {
 			err = ValidateOperationInput(scenario.Given.Value, iface, operationKey)
 		}
-		if err != nil {
-			if slices.Contains(scenario.Expected.AllowedOutcomes, "resolver-error") {
-				outcome <- "resolver-error"
-			} else {
-				outcome <- "instance-mismatch"
-			}
-			return
-		}
-		outcome <- "valid"
+		outcome <- contractOutcome(err, "resolver-error")
 	}()
 	select {
 	case got := <-outcome:
@@ -374,16 +366,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 		} else {
 			err = ValidateOperationInput(value, iface, operationKey)
 		}
-		if err == nil {
-			actual = append(actual, "valid")
-			continue
-		}
-		var unavailable *SchemaGraphUnavailableError
-		if errors.As(err, &unavailable) {
-			actual = append(actual, "graph-unavailable")
-		} else {
-			actual = append(actual, "instance-mismatch")
-		}
+		actual = append(actual, contractOutcome(err, "graph-unavailable"))
 	}
 	if !slices.Equal(actual, scenario.Expected.Results) {
 		t.Fatalf("results %v; expected %v", actual, scenario.Expected.Results)
@@ -577,4 +560,36 @@ func successor(n string) string {
 // first release of the supported line.
 func lowestSupported() semver {
 	return semver{major: supportedLine.major, minor: cmp.Or(supportedLine.minor, "0"), patch: "0"}
+}
+
+// contractOutcome names the outcome of validating a value against an
+// operation's contract in the corpus's terms, read from the error's type
+// alone: OBI-T-16 keeps a mismatch and an unavailable graph distinct, so what
+// a scenario allows never decides which one an error is. unavailable is the
+// scenario's name for an unavailable graph.
+func contractOutcome(err error, unavailable string) string {
+	var mismatch *SchemaValidationError
+	var graph *SchemaGraphUnavailableError
+	switch {
+	case err == nil:
+		return "valid"
+	case errors.As(err, &mismatch):
+		return "instance-mismatch"
+	case errors.As(err, &graph):
+		return unavailable
+	}
+	return fmt.Sprintf("an unexpected error: %v", err)
+}
+
+func TestContractOutcome(t *testing.T) {
+	for want, err := range map[string]error{
+		"valid":             nil,
+		"instance-mismatch": &SchemaValidationError{},
+		"resolver-error":    &SchemaGraphUnavailableError{},
+		"an unexpected error: operation not found": errors.New("operation not found"),
+	} {
+		if got := contractOutcome(err, "resolver-error"); got != want {
+			t.Errorf("%v: %q, want %q", err, got, want)
+		}
+	}
 }

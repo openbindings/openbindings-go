@@ -248,7 +248,8 @@ func TestDocumentSchema_NumericWorkIsOnNumericMembers(t *testing.T) {
 				case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "uniqueItems":
 					found[path] = true
 				case "type":
-					if value == "integer" || value == "number" {
+					types, _ := value.([]any)
+					if value == "integer" || value == "number" || slices.Contains(types, any("integer")) || slices.Contains(types, any("number")) {
 						found[path] = true
 					}
 				case "const", "enum":
@@ -286,5 +287,29 @@ func TestDocumentSchema_NumericWorkIsOnNumericMembers(t *testing.T) {
 	bounds := preference.(map[string]any)
 	if bounds["minimum"] != float64(-maxPreference) || bounds["maximum"] != float64(maxPreference) {
 		t.Fatalf("the document schema bounds a preference by %v and %v", bounds["minimum"], bounds["maximum"])
+	}
+}
+
+// An absolute URI names the resource it resolves to, dot segments removed
+// (RFC 3986 §5.2.4), as the schema library resolves it: however the $id and
+// the $ref spell it, the reference reaches the embedded schema.
+func TestOperationContracts_DotSegmentsAreRemoved(t *testing.T) {
+	for _, spelling := range []struct{ id, ref string }{
+		{"https://ex.test/x/../a", "https://ex.test/a"},
+		{"https://ex.test/a", "https://ex.test/x/../a"},
+		{"https://ex.test/./a", "https://ex.test/a"},
+	} {
+		document := `{"openbindings":"0.2.0","schemas":{"A":{"$id":"` + spelling.id + `","type":"string"}},
+			"operations":{"op":{"input":{"$ref":"` + spelling.ref + `"},"examples":{"e":{"input":5}}}}}`
+		if report := validateBytes(t, document); report.Evidence["OBI-D-11"] != EvidenceViolated {
+			t.Errorf("%s from %s: OBI-D-11 %q, conclusion %q", spelling.ref, spelling.id, report.Evidence["OBI-D-11"], report.Conclusion)
+		}
+		if err := ValidateOperationInput(json.Number("5"), mustDecodeInterface(t, document), "op"); !errors.As(err, new(*SchemaValidationError)) {
+			t.Errorf("%s from %s: want a mismatch, got %v", spelling.ref, spelling.id, err)
+		}
+		missing := strings.Replace(document, `"$ref":"`+spelling.ref+`"`, `"$ref":"`+spelling.ref+`#/nope"`, 1)
+		if report := validateBytes(t, missing); report.Evidence["OBI-D-16"] != EvidenceViolated {
+			t.Errorf("%s#/nope from %s: OBI-D-16 %q", spelling.ref, spelling.id, report.Evidence["OBI-D-16"])
+		}
 	}
 }

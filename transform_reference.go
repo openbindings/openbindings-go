@@ -21,7 +21,11 @@ func transformReferenceName(ref string) (name, problem string) {
 		return "", "is not a URI reference"
 	}
 	tokens, ok := jsonpointer.Parse(parsed.Fragment)
-	if !ok {
+	switch {
+	case ok:
+	case !strings.HasPrefix(parsed.Fragment, "/"):
+		return "", "is not a JSON Pointer fragment: a pointer begins with / (RFC 6901), as #/transforms/<name>"
+	default:
 		return "", "is not a JSON Pointer fragment: ~ must be followed by 0 or 1 (RFC 6901)"
 	}
 	if len(tokens) != 2 || tokens[0] != "transforms" {

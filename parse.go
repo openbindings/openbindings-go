@@ -15,12 +15,12 @@ import (
 // judged against rules it does not claim (§10.1). A refusal is a
 // *VersionRefusalError, and violations of OBI-D-01 or the document schema are
 // a *ValidationError, as from Interface.Validate and ValidateDocument. A
-// document either check could not be applied to (input nested deeper than
-// the decoder reads, or an operation's aliases or a dependency's
-// bindingSpecs holding a number beyond the numeric limits of schema
-// evaluation) is not parsed, and returns another error, as is one holding an
-// escape of a lone UTF-16 surrogate, which the document model does not
-// carry. The declared version is read however deep the input nests.
+// document the document schema could not be applied to (an operation's
+// aliases or a dependency's bindingSpecs holding a number beyond the numeric
+// limits of schema evaluation) is not parsed, and returns another error, as
+// is one the document model does not carry: input nested deeper than the
+// decoder reads, or holding an escape of a lone UTF-16 surrogate. OBI-D-01
+// and the declared version are read however deep the input nests.
 func ParseDocument(data []byte) (*Interface, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
@@ -28,7 +28,7 @@ func ParseDocument(data []byte) (*Interface, error) {
 			return nil, refusal
 		}
 		if errors.Is(err, errNestingLimit) {
-			return nil, fmt.Errorf("parse document: the input is %w, so OBI-D-01 was not checked", err)
+			return nil, fmt.Errorf("parse document: the input is %w, so it is not decoded", err)
 		}
 		if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
 			return nil, fmt.Errorf("parse document: %w", err)

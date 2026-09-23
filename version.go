@@ -13,14 +13,16 @@ import (
 // decides membership.
 const SupportedVersions = "0.2.x"
 
-// AuthoringVersion is the specification version a document written with this
-// SDK declares: the lowest version sufficient for everything the document
-// model carries, as §8.1 asks of documents.
+// AuthoringVersion is the specification version to declare in a document
+// written with this SDK: the lowest version sufficient for everything the
+// document model carries, as §8.1 asks of documents. No function here writes
+// it; a producer sets Interface.OpenBindings to it.
 const AuthoringVersion = "0.2.0"
 
 // supportedPrereleases lists the prerelease versions this SDK supports, each
 // named explicitly: a prerelease is a draft, and supporting its release does
-// not imply supporting it (§8.1). There are none.
+// not imply supporting it (§8.1). There are none; naming one means stating it
+// in SupportedVersions' doc as well.
 var supportedPrereleases []string
 
 // supportedLine is SupportedVersions parsed: its major version, and while
@@ -34,6 +36,11 @@ func init() {
 		panic(fmt.Sprintf("openbindings: SupportedVersions %q is not a release line", SupportedVersions))
 	}
 	supportedLine = semver{major: major, minor: minor}
+	for _, prerelease := range supportedPrereleases {
+		if parsed, err := parseSemverStrict(prerelease); err != nil || len(parsed.preRelease) == 0 {
+			panic(fmt.Sprintf("openbindings: supported prerelease %q is not a SemVer prerelease", prerelease))
+		}
+	}
 	if supported, err := IsSupportedVersion(AuthoringVersion); !supported {
 		panic(fmt.Sprintf("openbindings: AuthoringVersion %q is not a supported version: %v", AuthoringVersion, err))
 	}
@@ -43,8 +50,9 @@ func init() {
 // version v rather than refusing it (OBI-T-04): whether v belongs to
 // SupportedVersions. A release of the supported line is supported whatever
 // its patch version, a prerelease only when it is named explicitly, and
-// build metadata is ignored (§8.1). Validate, ParseDocument, and
-// CompileOperationSchema refuse exactly the versions it reports false for.
+// build metadata is ignored (§8.1). Of well-formed versions, Validate,
+// ParseDocument, and CompileOperationSchema refuse exactly those it reports
+// false for.
 //
 // A malformed (non-SemVer) v is no version at all: IsSupportedVersion
 // returns false and a parse error, while validation reports such a document

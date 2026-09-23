@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,9 +73,8 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // not UTF-8, or repeating a member name) is reported as that rule's
 // violation, with every other rule inconclusive, since which of its values
 // the document holds is not established. A document holding a string that
-// escapes a lone UTF-16 surrogate has OBI-D-01 decided and every other rule
-// inconclusive, and input nested deeper than encoding/json reads (10000
-// levels) has every rule inconclusive.
+// escapes a lone UTF-16 surrogate, or nests deeper than encoding/json reads
+// (10000 levels), has OBI-D-01 decided and every other rule inconclusive.
 //
 // A document declaring a well-formed version outside the supported set is not
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
@@ -92,15 +92,17 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 		var lone *loneSurrogateError
 		switch {
 		case errors.Is(err, errNestingLimit):
-			// A resource limit met is no evidence of a violation (§10.5).
-			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err))
+			// OBI-D-01 is decided on the input as read a token at a time; the
+			// other rules read the decoded document, which meets a resource
+			// limit and is no evidence either way (§10.5).
+			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-D-01")
 		case errors.As(err, &lone):
 			// OBI-D-01 is decided: the input is UTF-8 JSON with no repeated
 			// name. The other rules read values this SDK cannot carry.
 			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01")
 		default:
 			c.findings = append(c.findings, d01Violation(err))
-			c.inconclusiveExcept("the input is not a JSON document, so this rule was not checked", "OBI-D-01")
+			c.inconclusiveExcept("OBI-D-01 refuses the input, so this rule was not checked", "OBI-D-01")
 		}
 		report, verr := c.conclude()
 		return nil, report, verr
@@ -159,12 +161,15 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 // declaredVersionOf reads the version input declares from its bytes, for input
 // OBI-D-01 refuses or the decoder cannot read: the version decision precedes
 // interpreting a document under this version's rules, OBI-D-01 included
-// (§10.1). The version is read only where it is established: the input is one
-// JSON value, and its root object has exactly one openbindings member. The
-// returned view is nil otherwise. The input is read a token at a time, which
-// holds however deeply it nests.
+// (§10.1). The version is read only where it is established: the input,
+// after any leading byte-order mark, is one JSON value, and its root object
+// has exactly one openbindings member. The returned view is nil otherwise.
+// The input is read a token at a time, which holds however deeply it nests.
 func declaredVersionOf(data []byte) any {
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	// A leading byte-order mark breaks OBI-D-01 but not the reading of the
+	// version, which precedes that rule (RFC 8259 §8.1 lets a parser ignore
+	// one).
+	decoder := json.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, byteOrderMark)))
 	decoder.UseNumber()
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return nil
@@ -449,7 +454,7 @@ func hasKey(object map[string]any, key string) bool {
 // applies (OBI-D-05, OBI-D-06, OBI-D-07, OBI-D-16).
 func (d *documentCheck) checkSchema(path string, schema any) {
 	validateSchemaWellFormedness(d.c, path, schema, d.wellFormed)
-	d.walkSchema(path, schema, false)
+	d.walkSchema(&schemaPath{start: path}, schema, false)
 }
 
 // checkBindingTransform records evidence for a binding's inputTransform or
@@ -538,7 +543,7 @@ func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, kn
 // parses under the pinned transform language (§5.5). Parse-only: membership
 // in the language, not success of evaluation; a result that is absent and a
 // dynamic error remain evaluation outcomes. Without a transform parser the
-// rule is inconclusive, as the spec provides (§10.5).
+// rule is inconclusive, as the spec provides (§10.2).
 func (d *documentCheck) checkTransformExpression(path, expression string) {
 	if d.transforms == nil {
 		d.c.inconclusive("OBI-D-18", path, "not parsed: validation was given no transform parser")
@@ -634,7 +639,7 @@ var arraySchemaKeywords = map[string]bool{
 // OBI-D-05 and OBI-D-16 stop at its boundary: they judge its own $id and
 // nothing inside it. OBI-D-06 and OBI-D-07 govern every schema in the
 // document, inside resources too.
-func (d *documentCheck) walkSchema(prefix string, schema any, inResource bool) {
+func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool) {
 	s, ok := schema.(map[string]any)
 	if !ok {
 		// Boolean schemas carry no keywords; any other value is OBI-D-17's.
@@ -645,21 +650,21 @@ func (d *documentCheck) walkSchema(prefix string, schema any, inResource bool) {
 	// (OBI-D-17), so a schema breaking one violates both rules. A $schema
 	// that is not a string is already refused by the meta-schemas.
 	if value, present := s["$schema"]; present && value != draft202012URI {
-		d.c.violated("OBI-D-06", prefix+jsonpointer.Format("$schema"), fmt.Sprintf("must equal %q; got %s", draft202012URI, describeJSON(value)))
+		d.c.violated("OBI-D-06", path.at("$schema"), fmt.Sprintf("must equal %q; got %s", draft202012URI, describeJSON(value)))
 		if _, isString := value.(string); isString {
-			d.c.violated("OBI-D-17", prefix+jsonpointer.Format("$schema"), "not well-formed: §5.2 requires the 2020-12 dialect")
+			d.c.violated("OBI-D-17", path.at("$schema"), "not well-formed: §5.2 requires the 2020-12 dialect")
 		}
 	}
 	if _, present := s["$vocabulary"]; present {
-		d.c.violated("OBI-D-07", prefix, "$vocabulary keyword is forbidden in OBI documents")
-		d.c.violated("OBI-D-17", prefix, "not well-formed: §5.2 forbids $vocabulary")
+		d.c.violated("OBI-D-07", path.at(), "$vocabulary keyword is forbidden in OBI documents")
+		d.c.violated("OBI-D-17", path.at(), "not well-formed: §5.2 forbids $vocabulary")
 	}
 
 	if !inResource {
 		if value, present := s["$id"]; present {
 			// This schema's own $id is at an OBI position; everything inside
 			// the resource it declares is the resource's business.
-			idPath := prefix + jsonpointer.Format("$id")
+			idPath := path.at("$id")
 			id, isString := value.(string)
 			if !isString {
 				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("an $id is an absolute URI string; got %s", jsonTypeName(value)))
@@ -677,13 +682,13 @@ func (d *documentCheck) walkSchema(prefix string, schema any, inResource bool) {
 		// resolution follows the runtime dynamic scope rather than the
 		// document (§7 item 2).
 		if _, present := s["$dynamicRef"]; present {
-			d.c.violated("OBI-D-05", prefix, "$dynamicRef does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
+			d.c.violated("OBI-D-05", path.at(), "$dynamicRef does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
 		}
 		if _, present := s["$dynamicAnchor"]; present {
-			d.c.violated("OBI-D-05", prefix, "$dynamicAnchor does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
+			d.c.violated("OBI-D-05", path.at(), "$dynamicAnchor does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
 		}
 		if value, present := s["$ref"]; present {
-			refPath := prefix + jsonpointer.Format("$ref")
+			refPath := path.at("$ref")
 			if ref, ok := value.(string); ok {
 				d.checkDocumentReference(refPath, ref)
 			} else {
@@ -693,28 +698,48 @@ func (d *documentCheck) walkSchema(prefix string, schema any, inResource bool) {
 	}
 
 	forEachSubschema(s, func(child any, tokens ...string) {
-		d.walkSchema(prefix+jsonpointer.Format(tokens...), child, inResource)
+		path.below = append(path.below, tokens...)
+		d.walkSchema(path, child, inResource)
+		path.below = path.below[:len(path.below)-len(tokens)]
 	})
+}
+
+// schemaPath is where a walk of a schema is: the location of the schema it
+// began at, and the reference tokens from there to the schema it is at. A
+// location is formatted only when a finding needs one, so a walk's work stays
+// linear in the schema however deeply it nests.
+type schemaPath struct {
+	start string
+	below []string
+}
+
+// at returns the location of the schema the walk is at, or of the member
+// tokens name within it.
+func (p *schemaPath) at(tokens ...string) string {
+	return p.start + jsonpointer.Format(slices.Concat(p.below, tokens)...)
 }
 
 // checkDocumentReference applies OBI-D-05 and OBI-D-16 to a schema $ref at an
 // OBI position.
 func (d *documentCheck) checkDocumentReference(path, ref string) {
 	wellFormed, hasScheme := uriReference(ref)
-	if !wellFormed {
+	switch {
+	case !wellFormed:
 		d.c.violated("OBI-D-05", path, fmt.Sprintf("%q is not a well-formed URI reference (RFC 3986 §4.1)", ref))
-		return
-	}
-	if !strings.HasPrefix(ref, "#") {
+		if !strings.HasPrefix(ref, "#") {
+			return
+		}
+	case !strings.HasPrefix(ref, "#"):
 		if !hasScheme {
 			d.c.violated("OBI-D-05", path, fmt.Sprintf("%q must be a same-document fragment or an absolute URI, not a relative reference", ref))
 			return
 		}
 		d.checkEmbeddedReference(path, ref)
 		return
-	}
-	if problem := literalFragmentProblem(ref); problem != "" {
-		d.c.violated("OBI-D-05", path, problem)
+	default:
+		if problem := literalFragmentProblem(ref); problem != "" {
+			d.c.violated("OBI-D-05", path, problem)
+		}
 	}
 	// OBI-D-16 judges the fragment whatever its spelling: URI semantics
 	// decode it before it is read as a JSON Pointer (RFC 6901 §6), and one
@@ -738,6 +763,7 @@ func (d *documentCheck) checkEmbeddedReference(path, ref string) {
 	if err != nil {
 		return
 	}
+	parsed = resolveURI(nil, parsed)
 	fragment := parsed.Fragment
 	parsed.Fragment, parsed.RawFragment = "", ""
 	id := parsed.String()

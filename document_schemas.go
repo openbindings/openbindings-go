@@ -3,6 +3,7 @@ package openbindings
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +36,11 @@ type schemaResource struct {
 	// parent is the base in effect where the resource sits, against which its
 	// own $id resolves; nil at an OBI schema position.
 	parent *url.URL
+	// anchors maps each plain-name anchor the resource declares, by $anchor
+	// or $dynamicAnchor, to the location of every schema declaring it, as a
+	// JSON Pointer from the resource, in document order. A nested resource's
+	// anchors are its own.
+	anchors map[string][]string
 }
 
 // collectDocumentSchemas walks the schema positions of a document's generic
@@ -42,35 +48,51 @@ type schemaResource struct {
 func collectDocumentSchemas(view any) documentSchemas {
 	d := documentSchemas{resources: map[string]schemaResource{}}
 	claims := map[string][]string{}
-	var walk func(node any, tokens []string, base *url.URL)
-	walk = func(node any, tokens []string, base *url.URL) {
+	var path []string
+	// anchors indexes the anchors of the resource the walk is in, whose root
+	// is at path[:anchorsFrom]; nil outside a resource, or within a nested
+	// $id that declares none (its anchors are not the outer resource's).
+	var walk func(node any, base *url.URL, anchors map[string][]string, anchorsFrom int)
+	walk = func(node any, base *url.URL, anchors map[string][]string, anchorsFrom int) {
 		object, ok := node.(map[string]any)
 		if !ok {
 			return
 		}
 		if id, declared := resourceID(object, base); declared {
-			location := jsonpointer.Format(tokens...)
+			location := jsonpointer.Format(path...)
 			key := id.String()
 			claims[key] = append(claims[key], location)
-			d.resources[key] = schemaResource{location: location, schema: object, parent: base}
+			anchors, anchorsFrom = map[string][]string{}, len(path)
+			d.resources[key] = schemaResource{location: location, schema: object, parent: base, anchors: anchors}
 			base = id
+		} else if _, nested := object["$id"].(string); nested {
+			anchors = nil
 		}
-		forEachSubschema(object, func(child any, childTokens ...string) {
-			walk(child, append(append([]string(nil), tokens...), childTokens...), base)
+		if anchors != nil {
+			for _, name := range anchorNames(object) {
+				anchors[name] = append(anchors[name], jsonpointer.Format(path[anchorsFrom:]...))
+			}
+		}
+		forEachSubschema(object, func(child any, tokens ...string) {
+			path = append(path, tokens...)
+			walk(child, base, anchors, anchorsFrom)
+			path = path[:len(path)-len(tokens)]
 		})
 	}
 
 	root, _ := view.(map[string]any)
 	schemas, _ := root["schemas"].(map[string]any)
 	for _, key := range sortedKeys(schemas) {
-		walk(schemas[key], []string{"schemas", key}, nil)
+		path = []string{"schemas", key}
+		walk(schemas[key], nil, nil, 0)
 	}
 	operations, _ := root["operations"].(map[string]any)
 	for _, key := range sortedKeys(operations) {
 		operation, _ := operations[key].(map[string]any)
 		for _, position := range []string{"input", "output"} {
 			if schema, present := operation[position]; present {
-				walk(schema, []string{"operations", key, position}, nil)
+				path = []string{"operations", key, position}
+				walk(schema, nil, nil, 0)
 			}
 		}
 	}
@@ -93,6 +115,18 @@ func collectDocumentSchemas(view any) documentSchemas {
 	return d
 }
 
+// anchorNames returns the plain-name anchors a schema object declares, by
+// $anchor or $dynamicAnchor, each once.
+func anchorNames(object map[string]any) []string {
+	var names []string
+	for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+		if name, ok := object[keyword].(string); ok && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // resourceID returns the absolute URI, without fragment, of the resource a
 // schema object declares by $id, resolved against base. declared is false
 // when the object declares no resource with an absolute URI.
@@ -105,14 +139,29 @@ func resourceID(object map[string]any, base *url.URL) (id *url.URL, declared boo
 	if err != nil {
 		return nil, false
 	}
-	if base != nil {
-		parsed = base.ResolveReference(parsed)
-	}
+	parsed = resolveURI(base, parsed)
 	if !parsed.IsAbs() {
 		return nil, false
 	}
 	parsed.Fragment, parsed.RawFragment = "", ""
 	return parsed, true
+}
+
+// resolveURI resolves ref against base as RFC 3986 §5.2 does, and as the
+// schema library does for every $id and $ref: dot segments are removed even
+// from an absolute reference, so https://example.com/x/../a names
+// https://example.com/a. base may be nil when ref is absolute. A relative
+// reference against an opaque base (a urn:, say) keeps the base's opaque
+// part, as the library keeps it.
+func resolveURI(base, ref *url.URL) *url.URL {
+	if base == nil {
+		base = &url.URL{}
+	}
+	resolved := base.ResolveReference(ref)
+	if !ref.IsAbs() && base.Opaque != "" {
+		resolved.Opaque = base.Opaque
+	}
+	return resolved
 }
 
 // forEachSubschema calls fn for every direct subschema of a schema object, as
@@ -185,7 +234,7 @@ func resolveInResource(resource schemaResource, fragment string) resolution {
 		}
 		return resolved
 	default:
-		switch found := anchorLocations(resource.schema, fragment); {
+		switch found := resource.anchors[fragment]; {
 		case len(found) == 0:
 			return missing
 		case len(found) > 1:
@@ -194,30 +243,4 @@ func resolveInResource(resource schemaResource, fragment string) resolution {
 			return resolved
 		}
 	}
-}
-
-// anchorLocations returns the location, as a JSON Pointer from the resource,
-// of every schema in a resource that declares a plain-name anchor, by $anchor
-// or $dynamicAnchor. The search does not enter a nested resource, whose
-// anchors are its own.
-func anchorLocations(resource map[string]any, name string) []string {
-	var found []string
-	var search func(node any, location string, root bool)
-	search = func(node any, location string, root bool) {
-		object, isObject := node.(map[string]any)
-		if !isObject {
-			return
-		}
-		if _, nested := object["$id"].(string); nested && !root {
-			return
-		}
-		if object["$anchor"] == name || object["$dynamicAnchor"] == name {
-			found = append(found, location)
-		}
-		forEachSubschema(object, func(child any, tokens ...string) {
-			search(child, location+jsonpointer.Format(tokens...), false)
-		})
-	}
-	search(resource, "", true)
-	return found
 }

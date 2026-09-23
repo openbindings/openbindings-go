@@ -35,8 +35,9 @@ var documentRules = []string{
 }
 
 // DocumentRules returns the identifiers of every document rule the core
-// specification defines, in identifier order. Every ValidationReport produced
-// by Interface.Validate or ValidateDocument carries evidence for each of them.
+// specification defines, in identifier order. Every ValidationReport
+// Interface.Validate or ValidateDocument returns carries evidence for each of
+// them; a version refusal returns no report.
 func DocumentRules() []string {
 	return append([]string(nil), documentRules...)
 }
@@ -81,7 +82,8 @@ type ValidationReport struct {
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per rule considered. Reports from
 	// Interface.Validate and ValidateDocument carry every document rule; a
-	// rule with nothing to govern in the document is vacuously satisfied.
+	// rule with nothing to govern in the document is vacuously satisfied. A
+	// version refusal returns no report, whose Evidence is nil.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their stable identifiers,
 	// in identifier order, as OBI-T-17 requires.

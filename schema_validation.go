@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
@@ -58,6 +59,12 @@ func init() {
 // `pattern` values, and unresolvable `$ref` targets all pass — they surface
 // when the schema is used, not here. knownValid remembers schemas already
 // found well-formed, by their encoding.
+//
+// The meta-schema validator's work grows faster than linearly with a
+// schema's depth, so a schema holding a number beyond the numeric limits of
+// schema evaluation, or nesting deeper than schemaDepthLimit, meets a
+// resource limit and leaves the rule inconclusive there (§10.5), as it does
+// for an operation's schema graph.
 func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
 	case bool:
@@ -69,6 +76,10 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 		}
 		if at, err := schemacompiler.NumericLimit(v); err != nil {
 			c.inconclusive("OBI-D-17", prefix+at, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+			return
+		}
+		if schemacompiler.Depth(v) > schemaDepthLimit {
+			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: it nests deeper than %d levels", schemaDepthLimit))
 			return
 		}
 		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
@@ -110,17 +121,17 @@ var numericMembers = [][]string{
 // document is still checked: a preference is decided here exactly, and an
 // array is left inconclusive.
 func validateAgainstOBISchema(c *ruleChecks, view any) {
-	for _, member := range numericMembers {
-		for _, tokens := range membersAt(view, member) {
-			path := jsonpointer.Format(tokens...)
-			value, _ := jsonpointer.Resolve(view, path)
-			at, err := schemacompiler.NumericLimit(value)
+	var setAside [][]string
+	for _, pattern := range numericMembers {
+		for _, member := range membersAt(view, pattern, nil) {
+			at, err := schemacompiler.NumericLimit(member.value)
 			if err == nil {
 				continue
 			}
-			if tokens[len(tokens)-1] == "preference" {
+			path := jsonpointer.Format(member.tokens...)
+			if member.tokens[len(member.tokens)-1] == "preference" {
 				inRange := false
-				if number, isNumber := value.(json.Number); isNumber {
+				if number, isNumber := member.value.(json.Number); isNumber {
 					_, inRange = preferenceValue(string(number))
 				}
 				if !inRange {
@@ -129,10 +140,10 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 			} else {
 				c.inconclusive("OBI-D-02", path, fmt.Sprintf("could not be checked against the document schema: it holds, at %q, %v", at, err))
 			}
-			view = withoutMember(view, tokens)
+			setAside = append(setAside, member.tokens)
 		}
 	}
-	if verr := compiledOBISchema.Validate(view); verr != nil {
+	if verr := compiledOBISchema.Validate(withoutMembers(view, setAside)); verr != nil {
 		problems, mismatch := schemacompiler.Outcome(verr)
 		if !mismatch {
 			// An exceeded resource limit is not evidence of violation (§10.5).
@@ -145,43 +156,59 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 	}
 }
 
-// membersAt returns the reference tokens of the members of view that pattern
-// names, where "*" is every entry of an object, in sorted order.
-func membersAt(view any, pattern []string) [][]string {
+// member is a member of a document's generic view and where it is.
+type member struct {
+	tokens []string
+	value  any
+}
+
+// membersAt returns the members of view that pattern names, where "*" is
+// every entry of an object, in sorted order. at is the reference tokens of
+// view itself.
+func membersAt(view any, pattern, at []string) []member {
 	if len(pattern) == 0 {
-		return [][]string{nil}
+		return []member{{tokens: at, value: view}}
 	}
 	object, _ := view.(map[string]any)
 	names := []string{pattern[0]}
 	if pattern[0] == "*" {
 		names = sortedKeys(object)
 	}
-	var out [][]string
+	var out []member
 	for _, name := range names {
-		if member, present := object[name]; present {
-			for _, rest := range membersAt(member, pattern[1:]) {
-				out = append(out, append([]string{name}, rest...))
-			}
+		if value, present := object[name]; present {
+			out = append(out, membersAt(value, pattern[1:], append(slices.Clip(at), name))...)
 		}
 	}
 	return out
 }
 
-// withoutMember returns view without the member at tokens, copying each
-// object on the way to it, so view itself is not changed.
-func withoutMember(view any, tokens []string) any {
-	object, _ := view.(map[string]any)
-	if _, present := object[tokens[0]]; !present {
+// withoutMembers returns view without the members at each of paths, copying
+// each object on the way to them once, so view itself is not changed and the
+// work is linear in the objects copied.
+func withoutMembers(view any, paths [][]string) any {
+	if len(paths) == 0 {
 		return view
 	}
-	copied := make(map[string]any, len(object))
-	for name, member := range object {
-		copied[name] = member
+	object, _ := view.(map[string]any)
+	removed := map[string]bool{}
+	within := map[string][][]string{}
+	for _, tokens := range paths {
+		if len(tokens) == 1 {
+			removed[tokens[0]] = true
+		} else {
+			within[tokens[0]] = append(within[tokens[0]], tokens[1:])
+		}
 	}
-	if len(tokens) == 1 {
-		delete(copied, tokens[0])
-	} else {
-		copied[tokens[0]] = withoutMember(object[tokens[0]], tokens[1:])
+	copied := make(map[string]any, len(object))
+	for name, value := range object {
+		switch {
+		case removed[name]:
+		case within[name] != nil:
+			copied[name] = withoutMembers(value, within[name])
+		default:
+			copied[name] = value
+		}
 	}
 	return copied
 }
