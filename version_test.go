@@ -125,13 +125,13 @@ func TestIsHigherMajorOrPre1MinorThanMaxTested(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := IsHigherMajorOrPre1MinorThanMaxTested(tt.version)
+			got, err := isHigherMajorOrPre1MinorThanMaxTested(tt.version)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("IsHigherMajorOrPre1MinorThanMaxTested(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
+				t.Errorf("isHigherMajorOrPre1MinorThanMaxTested(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr && got != tt.want {
-				t.Errorf("IsHigherMajorOrPre1MinorThanMaxTested(%q) = %v, want %v", tt.version, got, tt.want)
+				t.Errorf("isHigherMajorOrPre1MinorThanMaxTested(%q) = %v, want %v", tt.version, got, tt.want)
 			}
 		})
 	}

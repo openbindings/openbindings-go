@@ -22,25 +22,6 @@ import (
 // document rule enforced by Validate rather than by this type.
 type JSONSchema any
 
-// SchemaObjectForm returns the object form of a schema value: an object
-// schema as itself, boolean `true` as `{}`, and boolean `false` as
-// `{"not": {}}` (the equivalent object spellings per JSON Schema 2020-12).
-// ok is false when v is neither an object nor a boolean — a malformed
-// schema value (an OBI-D-17 violation, reported by Validate).
-func SchemaObjectForm(v JSONSchema) (m map[string]any, ok bool) {
-	switch s := v.(type) {
-	case map[string]any:
-		return s, true
-	case bool:
-		if s {
-			return map[string]any{}, true
-		}
-		return map[string]any{"not": map[string]any{}}, true
-	default:
-		return nil, false
-	}
-}
-
 // jsonTypeName names the JSON type of a decoded value (null, boolean,
 // number, string, array, object) for diagnostics.
 func jsonTypeName(v any) string {
@@ -66,17 +47,6 @@ func jsonTypeName(v any) string {
 // represents every optional member so that it is absent exactly when its Go
 // value is nil: Present("") is a present empty string, distinct from absence.
 func Present[T any](v T) *T { return &v }
-
-// NonZero sets an optional member from a value whose zero value means "no
-// value", as when a producer copies an upstream field that may be empty: it
-// returns nil (absent) for the zero value and a present member otherwise.
-func NonZero[T comparable](v T) *T {
-	var zero T
-	if v == zero {
-		return nil
-	}
-	return &v
-}
 
 // Value returns the value of an optional member, or the zero value when the
 // member is absent. It suits a reader for whom absence and the zero value mean

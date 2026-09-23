@@ -304,9 +304,9 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 	}
 }
 
-func TestPrepareInterface_GatesOnTheDocumentSchema(t *testing.T) {
+func TestValidate_GatesOnTheDocumentSchema(t *testing.T) {
 	// A present empty version violates only the document schema; the model
-	// carries it, so both gates see it.
+	// carries it, so Validate sees it.
 	iface := &Interface{
 		OpenBindings: "0.2.0",
 		Version:      Present(""),
@@ -314,9 +314,6 @@ func TestPrepareInterface_GatesOnTheDocumentSchema(t *testing.T) {
 	}
 	if _, err := iface.Validate(); err == nil {
 		t.Fatal("a present empty version violates the document schema")
-	}
-	if _, err := PrepareInterface(iface); err == nil {
-		t.Fatal("PrepareInterface must refuse what Validate establishes as a violation")
 	}
 }
 

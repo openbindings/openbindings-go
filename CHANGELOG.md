@@ -20,8 +20,6 @@
   and reported it non-conformant; it now returns the `*VersionRefusalError`
   (OBI-T-04), as `ValidateDocument` already did. Its schema violations are
   built by the same rule checks as validation, so their text matches.
-- **`PrepareInterface` checks the document schema (OBI-D-02).** It skipped
-  that rule while documenting that it refused documents as `Validate` does.
 - **A version with surrounding whitespace is not SemVer.** `IsValidSemver`,
   `IsSupportedVersion`, and OBI-D-12 no longer trim, so `" 0.2.0"` violates
   OBI-D-12.
@@ -89,7 +87,7 @@
   judges the document's JSON, literally on the values present: a value
   that fails a rule's predicate violates it (an operation reference that is
   a number names no operation key), and one outside the rule's domain gives
-  it nothing to judge. `Interface.Validate` and `PrepareInterface` judge the
+  it nothing to judge. `Interface.Validate` judges the
   encoding of the host object the same way. A resource limit met while
   checking a rule leaves it inconclusive, never violated (§10.5).
 - **OBI-D-05 follows RFC 3986's grammar.** A character screen plus `net/url`
@@ -200,7 +198,6 @@
   and empty is present. Example values are `json.RawMessage`, where `null` is
   a present value, like `Source.Content`; `InputPresent`, `OutputPresent`,
   `HasInput`, `HasOutput`, and `Source.ContentPresent` are gone.
-  `NonZero` sets an optional member from a producer's possibly empty value.
   `BindingEntry.Preference` is an exact `*int64`. `TransformOrRef` is a
   sealed union of `InlineTransform` and `*TransformReference`, which keeps
   the `$ref` object's other members, so `{"$ref": ""}` stays an object and
@@ -835,12 +832,23 @@
 
 ### Removed
 
+- **`PreparedInterface` and root helpers without a Core role** (breaking,
+  pre-1.0). `PrepareInterface`, `PreparedInterface`, and its operation,
+  dependency, and binding descriptors were a validated, indexed snapshot for
+  the composition runtime; the specification defines nothing like it and the
+  package never used it. `SchemaObjectForm` served schema comparison. The
+  version-line predicates `IsHigherMajorOrPre1MinorThanMaxTested` and
+  `IsLowerThanMinSupported` are private: `IsSupportedVersion` is the
+  OBI-T-04 acceptance predicate. `invoke`, the `sdk` facade, and the README's
+  dependency-composition example still use `PrepareInterface` and are
+  reconnected separately.
+
 - **`WithRejectUnknownTypedFields` and the exported `ValidateOption`**
   (breaking, pre-1.0). OBI-T-02 requires every processor to ignore unknown
   fields; the option turned them into rejections. Unknown non-`x-` fields
   are now always surfaced as OBI-T-02 diagnostics in a `ValidationReport`,
   which is what the rule asks for, and never affect validation.
-  `Interface.Validate` and `PrepareInterface` no longer take options.
+  `Interface.Validate` no longer takes options.
 
 - **The local provider is gone: `PrepareLocalProvider`, `PrepareLocalProviderOptions`,
   `LocalBindingImplementation`, `LocalImplementationOption`, `LocalUnary`,

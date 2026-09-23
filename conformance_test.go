@@ -42,7 +42,7 @@ type conformanceTest struct {
 // the annotations' pre-existing behavior.
 func conformanceSkip(tt conformanceTest) (reason string, skip bool) {
 	if tt.RequiresMaxTested != "" {
-		higher, err := IsHigherMajorOrPre1MinorThanMaxTested(tt.RequiresMaxTested)
+		higher, err := isHigherMajorOrPre1MinorThanMaxTested(tt.RequiresMaxTested)
 		if err == nil && higher {
 			return fmt.Sprintf("requires MaxTested >= %s", tt.RequiresMaxTested), true
 		}
@@ -50,7 +50,7 @@ func conformanceSkip(tt conformanceTest) (reason string, skip bool) {
 	if tt.RequiresMinSupported != "" {
 		// Downward-refusal tests apply only when the SDK's minimum
 		// supported version is at or above the annotation's value.
-		lower, err := IsLowerThanMinSupported(tt.RequiresMinSupported)
+		lower, err := isLowerThanMinSupported(tt.RequiresMinSupported)
 		if err == nil && !lower && tt.RequiresMinSupported != MinSupportedVersion {
 			return fmt.Sprintf("requires MinSupported >= %s", tt.RequiresMinSupported), true
 		}

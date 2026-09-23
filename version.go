@@ -72,12 +72,12 @@ func IsSupportedVersion(v string) (bool, error) {
 // SemVer (callers gate on IsValidSemver or the schema pattern first); an
 // unparseable v yields a non-nil error.
 func versionRefusal(v string) (msg string, refused bool, err error) {
-	if higher, err := IsHigherMajorOrPre1MinorThanMaxTested(v); err != nil {
+	if higher, err := isHigherMajorOrPre1MinorThanMaxTested(v); err != nil {
 		return "", false, err
 	} else if higher {
 		return fmt.Sprintf("document declares version %q, newer than the latest version this implementation supports (%s)", v, MaxTestedVersion), true, nil
 	}
-	if lower, err := IsLowerThanMinSupported(v); err != nil {
+	if lower, err := isLowerThanMinSupported(v); err != nil {
 		return "", false, err
 	} else if lower {
 		return fmt.Sprintf("document declares version %q, older than the oldest version this implementation supports (%s)", v, MinSupportedVersion), true, nil
@@ -90,7 +90,7 @@ func versionRefusal(v string) (msg string, refused bool, err error) {
 	return "", false, nil
 }
 
-// IsHigherMajorOrPre1MinorThanMaxTested reports whether v lies above the
+// isHigherMajorOrPre1MinorThanMaxTested reports whether v lies above the
 // release line this SDK declares support for, one of the conditions under
 // which it refuses a document (OBI-T-04). §8.1 leaves the supported set to
 // each processor; this SDK's is the release line of MaxTestedVersion, so v is
@@ -98,7 +98,7 @@ func versionRefusal(v string) (msg string, refused bool, err error) {
 // pre-1.0, a higher minor version.
 //
 // Returns an error if v cannot be parsed as a SemVer 2.0.0 string.
-func IsHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
+func isHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
 	parsed, err := parseSemverStrict(v)
 	if err != nil {
 		return false, err
@@ -112,12 +112,12 @@ func IsHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
 	return false, nil
 }
 
-// IsLowerThanMinSupported reports whether v lies below the release line this
+// isLowerThanMinSupported reports whether v lies below the release line this
 // SDK declares support for, the other condition under which it refuses a
 // document by its version number (OBI-T-04): a lower major version, or, while
 // MinSupportedVersion is pre-1.0, a lower minor version (pre-1.0 minors MAY
 // break, §8.1). A patch version is never a reason to refuse.
-func IsLowerThanMinSupported(v string) (bool, error) {
+func isLowerThanMinSupported(v string) (bool, error) {
 	parsed, err := parseSemverStrict(v)
 	if err != nil {
 		return false, err

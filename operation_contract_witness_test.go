@@ -11,8 +11,8 @@ import (
 
 // Additional official SDK qualification, not universal Core conformance.
 // The comparison corpus supplies exact documents and authored point witnesses;
-// these assertions concern the SDK's detached snapshot/validation boundary.
-func TestOfficialSDKQualification_ExactSnapshots(t *testing.T) {
+// these assertions check operation-contract validation (OBI-T-16) against them.
+func TestOfficialSDKQualification_OperationContractWitnesses(t *testing.T) {
 	dir := os.Getenv("OB_INTERFACES_CORPUS")
 	if dir == "" {
 		dir = filepath.Join("..", "interfaces", "conformance")
@@ -65,23 +65,12 @@ func TestOfficialSDKQualification_ExactSnapshots(t *testing.T) {
 				if err := jsonvalue.Unmarshal([]byte(c.Witness.InstanceJSON), &sample); err != nil {
 					t.Fatal(err)
 				}
-				direct, err := CompileOperationSchema(&iface, "test", c.Direction)
+				compiled, err := CompileOperationSchema(&iface, "test", c.Direction)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got := direct.Validate(sample) == nil; got != side.want {
-					t.Fatalf("direct witness: got %v want %v", got, side.want)
-				}
-				p, err := PrepareInterface(&iface)
-				if err != nil {
-					t.Fatalf("exact preparation unavailable: %v", err)
-				}
-				v, found, err := p.SchemaValidator("test", c.Direction)
-				if err != nil || !found {
-					t.Fatalf("prepared validator unavailable: %v", err)
-				}
-				if got := v.Validate(sample) == nil; got != side.want {
-					t.Errorf("snapshot changed witness validation: got %v want %v", got, side.want)
+				if got := compiled.Validate(sample) == nil; got != side.want {
+					t.Fatalf("witness: got %v want %v", got, side.want)
 				}
 			})
 		}

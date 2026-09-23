@@ -165,26 +165,16 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 	}
 }
 
-func TestPreparedBinding_SelectorPresenceIsKeptAndCopied(t *testing.T) {
+func TestDocumentModel_SelectorPresenceIsKept(t *testing.T) {
 	var iface Interface
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","operations":{"a":{}},
 		"sources":{"s":{"bindingSpec":"x@1","content":{}}},
 		"bindings":{"absent":{"operation":"a","source":"s"},"empty":{"operation":"a","source":"s","selector":""}}}`), &iface); err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := PrepareInterface(&iface)
-	if err != nil {
-		t.Fatal(err)
-	}
-	absent, _ := prepared.Binding("absent")
-	empty, _ := prepared.Binding("empty")
+	absent, empty := iface.Bindings["absent"], iface.Bindings["empty"]
 	if absent.Selector != nil || empty.Selector == nil || *empty.Selector != "" {
 		t.Fatalf("selector presence lost: absent %v, empty %v", absent.Selector, empty.Selector)
-	}
-	*empty.Selector = "mutated"
-	again, _ := prepared.Binding("empty")
-	if *again.Selector != "" {
-		t.Fatal("a returned descriptor must not alias the prepared snapshot")
 	}
 }
 
@@ -267,30 +257,13 @@ func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
 	}
 }
 
-func TestPreparedBindingDescriptor_Equal(t *testing.T) {
-	a := PreparedBindingDescriptor{Key: "b", OperationKey: "a", SourceKey: "s", BindingSpec: "x@1", Selector: Present("")}
-	b := a
-	b.Selector = Present("")
-	if !a.Equal(b) {
-		t.Fatal("equal descriptors with distinct selector pointers must be Equal")
-	}
-	b.Selector = nil
-	if a.Equal(b) {
-		t.Fatal("an absent selector differs from a present empty one")
-	}
-}
-
 // A host object whose encoding violates the document rules is refused with a
-// *ValidationError, as Validate reports it.
-func TestPrepareInterface_RefusesWhatValidateReports(t *testing.T) {
+// *ValidationError.
+func TestValidate_RefusesAHostObjectWhoseEncodingViolatesTheRules(t *testing.T) {
 	iface := &Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
-	_, err := PrepareInterface(iface)
 	var violation *ValidationError
-	if !errors.As(err, &violation) {
+	if _, err := iface.Validate(); !errors.As(err, &violation) {
 		t.Fatalf("want a *ValidationError, got %T %v", err, err)
-	}
-	if _, verr := iface.Validate(); !errors.As(verr, &violation) {
-		t.Fatalf("Validate must report the same document: %v", verr)
 	}
 }
 
