@@ -12,6 +12,8 @@ import (
 // `false` accepts none, `{}` is equivalent to `true`). It is intentionally
 // untyped beyond that to avoid coupling to any one JSON Schema library.
 // This preserves arbitrary keys/values structurally, but not raw JSON bytes.
+// A decoded schema holds generic JSON values, with every number a
+// json.Number, so a number keeps its exact text.
 //
 // As an operation's Input or Output, a nil JSONSchema means the schema is
 // unspecified (the member is absent). As an entry of Interface.Schemas, where

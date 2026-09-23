@@ -1,3 +1,8 @@
+// Package schemacompiler is the SDK's use of the JSON Schema library
+// santhosh-tekuri/jsonschema/v6: the compiler every schema compilation starts
+// from, the projection of the library's results onto the SDK's outcomes (an
+// established mismatch or no verdict), and the resource limits it is not
+// handed work beyond.
 package schemacompiler
 
 import (

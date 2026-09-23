@@ -2,8 +2,9 @@ package openbindings
 
 import (
 	"cmp"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -125,6 +126,9 @@ func (o *operationContracts) compile(key, position string) (compiled *CompiledSc
 	o.loader.external = ""
 	schema, err := o.compiler.Compile(o.documentURL + "#" + fragment(target))
 	if err != nil {
+		if invalid := (*jsonschema.SchemaValidationError)(nil); errors.As(err, &invalid) {
+			err = fmt.Errorf("the schema at %s is not a well-formed JSON Schema 2020-12 schema: %w", o.documentLocation(invalid.URL), invalid.Err)
+		}
 		return nil, cmp.Or(g.outside, o.loader.external), err
 	}
 	metaSchema, problem := o.inspect(schema)
@@ -138,7 +142,7 @@ func (o *operationContracts) compile(key, position string) (compiled *CompiledSc
 // prepare registers the document with a new compiler and compiles every
 // embedded resource the resource limits admit, in order of $id.
 func (o *operationContracts) prepare() error {
-	o.documentURL = newDocumentURL()
+	o.documentURL = newDocumentURL(o.container)
 	o.loader = &documentLoader{contracts: o}
 	c := schemacompiler.New()
 	c.UseLoader(o.loader)
@@ -425,15 +429,15 @@ func (o *operationContracts) inspect(root *jsonschema.Schema) (metaSchema, probl
 			return
 		}
 		if !held {
-			problems = append(problems, fmt.Sprintf("the schema library reached %s, which the document does not hold", s.Location))
+			problems = append(problems, fmt.Sprintf("the schema library reached %s, which the document does not hold", o.documentLocation(s.Location)))
 			return
 		}
 		if object, ok := node.(map[string]any); ok {
 			if dialect, present := object["$schema"]; present && dialect != draft202012URI {
-				problems = append(problems, fmt.Sprintf("the schema at %s declares $schema %s, not %s", s.Location, describeJSON(dialect), draft202012URI))
+				problems = append(problems, fmt.Sprintf("the schema at %s declares $schema %s, not %s", o.documentLocation(s.Location), describeJSON(dialect), draft202012URI))
 			}
 			if _, present := object["$vocabulary"]; present {
-				problems = append(problems, fmt.Sprintf("the schema at %s declares $vocabulary", s.Location))
+				problems = append(problems, fmt.Sprintf("the schema at %s declares $vocabulary", o.documentLocation(s.Location)))
 			}
 		}
 		patterns := []jsonschema.Regexp{s.Pattern}
@@ -442,7 +446,7 @@ func (o *operationContracts) inspect(root *jsonschema.Schema) (metaSchema, probl
 		}
 		for _, pattern := range patterns {
 			if uncompiled, ok := pattern.(schemacompiler.UncompiledPattern); ok {
-				problems = append(problems, fmt.Sprintf("the pattern %q at %s cannot be evaluated: Go's regexp does not support it (%v)", uncompiled.Source, s.Location, uncompiled.Cause))
+				problems = append(problems, fmt.Sprintf("the pattern %q at %s cannot be evaluated: Go's regexp does not support it (%v)", uncompiled.Source, o.documentLocation(s.Location), uncompiled.Cause))
 			}
 		}
 		for _, child := range subschemas(s) {
@@ -548,13 +552,32 @@ func subschemas(s *jsonschema.Schema) []*jsonschema.Schema {
 	return out
 }
 
-// newDocumentURL returns the base URI a compilation gives the OBI document:
-// unique to that compilation, so no URI a document declares can collide with
-// it. No reference resolves against the URI a document was fetched from (§7).
-func newDocumentURL() string {
-	var id [16]byte
-	_, _ = rand.Read(id[:])
-	return "urn:openbindings:document:" + hex.EncodeToString(id[:])
+// newDocumentURL returns the base URI the schema library is given for the
+// OBI document, derived from the document's content: the same document gets
+// the same base on every run, and no URI a document declares can equal it,
+// since that would take a document holding a hash of itself. No reference
+// resolves against the URI a document was fetched from (§7).
+func newDocumentURL(container map[string]any) string {
+	encoded, _ := json.Marshal(container) // decoded JSON always encodes
+	sum := sha256.Sum256(encoded)
+	return "urn:openbindings:document:" + hex.EncodeToString(sum[:16])
+}
+
+// documentLocation states where a location the schema library reports lies:
+// a JSON Pointer into the document, or the URI of a resource outside it.
+func (o *operationContracts) documentLocation(location string) string {
+	resource, encoded, _ := strings.Cut(location, "#")
+	pointer, err := url.PathUnescape(encoded)
+	if err != nil {
+		return location
+	}
+	switch embedded, isEmbedded := o.schemas.resources[resource]; {
+	case resource == o.documentURL:
+		return pointer
+	case isEmbedded:
+		return embedded.location + pointer
+	}
+	return location
 }
 
 // withID returns a shallow copy of a resource registered by its absolute URI,

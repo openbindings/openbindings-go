@@ -88,23 +88,48 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 	}
 }
 
+// numericMembers are the members of an OBI document the document schema does
+// numeric work on, as reference tokens where "*" is every entry of a map: a
+// binding's preference, held to its integer range (§5.3), and the items of an
+// operation's aliases and of a dependency's bindingSpecs, which uniqueItems
+// compares as numbers when they are numbers.
+// TestDocumentSchema_NumericWorkIsOnNumericMembers holds this list to the
+// embedded schema.
+var numericMembers = [][]string{
+	{"bindings", "*", "preference"},
+	{"operations", "*", "aliases"},
+	{"dependencies", "*", "bindingSpecs"},
+}
+
 // validateAgainstOBISchema records OBI-D-02 evidence: whether the document's
 // generic view validates against openbindings.schema.json.
 //
-// The document schema does numeric work on one member only, a binding's
-// preference (its integer range, §5.3). A preference beyond the numeric limits
-// of schema evaluation leaves the rule inconclusive rather than handing the
-// schema library that work; numbers anywhere else it only type-checks.
+// The schema library is not handed a number beyond the numeric limits of
+// schema evaluation where the document schema does numeric work
+// (numericMembers). A member holding one is set aside, and the rest of the
+// document is still checked: a preference is decided here exactly, and an
+// array is left inconclusive.
 func validateAgainstOBISchema(c *ruleChecks, view any) {
-	root, _ := view.(map[string]any)
-	bindings, _ := root["bindings"].(map[string]any)
-	for _, key := range sortedKeys(bindings) {
-		binding, _ := bindings[key].(map[string]any)
-		if preference, present := binding["preference"]; present {
-			if _, err := schemacompiler.NumericLimit(preference); err != nil {
-				c.inconclusive("OBI-D-02", jsonpointer.Format("bindings", key, "preference"), fmt.Sprintf("could not be checked against the document schema: %v", err))
-				return
+	for _, member := range numericMembers {
+		for _, tokens := range membersAt(view, member) {
+			path := jsonpointer.Format(tokens...)
+			value, _ := jsonpointer.Resolve(view, path)
+			at, err := schemacompiler.NumericLimit(value)
+			if err == nil {
+				continue
 			}
+			if tokens[len(tokens)-1] == "preference" {
+				inRange := false
+				if number, isNumber := value.(json.Number); isNumber {
+					_, inRange = preferenceValue(string(number))
+				}
+				if !inRange {
+					c.violated("OBI-D-02", path, fmt.Sprintf("does not validate against the document schema: a preference is an integer from -%d through %d", maxPreference, maxPreference))
+				}
+			} else {
+				c.inconclusive("OBI-D-02", path, fmt.Sprintf("could not be checked against the document schema: it holds, at %q, %v", at, err))
+			}
+			view = withoutMember(view, tokens)
 		}
 	}
 	if verr := compiledOBISchema.Validate(view); verr != nil {
@@ -118,6 +143,47 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 			c.violated("OBI-D-02", jsonpointer.Format(problem.Location...), "does not validate against the document schema: "+problem.Message)
 		}
 	}
+}
+
+// membersAt returns the reference tokens of the members of view that pattern
+// names, where "*" is every entry of an object, in sorted order.
+func membersAt(view any, pattern []string) [][]string {
+	if len(pattern) == 0 {
+		return [][]string{nil}
+	}
+	object, _ := view.(map[string]any)
+	names := []string{pattern[0]}
+	if pattern[0] == "*" {
+		names = sortedKeys(object)
+	}
+	var out [][]string
+	for _, name := range names {
+		if member, present := object[name]; present {
+			for _, rest := range membersAt(member, pattern[1:]) {
+				out = append(out, append([]string{name}, rest...))
+			}
+		}
+	}
+	return out
+}
+
+// withoutMember returns view without the member at tokens, copying each
+// object on the way to it, so view itself is not changed.
+func withoutMember(view any, tokens []string) any {
+	object, _ := view.(map[string]any)
+	if _, present := object[tokens[0]]; !present {
+		return view
+	}
+	copied := make(map[string]any, len(object))
+	for name, member := range object {
+		copied[name] = member
+	}
+	if len(tokens) == 1 {
+		delete(copied, tokens[0])
+	} else {
+		copied[tokens[0]] = withoutMember(object[tokens[0]], tokens[1:])
+	}
+	return copied
 }
 
 func metaSchemaCacheKey(schema map[string]any) string {

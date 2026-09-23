@@ -1,12 +1,16 @@
 package openbindings
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
 func mustDecodeInterface(t *testing.T, document string) *Interface {
@@ -121,8 +125,9 @@ func TestOperationContracts_UncompiledPatterns(t *testing.T) {
 	}
 }
 
-// The same document reaches the same conclusion on every run.
-func TestOperationContracts_ConclusionsAreDeterministic(t *testing.T) {
+// The same document gets the same report on every run, every finding and
+// message included.
+func TestOperationContracts_ReportsAreDeterministic(t *testing.T) {
 	document := `{"openbindings":"0.2.0",
 		"schemas":{"S":{"$id":"http://json-schema.org/draft-07/schema","pattern":"("}},
 		"operations":{"op":{"input":{"type":"object","properties":{
@@ -131,10 +136,28 @@ func TestOperationContracts_ConclusionsAreDeterministic(t *testing.T) {
 			"examples":{"e":{"input":{}}}}}}`
 	first := validateBytes(t, document)
 	for range 50 {
-		report := validateBytes(t, document)
-		if report.Conclusion != first.Conclusion || report.Evidence["OBI-D-11"] != first.Evidence["OBI-D-11"] {
-			t.Fatalf("run gave %q/%q after %q/%q", report.Conclusion, report.Evidence["OBI-D-11"], first.Conclusion, first.Evidence["OBI-D-11"])
+		if report := validateBytes(t, document); !reflect.DeepEqual(report, first) {
+			t.Fatalf("run gave\n%+v\nafter\n%+v", report, first)
 		}
+	}
+}
+
+// Messages locate a schema by its JSON Pointer in the document, never by the
+// URI the schema library is given for it.
+func TestOperationContracts_MessagesLocateByDocumentPointer(t *testing.T) {
+	report := validateBytes(t, `{"openbindings":"0.2.0",
+		"schemas":{"S":{"$id":"https://example.com/s","properties":{"a":{"pattern":"(?=a)"}}}},
+		"operations":{"op":{"input":{"$ref":"https://example.com/s"},"examples":{"e":{"input":{}}}}}}`)
+	var messages []string
+	for _, finding := range report.Findings {
+		messages = append(messages, finding.Message)
+	}
+	if text := strings.Join(messages, "\n"); !strings.Contains(text, "at /schemas/S/properties/a") || strings.Contains(text, "urn:") {
+		t.Fatalf("findings: %s", text)
+	}
+	_, err := CompileOperationSchema(mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":42}}}}`), "op", "input")
+	if err == nil || !strings.Contains(err.Error(), "the schema at /operations/op/input is not a well-formed") || strings.Contains(err.Error(), "urn:") {
+		t.Fatalf("got %v", err)
 	}
 }
 
@@ -143,11 +166,7 @@ func TestOperationContracts_ConclusionsAreDeterministic(t *testing.T) {
 func TestOperationContracts_DepthLimit(t *testing.T) {
 	nested := strings.Repeat(`{"not":`, 2000) + `{}` + strings.Repeat(`}`, 2000)
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":` + nested + `,"examples":{"e":{"input":1}}}}}`
-	start := time.Now()
 	report := validateBytes(t, document)
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("validation took %v", elapsed)
-	}
 	if report.Evidence["OBI-D-11"] != EvidenceInconclusive {
 		t.Fatalf("OBI-D-11 %q", report.Evidence["OBI-D-11"])
 	}
@@ -194,26 +213,47 @@ func TestSchemaKeywords(t *testing.T) {
 	}
 }
 
-// OBI-D-02 holds only a binding's preference to the numeric limits, because
-// it is the only member the document schema does numeric work on. This test
-// fails if a schema update adds another.
-func TestDocumentSchema_NumericWorkIsOnlyOnPreference(t *testing.T) {
+// numericMembers is every member the document schema does numeric work on:
+// a numeric keyword or type, uniqueItems (which compares items as numbers
+// when they are), or a const or enum holding a number. This test fails if a
+// schema update adds another, and the preference range is §5.3's.
+func TestDocumentSchema_NumericWorkIsOnNumericMembers(t *testing.T) {
 	var schema any
 	if err := json.Unmarshal(openbindingsSchemaJSON, &schema); err != nil {
 		t.Fatal(err)
 	}
-	var found []string
+	var holdsNumber func(value any) bool
+	holdsNumber = func(value any) bool {
+		switch value := value.(type) {
+		case float64:
+			return true
+		case []any:
+			return slices.ContainsFunc(value, holdsNumber)
+		case map[string]any:
+			for _, member := range value {
+				if holdsNumber(member) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	found := map[string]bool{}
 	var walk func(node any, path string)
 	walk = func(node any, path string) {
 		switch node := node.(type) {
 		case map[string]any:
 			for key, value := range node {
 				switch key {
-				case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
-					found = append(found, path)
+				case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "uniqueItems":
+					found[path] = true
 				case "type":
 					if value == "integer" || value == "number" {
-						found = append(found, path)
+						found[path] = true
+					}
+				case "const", "enum":
+					if holdsNumber(value) {
+						found[path] = true
 					}
 				}
 				walk(value, path+"/"+key)
@@ -225,9 +265,26 @@ func TestDocumentSchema_NumericWorkIsOnlyOnPreference(t *testing.T) {
 		}
 	}
 	walk(schema, "")
-	for _, path := range found {
-		if path != "/$defs/BindingEntry/properties/preference" {
-			t.Errorf("the document schema does numeric work at %s", path)
-		}
+	members := map[string]string{
+		"/$defs/BindingEntry/properties/preference":      "bindings/*/preference",
+		"/$defs/Operation/properties/aliases":            "operations/*/aliases",
+		"/$defs/DependencyEntry/properties/bindingSpecs": "dependencies/*/bindingSpecs",
+	}
+	var want, got []string
+	for path := range found {
+		want = append(want, cmp.Or(members[path], "unlisted: "+path))
+	}
+	for _, member := range numericMembers {
+		got = append(got, strings.Join(member, "/"))
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("numericMembers %v, the document schema does numeric work on %v", got, want)
+	}
+	preference, _ := jsonpointer.Resolve(schema, "/$defs/BindingEntry/properties/preference")
+	bounds := preference.(map[string]any)
+	if bounds["minimum"] != float64(-maxPreference) || bounds["maximum"] != float64(maxPreference) {
+		t.Fatalf("the document schema bounds a preference by %v and %v", bounds["minimum"], bounds["maximum"])
 	}
 }

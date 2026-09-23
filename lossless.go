@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -249,11 +249,48 @@ func exactPreference(raw json.RawMessage) (int64, error) {
 	if !schemacompiler.IsNumber(json.Number(token)) {
 		return 0, fmt.Errorf("%s is not a JSON number", token)
 	}
-	value, ok := new(big.Rat).SetString(token)
-	if !ok || !value.IsInt() || value.Num().CmpAbs(big.NewInt(maxPreference)) > 0 {
+	value, ok := preferenceValue(token)
+	if !ok {
 		return 0, fmt.Errorf("%s is not an integer from -%d through %d", token, maxPreference, maxPreference)
 	}
-	return value.Num().Int64(), nil
+	return value, nil
+}
+
+// preferenceValue decides exactly whether a JSON number token denotes an
+// integer in the §5.3 preference range, and returns it. Its work is linear in
+// the token whatever the exponent, where math/big would compute a power of
+// ten as large as the exponent.
+func preferenceValue(token string) (int64, bool) {
+	mantissa, exponent := token, "0"
+	if i := strings.IndexAny(token, "eE"); i >= 0 {
+		mantissa, exponent = token[:i], token[i+1:]
+	}
+	negative := strings.HasPrefix(mantissa, "-")
+	whole, fraction, _ := strings.Cut(strings.TrimPrefix(mantissa, "-"), ".")
+	significant := strings.TrimLeft(whole+fraction, "0")
+	if significant == "" {
+		return 0, true // zero, however it is written
+	}
+	// The value is ±digits × 10^scale, and digits ends in a nonzero digit.
+	digits := strings.TrimRight(significant, "0")
+	e, err := strconv.ParseInt(exponent, 10, 64)
+	if bound := int64(len(token)) + 17; err != nil || e > bound || e < -bound {
+		// No digit count offsets such an exponent: the value is below 1 or
+		// at least 10^17.
+		return 0, false
+	}
+	scale := e + int64(len(significant)-len(digits)) - int64(len(fraction))
+	if scale < 0 || int64(len(digits))+scale > 16 {
+		return 0, false // a fraction, or at least 10^16
+	}
+	value, _ := strconv.ParseInt(digits+strings.Repeat("0", int(scale)), 10, 64)
+	if value > maxPreference {
+		return 0, false
+	}
+	if negative {
+		value = -value
+	}
+	return value, true
 }
 
 // encodeObject encodes an OBI-defined object: typed, the method-less

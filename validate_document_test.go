@@ -1,8 +1,12 @@
 package openbindings
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -610,16 +614,15 @@ func TestValidateDocument_TransformReferencesDecodeTheirFragment(t *testing.T) {
 }
 
 // ParseDocument refuses what it cannot check: a document missing a required
-// member stays refused whatever numbers it holds elsewhere, and a preference
+// member stays refused whatever numbers it holds elsewhere, and an alias
 // beyond the numeric limits is not parsed.
 func TestParseDocument_RefusesWhatItCannotCheck(t *testing.T) {
 	if _, err := ParseDocument([]byte(`{"openbindings":"0.2.0","x-padding":1e10001}`)); !errors.As(err, new(*ValidationError)) {
 		t.Fatalf("a missing operations member is an OBI-D-02 violation, got %v", err)
 	}
-	preference := `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
-		"bindings":{"b":{"operation":"a","source":"s","preference":1e10001}}}`
-	if iface, err := ParseDocument([]byte(preference)); err == nil || iface != nil {
-		t.Fatalf("an unchecked preference must not parse: %v", err)
+	alias := `{"openbindings":"0.2.0","operations":{"a":{"aliases":["b",1e10001]}}}`
+	if iface, err := ParseDocument([]byte(alias)); err == nil || iface != nil || errors.As(err, new(*ValidationError)) {
+		t.Fatalf("an unchecked alias must not parse, without a violation: %v", err)
 	}
 	if _, err := ParseDocument([]byte(`{"a":1,"a":2}`)); !errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "OBI-D-01") {
 		t.Fatalf("an OBI-D-01 violation is a *ValidationError, got %T %v", err, err)
@@ -627,15 +630,149 @@ func TestParseDocument_RefusesWhatItCannotCheck(t *testing.T) {
 }
 
 // Input nested deeper than the decoder reads meets a resource limit: every
-// rule is inconclusive and none is violated (§10.5).
+// rule is inconclusive and none is violated (§10.5). Its declared version is
+// still read, however deep the input and wherever the member lies, so an
+// unsupported one is refused (OBI-T-04).
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
-	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + `}`
+	nested := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
+	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + nested + `}`
 	_, report, err := ValidateDocument([]byte(deep), ValidateOptions{})
 	if err != nil || report.Evidence["OBI-D-01"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
 		t.Fatalf("err %v, OBI-D-01 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Conclusion)
 	}
 	if _, err := ParseDocument([]byte(deep)); err == nil || errors.As(err, new(*ValidationError)) {
 		t.Fatalf("want a refusal that is not a violation, got %v", err)
+	}
+	unsupported := `{"x-deep":` + nested + `,"operations":{},"openbindings":"0.9.0"}`
+	if _, _, err := ValidateDocument([]byte(unsupported), ValidateOptions{}); !errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("ValidateDocument: want a version refusal, got %v", err)
+	}
+	if _, err := ParseDocument([]byte(unsupported)); !errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("ParseDocument: want a version refusal, got %v", err)
+	}
+}
+
+// The version is read from exactly one JSON value whose root object has one
+// openbindings member, as the decoder reads it, at any depth.
+func FuzzDeclaredVersionOf(f *testing.F) {
+	for _, seed := range []string{`{"openbindings":"0.9.0"}`, `{"openbindings":"0.9.0","openbindings":"0.9.0"}`, `{"a":[{"openbindings":"0.9.0"}],"openbindings":"1.0.0"}`,
+		`{"openbindings":"0.9.0"} {}`, `{"openbindings":"0.9.0",}`, `{"\u006fpenbindings":"0.9.0"}`, `[{"openbindings":"0.9.0"}]`, `{"openbindings":{"a":1}}`, `{"openbindings":"0.9.0"`} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if bytes.Count(data, []byte("["))+bytes.Count(data, []byte("{")) >= 10000 {
+			return // past the depth json.Valid reads, the reference below does not apply
+		}
+		got, _ := declaredVersionOf(data).(map[string]any)
+		want := map[string]any(nil)
+		if json.Valid(data) { // splitObject reads valid JSON only
+			if entries, err := splitObject(data); err == nil {
+				var declared []json.RawMessage
+				for _, entry := range entries {
+					if entry.name == "openbindings" {
+						declared = append(declared, entry.value)
+					}
+				}
+				var version any
+				if len(declared) == 1 && unmarshalJSON(declared[0], &version) == nil {
+					want = map[string]any{"openbindings": version}
+				}
+			}
+		}
+		if (got == nil) != (want == nil) {
+			t.Fatalf("%q: read %v, want %v", data, got, want)
+		}
+		gotVersion, gotString := got["openbindings"].(string)
+		wantVersion, wantString := want["openbindings"].(string)
+		if gotString != wantString || gotVersion != wantVersion {
+			t.Fatalf("%q: read %q, want %q", data, gotVersion, wantVersion)
+		}
+	})
+}
+
+// The document schema does numeric work on three members (numericMembers). A
+// number beyond the numeric limits there is never handed to the schema
+// library: a preference is decided exactly, an array is left inconclusive, and
+// the rest of the document is still checked.
+func TestValidateDocument_NumericMembersBeyondTheLimits(t *testing.T) {
+	var items []string
+	for i := range 21 { // more than 20 items, which the library hashes
+		items = append(items, fmt.Sprintf(`"a%d"`, i))
+	}
+	list := strings.Join(append(items, "1e1000001"), ",")
+	for name, tc := range map[string]struct {
+		document     string
+		inconclusive string
+		violated     []string
+	}{
+		"an alias": {
+			document:     `{"openbindings":"0.2.0","name":5,"operations":{"op":{"aliases":[` + list + `]}}}`,
+			inconclusive: "/operations/op/aliases",
+			violated:     []string{"/name"},
+		},
+		"a bindingSpecs item": {
+			document:     `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"dependencies":{"d":{"operation":"op","bindingSpecs":[` + list + `]}}}`,
+			inconclusive: "/dependencies/d/bindingSpecs",
+			violated:     []string{"/name"},
+		},
+		"a preference out of range": {
+			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+				"bindings":{"b":{"operation":"op","source":"s","preference":1e10001}}}`,
+			violated: []string{"/bindings/b/preference", "/name"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, report, _ := ValidateDocument([]byte(tc.document), ValidateOptions{})
+			var inconclusive string
+			var violated []string
+			for _, finding := range report.Findings {
+				if finding.Rule != "OBI-D-02" {
+					continue
+				}
+				if finding.Status == EvidenceInconclusive {
+					inconclusive = finding.Path
+				} else {
+					violated = append(violated, finding.Path)
+				}
+			}
+			slices.Sort(violated)
+			if inconclusive != tc.inconclusive || !slices.Equal(violated, tc.violated) {
+				t.Fatalf("OBI-D-02 inconclusive at %q, violated at %v", inconclusive, violated)
+			}
+			if _, err := ParseDocument([]byte(tc.document)); !errors.As(err, new(*ValidationError)) {
+				t.Fatalf("ParseDocument: want the violation, got %v", err)
+			}
+		})
+	}
+
+	inRange := `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+		"bindings":{"b":{"operation":"op","source":"s","preference":1.` + strings.Repeat("0", 5000) + `}}}`
+	if report := mustValidateDocument(t, inRange); report.Evidence["OBI-D-02"] != EvidenceSatisfied {
+		t.Fatalf("a preference of 1 in 5002 characters: OBI-D-02 %q", report.Evidence["OBI-D-02"])
+	}
+	if iface, err := ParseDocument([]byte(inRange)); err != nil || Value(iface.Bindings["b"].Preference) != 1 {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+}
+
+// A repeated member name is located at the object that repeats it.
+func TestValidateDocument_DuplicateNamesAreLocated(t *testing.T) {
+	document := []byte(`{"openbindings":"0.2.0","operations":{"op":{"examples":{"e":{"input":1,"input":2}}}}}`)
+	want := Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Path: "/operations/op/examples/e", Message: `repeats the member name "input"`}
+	if _, report, _ := ValidateDocument(document, ValidateOptions{}); !reflect.DeepEqual(report.Violations(), []Finding{want}) {
+		t.Fatalf("violations %+v", report.Violations())
+	}
+	var violation *ValidationError
+	if _, err := ParseDocument(document); !errors.As(err, &violation) || !reflect.DeepEqual(violation.Findings, []Finding{want}) {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+}
+
+// A leading byte-order mark is named as what OBI-D-01 refuses.
+func TestValidateDocument_ByteOrderMarkIsNamed(t *testing.T) {
+	_, report, _ := ValidateDocument(append([]byte{0xef, 0xbb, 0xbf}, `{"openbindings":"0.2.0","operations":{}}`...), ValidateOptions{})
+	if violations := report.Violations(); len(violations) != 1 || !strings.Contains(violations[0].Message, "byte-order mark") {
+		t.Fatalf("violations %+v", violations)
 	}
 }
 

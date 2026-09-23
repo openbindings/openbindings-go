@@ -6,10 +6,37 @@
 
 ### Fixed
 
+- **A document with a large number in its aliases no longer crashes
+  validation.** An operation's `aliases` or a dependency's `bindingSpecs`
+  holding more than 20 items, one of them a number beyond the numeric limits
+  of schema evaluation, made `ParseDocument` and `ValidateDocument` panic
+  inside the schema library, whose `uniqueItems` compares items as numbers.
+  Every member the document schema does numeric work on is now checked
+  (`preference`, `aliases`, `bindingSpecs`), and a test holds that list to
+  the embedded schema.
+- **A number beyond the limits in one member no longer hides the rest of
+  OBI-D-02.** The member is set aside and the rest of the document is still
+  checked. A `preference` is decided exactly, however it is spelled: `1e10001`
+  violates its range, and `1.` followed by 5,000 zeros is 1. An array holding
+  such a number is inconclusive at its location. The typed model decodes a
+  preference with the same check, whose work no longer grows with the
+  exponent.
+- **An unsupported version is refused however deeply the input nests.** The
+  declared version is read a token at a time, so input nested past the
+  decoder's 10,000 levels is refused under OBI-T-04 rather than reported
+  conformance-undetermined.
+- **A repeated member name is located.** The OBI-D-01 finding is at the
+  object that repeats it. A leading byte-order mark is named as such.
+- **The same document gets the same findings on every run.** The URI the
+  schema library is given for the document is derived from the document's
+  content rather than drawn at random, and messages locate a schema by its
+  JSON Pointer in the document rather than by that URI.
+- **Checking for repeated names and lone surrogates is linear in the
+  input.** It copied a value's location for every value, so deep and wide
+  input cost depth times width: a 2 MB document took 16 seconds to parse.
 - **Resource limits cover what the schema library reaches, and nothing
-  else.** OBI-D-02 holds only a binding's `preference`, the one member the
-  document schema does numeric work on, to the numeric limits of schema
-  evaluation. An operation's schema is held to them, and to a nesting depth
+  else.** OBI-D-02 holds only the members the document schema does numeric
+  work on to the numeric limits of schema evaluation. An operation's schema is held to them, and to a nesting depth
   of 256, over the values the library can reach from it: its schema and,
   transitively, what the references in them name. A large number in an
   unrelated extension or in source content no longer leaves every operation
@@ -203,6 +230,11 @@
 
 ### Changed
 
+- **Core's tests use only core.** The operation-contract witnesses from the
+  interfaces repository's comparison corpus are checked in `schemaprofile`,
+  which owns that profile, and the `canonicaljson` example is in
+  `canonicaljson`. The core package documentation no longer lists the
+  packages built on it.
 - **Core depends on no other package of the SDK.** It used `jsonvalue` for
   four helpers, and so compiled that package's invocation, schema-comparison
   and binding-specification helpers, `internal/value`, `internal/jstring`,

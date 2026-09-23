@@ -3,8 +3,6 @@ package openbindings
 import (
 	"encoding/json"
 	"testing"
-
-	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func TestExactNumbersAtSchemaBoundary(t *testing.T) {
@@ -29,10 +27,10 @@ func TestExactNumbersAtSchemaBoundary(t *testing.T) {
 	} {
 		t.Run(tc.schema+"/"+tc.input, func(t *testing.T) {
 			var schema, input any
-			if err := jsonvalue.Unmarshal([]byte(tc.schema), &schema); err != nil {
+			if err := unmarshalJSON([]byte(tc.schema), &schema); err != nil {
 				t.Fatal(err)
 			}
-			if err := jsonvalue.Unmarshal([]byte(tc.input), &input); err != nil {
+			if err := unmarshalJSON([]byte(tc.input), &input); err != nil {
 				t.Fatal(err)
 			}
 			if err := ValidateOperationInput(input, documentWithInput(schema, nil), "op"); (err == nil) != tc.valid {

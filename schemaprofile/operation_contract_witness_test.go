@@ -1,28 +1,24 @@
-package openbindings
+package schemaprofile
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/openbindings/openbindings-go/jsonvalue"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // Additional official SDK qualification, not universal Core conformance.
-// The comparison corpus supplies exact documents and authored point witnesses;
-// these assertions check operation-contract validation (OBI-T-16) against them.
+// The comparison corpus supplies exact documents and authored point witnesses:
+// values each side of a case accepts or refuses. These assertions check that
+// the core SDK's validation of values against an operation's contract
+// (OBI-T-16) agrees with them.
 func TestOfficialSDKQualification_OperationContractWitnesses(t *testing.T) {
-	dir := os.Getenv("OB_INTERFACES_CORPUS")
-	if dir == "" {
-		dir = filepath.Join("..", "interfaces", "conformance")
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "comparison", "exact-values.json"))
+	raw, err := os.ReadFile(filepath.Join(comparisonCorpusDir(t), "comparison", "exact-values.json"))
 	if err != nil {
-		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
-			t.Fatal(err)
-		}
-		t.Skip("interfaces corpus unavailable")
+		t.Fatal(err)
 	}
 	var pack struct {
 		Scope, Profile string
@@ -44,7 +40,7 @@ func TestOfficialSDKQualification_OperationContractWitnesses(t *testing.T) {
 		// Corpus well-formedness is separate from the stronger snapshot assertions.
 		t.Run("fixture-validity/"+c.ID, func(t *testing.T) {
 			for _, raw := range []string{c.LeftJSON, c.RightJSON} {
-				if _, _, err := ValidateDocument([]byte(raw), ValidateOptions{}); err != nil {
+				if _, _, err := openbindings.ValidateDocument([]byte(raw), openbindings.ValidateOptions{}); err != nil {
 					t.Fatalf("non-conformant fixture document: %v", err)
 				}
 			}
@@ -57,15 +53,17 @@ func TestOfficialSDKQualification_OperationContractWitnesses(t *testing.T) {
 			want      bool
 		}{{"target", c.LeftJSON, c.Witness.TargetValid}, {"candidate", c.RightJSON, c.Witness.CandidateValid}} {
 			t.Run(c.ID+"/"+side.name, func(t *testing.T) {
-				var iface Interface
-				if err := jsonvalue.Unmarshal([]byte(side.raw), &iface); err != nil {
+				var iface openbindings.Interface
+				if err := json.Unmarshal([]byte(side.raw), &iface); err != nil {
 					t.Fatal(err)
 				}
+				decoder := json.NewDecoder(strings.NewReader(c.Witness.InstanceJSON))
+				decoder.UseNumber()
 				var sample any
-				if err := jsonvalue.Unmarshal([]byte(c.Witness.InstanceJSON), &sample); err != nil {
+				if err := decoder.Decode(&sample); err != nil {
 					t.Fatal(err)
 				}
-				compiled, err := CompileOperationSchema(&iface, "test", c.Direction)
+				compiled, err := openbindings.CompileOperationSchema(&iface, "test", c.Direction)
 				if err != nil {
 					t.Fatal(err)
 				}

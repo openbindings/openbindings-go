@@ -4,14 +4,9 @@
 // against operation contracts (OBI-T-16), and the Core-defined constants
 // (versions and media type).
 //
-// The package is dependency-light and format-agnostic, and covers what the
-// OpenBindings specification defines. The layers above it are separate
-// sub-packages mirroring the published interface family: invoke
-// (binding-invoker / operation-invoker runtime), synthesize
-// (interface-synthesizer / source-inspector), and compare
-// (schema-comparison). Binding formats (openapi, asyncapi, graphql, grpc,
-// mcp, usage, ...) live in formats/* submodules and plug into those
-// sub-packages' seams.
+// The package covers what the core OpenBindings specification defines, and
+// nothing a binding specification or a published interface defines: those
+// build on it from outside.
 //
 // # Documents
 //
@@ -28,9 +23,9 @@
 // document schema (OBI-D-02).)
 //
 // The document rules judge the JSON a document is: ValidateDocument judges
-// the bytes, and Validate the encoding of a host object, so both reach the
-// same evidence for the same document, including one the typed model cannot
-// carry. Validate returns a *ValidationError listing every violation it
+// the bytes, and Validate the encoding of a host object, so for the same
+// document both reach the same evidence on every rule but OBI-D-01, which
+// only the exact bytes decide and Validate leaves inconclusive. Validate returns a *ValidationError listing every violation it
 // establishes, which makes it a gate. A nil error is not conformance: a rule this SDK
 // cannot decide is inconclusive, not violated. OBI-D-18 takes a
 // [TransformEngine], which the SDK does not carry: an application gives one
@@ -45,7 +40,9 @@
 //
 // JSON Schema fields preserve object and boolean schema roots. Every
 // OBI declares its target spec version via the top-level openbindings
-// field, checked against [MinSupportedVersion] through [MaxTestedVersion].
+// field, and a version is accepted exactly when [IsSupportedVersion] says
+// so: every release of the 0.2 line. [MinSupportedVersion] through
+// [MaxTestedVersion] is the narrower range this SDK is tested against.
 //
 // # An Exact Document Model
 //
@@ -74,9 +71,10 @@
 // string member, or a binding preference that is not an integer number in
 // range. ValidateDocument still judges such a document in full, except input
 // OBI-D-01 refuses (not UTF-8, or repeating a member name), where which values
-// the document holds is not established, and a document holding a lone
+// the document holds is not established; a document holding a lone
 // surrogate, where it decides OBI-D-01 and leaves the other rules
-// inconclusive.
+// inconclusive; and input nested deeper than encoding/json reads (10000
+// levels), where every rule is inconclusive.
 //
 // A typed field alone states its member: an Unknown or Extensions entry
 // named like a typed member is never encoded, so a nil field is absent.
@@ -90,19 +88,4 @@
 // JSON marshaling and unmarshaling follow standard library semantics:
 // concurrent calls on different values are safe; concurrent calls on the
 // same value require synchronization.
-//
-// # Subpackages
-//
-//   - invoke: the invocation runtime — operation invokers, the
-//     cardinality-agnostic Invocation handle, context resolution, and the
-//     seams (binding invokers, transform evaluators, consumer hooks)
-//   - synthesize: interface synthesis and source inspection
-//   - httpdiscovery: optional well-known HTTP discovery of existing OBIs
-//   - acquire: application-level ordering of direct retrieval, discovery,
-//     and optional synthesis
-//   - compare: interface and operation compatibility checking
-//   - schemavalidate: validation against standalone JSON Schemas, such as a
-//     protocol's own, outside any OBI
-//   - canonicaljson: RFC 8785 (JCS) deterministic JSON serialization
-//   - schemaprofile: the OpenBindings Schema Comparison Profile (OB-2020-12)
 package openbindings

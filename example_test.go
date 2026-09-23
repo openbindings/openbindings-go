@@ -7,7 +7,6 @@ import (
 	"log"
 
 	"github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/canonicaljson"
 )
 
 func ExampleInterface_basic() {
@@ -154,18 +153,6 @@ func ExampleSource() {
 	// Output:
 	// openapi@3.1
 	// https://api.example.com/openapi.yaml
-}
-
-func Example_canonicaljson() {
-	data := map[string]any{
-		"z": 1,
-		"a": 2,
-		"m": 3,
-	}
-
-	out, _ := canonicaljson.Marshal(data)
-	fmt.Println(string(out))
-	// Output: {"a":2,"m":3,"z":1}
 }
 
 func ExampleTransform() {

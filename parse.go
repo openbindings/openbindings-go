@@ -16,10 +16,11 @@ import (
 // *VersionRefusalError, and violations of OBI-D-01 or the document schema are
 // a *ValidationError, as from Interface.Validate and ValidateDocument. A
 // document either check could not be applied to (input nested deeper than
-// the decoder reads, or a binding preference beyond the numeric limits of
-// schema evaluation) is not parsed, and returns another error, as is one
-// holding an escape of a lone UTF-16 surrogate, which the document model
-// does not carry.
+// the decoder reads, or an operation's aliases or a dependency's
+// bindingSpecs holding a number beyond the numeric limits of schema
+// evaluation) is not parsed, and returns another error, as is one holding an
+// escape of a lone UTF-16 surrogate, which the document model does not
+// carry. The declared version is read however deep the input nests.
 func ParseDocument(data []byte) (*Interface, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
@@ -32,7 +33,7 @@ func ParseDocument(data []byte) (*Interface, error) {
 		if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
 			return nil, fmt.Errorf("parse document: %w", err)
 		}
-		return nil, &ValidationError{Findings: []Finding{{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err)}}}
+		return nil, &ValidationError{Findings: []Finding{d01Violation(err)}}
 	}
 	if refusal := declaredVersionRefusal(raw); refusal != nil {
 		return nil, refusal

@@ -3,9 +3,13 @@ package openbindings
 import (
 	"encoding/json"
 	"errors"
+	"math/big"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
 
 // decodedJSON decodes data to a generic JSON value for comparing documents as
@@ -106,6 +110,54 @@ func TestDocumentModel_PreferenceIsAnExactInteger(t *testing.T) {
 			t.Fatalf("%s decoded as %v, want %d", spelling, binding.Preference, want)
 		}
 	}
+}
+
+// preferenceValue decides the §5.3 range exactly however a number is spelled,
+// with work that does not grow with its exponent.
+func TestPreferenceValue(t *testing.T) {
+	for token, want := range map[string]int64{
+		"0": 0, "-0": 0, "0.000e-5": 0, "0e99999999999999999999": 0,
+		"1": 1, "1.0": 1, "10e-1": 1, "0.0001e4": 1, "1e3": 1000, "-12.5e1": -125,
+		"1." + strings.Repeat("0", 5000):           1,
+		"1" + strings.Repeat("0", 5000) + "e-5000": 1,
+		"9007199254740991":                         9007199254740991, "-9007199254740991": -9007199254740991,
+		"9.007199254740991e15": 9007199254740991,
+	} {
+		if value, ok := preferenceValue(token); !ok || value != want {
+			t.Errorf("%.30s: %d, %v; want %d", token, value, ok, want)
+		}
+	}
+	for _, token := range []string{
+		"9007199254740992", "-9007199254740992", "1e16", "1.5", "1e-1", "0.55e1",
+		"1e10001", "1e99999999999999999999", "1e-99999999999999999999", "5e-9999999",
+	} {
+		if value, ok := preferenceValue(token); ok {
+			t.Errorf("%s: accepted as %d", token, value)
+		}
+	}
+}
+
+// preferenceValue agrees with math/big wherever math/big's work is small.
+func FuzzPreferenceValue(f *testing.F) {
+	for _, seed := range []string{"0", "-0", "1.0", "10e-1", "9007199254740991", "9007199254740992", "-12.5e1", "0.0001e4", "1e-1"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, token string) {
+		if !schemacompiler.IsNumber(json.Number(token)) {
+			return
+		}
+		if i := strings.IndexAny(token, "eE"); i >= 0 {
+			if e, err := strconv.Atoi(token[i+1:]); err != nil || e > 400 || e < -400 {
+				return
+			}
+		}
+		want, ok := new(big.Rat).SetString(token)
+		inRange := ok && want.IsInt() && want.Num().CmpAbs(big.NewInt(maxPreference)) <= 0
+		value, got := preferenceValue(token)
+		if got != inRange || got && value != want.Num().Int64() {
+			t.Fatalf("%s: %d, %v; math/big says %v in range %v", token, value, got, want, inRange)
+		}
+	})
 }
 
 // Programs state presence through the typed fields alone: set a member with

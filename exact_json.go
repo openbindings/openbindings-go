@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -40,16 +39,35 @@ func (e *loneSurrogateError) Error() string {
 	return where + " holds an escape of a lone UTF-16 surrogate, which this SDK does not carry"
 }
 
+// duplicateNameError reports an object that repeats a member name, which
+// OBI-D-01 refuses.
+type duplicateNameError struct {
+	// location is the JSON Pointer of the object.
+	location string
+	name     string
+}
+
+func (e *duplicateNameError) Error() string {
+	return "the object at " + strconv.Quote(e.location) + " repeats the member name " + strconv.Quote(e.name)
+}
+
+// byteOrderMark is the UTF-8 encoding of U+FEFF.
+var byteOrderMark = []byte("\xef\xbb\xbf")
+
 // verifyExactJSON checks what decoding JSON into Go values would otherwise
-// lose without error: that the input is one valid UTF-8 JSON value, and that
-// no object in it repeats a member name, which OBI-D-01 requires; and that no
-// string escapes a lone UTF-16 surrogate, which the document model cannot
-// carry. encoding/json replaces invalid UTF-8 and lone surrogates and keeps
-// only the last of repeated names. A duplicate name is reported before a lone
-// surrogate: the one breaks OBI-D-01, the other only exceeds the model.
+// lose without error: that the input is one valid UTF-8 JSON value with no
+// leading byte-order mark, and that no object in it repeats a member name,
+// which OBI-D-01 requires; and that no string escapes a lone UTF-16
+// surrogate, which the document model cannot carry. encoding/json replaces
+// invalid UTF-8 and lone surrogates and keeps only the last of repeated names.
+// A duplicate name is reported before a lone surrogate: the one breaks
+// OBI-D-01, the other only exceeds the model.
 func verifyExactJSON(b []byte) error {
 	if !utf8.Valid(b) {
 		return errors.New("not valid UTF-8")
+	}
+	if bytes.HasPrefix(b, byteOrderMark) {
+		return errors.New("begins with a byte-order mark")
 	}
 	if !json.Valid(b) {
 		var discard any
@@ -63,7 +81,7 @@ func verifyExactJSON(b []byte) error {
 		return errors.New("not valid JSON")
 	}
 	var scan exactScan
-	if _, err := scan.value(b, skipJSONSpace(b, 0), nil); err != nil {
+	if _, err := scan.value(b, skipJSONSpace(b, 0)); err != nil {
 		return err
 	}
 	if scan.lone != nil {
@@ -74,13 +92,32 @@ func verifyExactJSON(b []byte) error {
 
 // exactScan walks valid JSON for repeated member names and lone surrogates.
 type exactScan struct {
+	path []scanStep          // where the value being walked lies
 	lone *loneSurrogateError // the first lone surrogate, in document order
 }
 
-// value walks the JSON value starting at b[i], at the given reference
-// tokens, and returns the index just past it, or an error at the first
-// object that repeats a member name.
-func (s *exactScan) value(b []byte, i int, tokens []string) (int, error) {
+// scanStep is one reference token of the scan's path: a member name, or an
+// array index, which is formatted only when a location is reported.
+type scanStep struct {
+	name  string
+	index int // -1 for a member name
+}
+
+// location returns the scan's path as a JSON Pointer.
+func (s *exactScan) location() string {
+	tokens := make([]string, len(s.path))
+	for i, step := range s.path {
+		tokens[i] = step.name
+		if step.index >= 0 {
+			tokens[i] = strconv.Itoa(step.index)
+		}
+	}
+	return jsonpointer.Format(tokens...)
+}
+
+// value walks the JSON value starting at b[i] and returns the index just
+// past it, or an error at the first object that repeats a member name.
+func (s *exactScan) value(b []byte, i int) (int, error) {
 	switch b[i] {
 	case '{':
 		var seen map[string]struct{}
@@ -89,16 +126,18 @@ func (s *exactScan) value(b []byte, i int, tokens []string) (int, error) {
 			nameEnd := jsonValueEnd(b, i)
 			name, lone := exactString(b[i:nameEnd])
 			if lone && s.lone == nil {
-				s.lone = &loneSurrogateError{location: jsonpointer.Format(tokens...), name: true}
+				s.lone = &loneSurrogateError{location: s.location(), name: true}
 			}
 			if _, repeated := seen[name]; repeated {
-				return 0, fmt.Errorf("duplicate object key %q", name)
+				return 0, &duplicateNameError{location: s.location(), name: name}
 			}
 			if seen == nil {
 				seen = map[string]struct{}{}
 			}
 			seen[name] = struct{}{}
-			end, err := s.value(b, skipJSONSpace(b, skipJSONSpace(b, nameEnd)+1), append(tokens[:len(tokens):len(tokens)], name))
+			s.path = append(s.path, scanStep{name: name, index: -1})
+			end, err := s.value(b, skipJSONSpace(b, skipJSONSpace(b, nameEnd)+1))
+			s.path = s.path[:len(s.path)-1]
 			if err != nil {
 				return 0, err
 			}
@@ -110,21 +149,24 @@ func (s *exactScan) value(b []byte, i int, tokens []string) (int, error) {
 		return i + 1, nil
 	case '[':
 		i = skipJSONSpace(b, i+1)
-		for index := 0; b[i] != ']'; index++ {
-			end, err := s.value(b, i, append(tokens[:len(tokens):len(tokens)], strconv.Itoa(index)))
+		s.path = append(s.path, scanStep{index: 0})
+		for b[i] != ']' {
+			end, err := s.value(b, i)
 			if err != nil {
 				return 0, err
 			}
+			s.path[len(s.path)-1].index++
 			i = skipJSONSpace(b, end)
 			if b[i] == ',' {
 				i = skipJSONSpace(b, i+1)
 			}
 		}
+		s.path = s.path[:len(s.path)-1]
 		return i + 1, nil
 	case '"':
 		end := jsonValueEnd(b, i)
 		if _, lone := exactString(b[i:end]); lone && s.lone == nil {
-			s.lone = &loneSurrogateError{location: jsonpointer.Format(tokens...)}
+			s.lone = &loneSurrogateError{location: s.location()}
 		}
 		return end, nil
 	default:
@@ -189,7 +231,7 @@ func hexUnit(digits []byte) uint16 {
 }
 
 // unmarshalJSON decodes exactly one JSON value into target, keeping numbers
-// as json.Number, in input verifyExactJSON has accepted.
+// as json.Number. The decoding is exact on input verifyExactJSON accepts.
 func unmarshalJSON(data []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -200,13 +242,6 @@ func unmarshalJSON(data []byte, target any) error {
 		return errors.New("JSON holds more than one value")
 	}
 	return nil
-}
-
-// jsonStringValue decodes a JSON string token of input verifyExactJSON has
-// accepted, which holds no lone surrogate.
-func jsonStringValue(token []byte) (string, error) {
-	value, _ := exactString(token)
-	return value, nil
 }
 
 type objectEntry struct {
@@ -228,10 +263,8 @@ func splitObject(b []byte) ([]objectEntry, error) {
 	i = skipJSONSpace(b, i+1)
 	for b[i] != '}' {
 		nameEnd := jsonValueEnd(b, i)
-		name, err := jsonStringValue(b[i:nameEnd])
-		if err != nil {
-			return nil, err
-		}
+		// verifyExactJSON refused a name holding a lone surrogate.
+		name, _ := exactString(b[i:nameEnd])
 		start := skipJSONSpace(b, skipJSONSpace(b, nameEnd)+1) // past the colon
 		end := jsonValueEnd(b, start)
 		entries = append(entries, objectEntry{name: name, value: b[start:end]})

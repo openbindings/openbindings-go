@@ -155,11 +155,6 @@ func isUnsupportedPrerelease(v string) (bool, error) {
 	return !inRange, nil
 }
 
-// semver represents a parsed Semantic Versioning 2.0.0 value. Its numeric
-// identifiers are kept as their digits: SemVer bounds no number, so none is
-// converted to a machine integer that could overflow.
-//
-// Build metadata is ignored for precedence comparison per SemVer 2.0.0 §10.
 // releaseLine names the versions refusal treats as one release line with v:
 // its major version, or while pre-1.0 its minor version.
 func releaseLine(v semver) string {
@@ -169,12 +164,15 @@ func releaseLine(v semver) string {
 	return v.major + ".x"
 }
 
+// semver represents a parsed Semantic Versioning 2.0.0 value. Its numeric
+// identifiers are kept as their digits: SemVer bounds no number, so none is
+// converted to a machine integer that could overflow. Build metadata is not
+// kept: it takes no part in precedence (SemVer 2.0.0 §10).
 type semver struct {
 	major      string
 	minor      string
 	patch      string
 	preRelease []string // empty if no pre-release; otherwise the dot-separated identifiers
-	build      string   // raw build metadata; informational only
 }
 
 // semverPattern is the official SemVer 2.0.0 regex from semver.org.
@@ -195,9 +193,6 @@ func parseSemverStrict(v string) (semver, error) {
 	out := semver{major: m[1], minor: m[2], patch: m[3]}
 	if m[4] != "" {
 		out.preRelease = strings.Split(m[4], ".")
-	}
-	if m[5] != "" {
-		out.build = m[5]
 	}
 	return out, nil
 }

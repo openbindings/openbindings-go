@@ -3,6 +3,7 @@ package openbindings
 import (
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -82,4 +83,21 @@ func FuzzExactString(f *testing.F) {
 			t.Fatalf("%s: a lone surrogate encoding/json kept: %q", token, want)
 		}
 	})
+}
+
+// The exact scan's work is linear in its input: the location of a value is
+// formatted only when one is reported, not copied for every value, which
+// made deep and wide input cost depth times width.
+func TestVerifyExactJSON_WorkIsLinear(t *testing.T) {
+	data := []byte(`{"openbindings":"0.2.0","operations":{},"x-a":` + strings.Repeat("[", 2000) + strings.Repeat("0,", 19999) + "0" + strings.Repeat("]", 2000) + `}`)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	if err := verifyExactJSON(data); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 20*uint64(len(data)) {
+		t.Fatalf("verifyExactJSON allocated %d bytes for %d bytes of input", allocated, len(data))
+	}
 }

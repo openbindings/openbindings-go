@@ -29,16 +29,29 @@ type Problem struct {
 var kindPrinter = message.NewPrinter(language.English)
 
 // Outcome classifies a backend validation error. mismatch is true for an
-// established mismatch between value and schema, with its problems. It is
-// false for anything that reached no verdict: an error that is not a
-// validation result, or a reference cycle that never advances, which leaves
-// the schema unevaluable.
+// established mismatch between value and schema, with its problems: one per
+// failed constraint, sorted by location and message. It is false for
+// anything that reached no verdict: an error that is not a validation result,
+// or a reference cycle that never advances, which leaves the schema
+// unevaluable.
+//
+// An anyOf or oneOf that no alternative satisfies is one problem at its own
+// location, stating what each alternative lacked; a report of one problem per
+// alternative would read as several defects. A member name that fails
+// propertyNames is located at the member.
 func Outcome(err error) (problems []Problem, mismatch bool) {
 	var ve *jsonschema.ValidationError
 	if !errors.As(err, &ve) || hasRefCycle(ve) {
 		return nil, false
 	}
-	return Problems(ve), true
+	problems = collect(ve)
+	slices.SortStableFunc(problems, func(a, b Problem) int {
+		if order := slices.Compare(a.Location, b.Location); order != 0 {
+			return order
+		}
+		return strings.Compare(a.Message, b.Message)
+	})
+	return problems, true
 }
 
 func hasRefCycle(ve *jsonschema.ValidationError) bool {
@@ -51,27 +64,6 @@ func hasRefCycle(ve *jsonschema.ValidationError) bool {
 		}
 	}
 	return false
-}
-
-// Problems flattens a backend validation error into one problem per failed
-// constraint, sorted by location and message. An anyOf or oneOf that no
-// alternative satisfies is one problem at its own location, stating what each
-// alternative lacked; a report of one problem per alternative would read as
-// several defects. A member name that fails propertyNames is located at the
-// member.
-func Problems(err error) []Problem {
-	var ve *jsonschema.ValidationError
-	if !errors.As(err, &ve) {
-		return []Problem{{Message: err.Error()}}
-	}
-	problems := collect(ve)
-	slices.SortStableFunc(problems, func(a, b Problem) int {
-		if order := slices.Compare(a.Location, b.Location); order != 0 {
-			return order
-		}
-		return strings.Compare(a.Message, b.Message)
-	})
-	return problems
 }
 
 func collect(ve *jsonschema.ValidationError) []Problem {
@@ -178,18 +170,18 @@ const (
 	maxNumberExponent = 10000
 )
 
-// ErrNumericLimit is wrapped by NumericLimit's error.
-var ErrNumericLimit = errors.New("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000)")
+// errNumericLimit is NumericLimit's error.
+var errNumericLimit = errors.New("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000)")
 
 // NumericLimit reports the first number in v, in key order, beyond the
 // numeric limits of schema evaluation: its location in v as a JSON Pointer
-// ("" for v itself) and ErrNumericLimit. It returns a nil error when v holds
+// ("" for v itself) and errNumericLimit. It returns a nil error when v holds
 // none. Only a json.Number can exceed them; Go's numeric types cannot.
 func NumericLimit(v any) (location string, err error) {
 	switch v := v.(type) {
 	case json.Number:
 		if !withinNumericLimits(string(v)) {
-			return "", ErrNumericLimit
+			return "", errNumericLimit
 		}
 	case []any:
 		for i, item := range v {

@@ -1,9 +1,11 @@
 package openbindings
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -65,14 +67,19 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // the JSON they hold. It returns the decoded document when the document model
 // can carry it exactly (see LosslessFields), the report, and the same
 // violation error Interface.Validate returns. The rules never depend on that
-// decoding: a document the model cannot carry is still judged in full. Input
-// that OBI-D-01 refuses (not JSON, not UTF-8, or repeating a member name) is
-// reported as that rule's violation, with every other rule inconclusive,
-// since which of its values the document holds is not established.
+// decoding: a document the model cannot carry is still judged in full, except
+// where the SDK cannot read it in full. Input that OBI-D-01 refuses (not JSON,
+// not UTF-8, or repeating a member name) is reported as that rule's
+// violation, with every other rule inconclusive, since which of its values
+// the document holds is not established. A document holding a string that
+// escapes a lone UTF-16 surrogate has OBI-D-01 decided and every other rule
+// inconclusive, and input nested deeper than encoding/json reads (10000
+// levels) has every rule inconclusive.
 //
 // A document declaring a well-formed version outside the supported set is not
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
-// (OBI-T-04). The version is read first, whenever a JSON decoder can read it.
+// (OBI-T-04). The version is read first, from any input that is one JSON
+// value, however deeply it nests.
 // options gives the capabilities validation does not carry itself, as for
 // Interface.Validate.
 func ValidateDocument(data []byte, options ValidateOptions) (*Interface, ValidationReport, error) {
@@ -92,7 +99,7 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 			// name. The other rules read values this SDK cannot carry.
 			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01")
 		default:
-			c.violated("OBI-D-01", "", fmt.Sprintf("not a JSON document this specification accepts: %v", err))
+			c.findings = append(c.findings, d01Violation(err))
 			c.inconclusiveExcept("the input is not a JSON document, so this rule was not checked", "OBI-D-01")
 		}
 		report, verr := c.conclude()
@@ -108,6 +115,15 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 		return nil, report, verr
 	}
 	return &iface, report, verr
+}
+
+// d01Violation is the OBI-D-01 finding for input verifyExactJSON refuses,
+// located at the object that repeats a member name when that is why.
+func d01Violation(err error) Finding {
+	if duplicate := (*duplicateNameError)(nil); errors.As(err, &duplicate) {
+		return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Path: duplicate.location, Message: "repeats the member name " + strconv.Quote(duplicate.name)}
+	}
+	return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err)}
 }
 
 // documentView encodes a host document and decodes the generic JSON view the
@@ -141,32 +157,53 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 }
 
 // declaredVersionOf reads the version input declares from its bytes, for input
-// OBI-D-01 refuses: the version decision precedes interpreting a document
-// under this version's rules, OBI-D-01 included (§10.1). The version is read
-// only where it is established: the input is JSON, and its root object has
-// exactly one openbindings member. The returned view is nil otherwise.
+// OBI-D-01 refuses or the decoder cannot read: the version decision precedes
+// interpreting a document under this version's rules, OBI-D-01 included
+// (§10.1). The version is read only where it is established: the input is one
+// JSON value, and its root object has exactly one openbindings member. The
+// returned view is nil otherwise. The input is read a token at a time, which
+// holds however deeply it nests.
 func declaredVersionOf(data []byte) any {
-	if !json.Valid(data) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return nil
 	}
-	entries, err := splitObject(data)
-	if err != nil {
-		return nil
-	}
-	var declared []json.RawMessage
-	for _, entry := range entries {
-		if entry.name == "openbindings" {
-			declared = append(declared, entry.value)
+	var declared []json.Token
+	for decoder.More() {
+		name, err := decoder.Token()
+		if err != nil {
+			return nil
+		}
+		value, err := decoder.Token()
+		if err != nil {
+			return nil
+		}
+		if _, opens := value.(json.Delim); opens {
+			for depth := 1; depth > 0; {
+				token, err := decoder.Token()
+				if err != nil {
+					return nil
+				}
+				switch token {
+				case json.Delim('{'), json.Delim('['):
+					depth++
+				case json.Delim('}'), json.Delim(']'):
+					depth--
+				}
+			}
+		}
+		if name == "openbindings" {
+			declared = append(declared, value)
 		}
 	}
-	if len(declared) != 1 {
+	if _, err := decoder.Token(); err != nil { // the root's closing brace
 		return nil
 	}
-	var version any
-	if unmarshalJSON(declared[0], &version) != nil {
+	if _, err := decoder.Token(); err != io.EOF || len(declared) != 1 {
 		return nil
 	}
-	return map[string]any{"openbindings": version}
+	return map[string]any{"openbindings": declared[0]}
 }
 
 // declaredVersionRefusal applies OBI-T-04 to the version a document's generic

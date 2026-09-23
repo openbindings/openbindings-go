@@ -212,8 +212,8 @@ func TestParseSemverStrict(t *testing.T) {
 		{name: "valid large numbers", input: "10.20.30", want: semver{major: "10", minor: "20", patch: "30"}},
 		{name: "surrounding whitespace", input: "  1.2.3  ", wantErr: true},
 		{name: "valid with prerelease", input: "1.0.0-alpha.1", want: semver{major: "1", minor: "0", patch: "0", preRelease: []string{"alpha", "1"}}},
-		{name: "valid with build", input: "1.0.0+exp", want: semver{major: "1", minor: "0", patch: "0", build: "exp"}},
-		{name: "valid with pre + build", input: "1.0.0-beta+exp", want: semver{major: "1", minor: "0", patch: "0", preRelease: []string{"beta"}, build: "exp"}},
+		{name: "valid with build", input: "1.0.0+exp", want: semver{major: "1", minor: "0", patch: "0"}},
+		{name: "valid with pre + build", input: "1.0.0-beta+exp", want: semver{major: "1", minor: "0", patch: "0", preRelease: []string{"beta"}}},
 		{name: "empty string", input: "", wantErr: true},
 		{name: "too few parts", input: "1.2", wantErr: true},
 		{name: "too many parts", input: "1.2.3.4", wantErr: true},
@@ -238,11 +238,20 @@ func TestParseSemverStrict(t *testing.T) {
 				if !slices.Equal(got.preRelease, tt.want.preRelease) {
 					t.Errorf("parseSemverStrict(%q).preRelease = %v, want %v", tt.input, got.preRelease, tt.want.preRelease)
 				}
-				if got.build != tt.want.build {
-					t.Errorf("parseSemverStrict(%q).build = %q, want %q", tt.input, got.build, tt.want.build)
-				}
 			}
 		})
+	}
+}
+
+// Build metadata takes no part in precedence (SemVer 2.0.0 §10).
+func TestCompareSemver_BuildMetadataTakesNoPart(t *testing.T) {
+	a, errA := parseSemverStrict("1.2.3+exp.a")
+	b, errB := parseSemverStrict("1.2.3+exp.b")
+	if errA != nil || errB != nil {
+		t.Fatal(errA, errB)
+	}
+	if got := compareSemver(a, b); got != 0 {
+		t.Fatalf("compareSemver = %d, want 0", got)
 	}
 }
 
@@ -268,7 +277,6 @@ func TestCompareSemver(t *testing.T) {
 		{name: "alpha < alpha.1 (shorter < longer)", a: semver{major: "1", preRelease: []string{"alpha"}}, b: semver{major: "1", preRelease: []string{"alpha", "1"}}, want: -1},
 		{name: "numeric < alphanumeric prerelease", a: semver{major: "1", preRelease: []string{"1"}}, b: semver{major: "1", preRelease: []string{"alpha"}}, want: -1},
 		{name: "numeric prerelease ordering", a: semver{major: "1", preRelease: []string{"1"}}, b: semver{major: "1", preRelease: []string{"2"}}, want: -1},
-		{name: "build metadata ignored", a: semver{major: "1", build: "exp.a"}, b: semver{major: "1", build: "exp.b"}, want: 0},
 	}
 
 	for _, tt := range tests {

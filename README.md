@@ -35,7 +35,10 @@ none, so an application passes its `TransformEngine` in
 memory, where OBI-D-01 is inconclusive because a host object no longer
 carries the exact input bytes. The rules judge the JSON a document is, never
 its typed decoding, so a document the typed model cannot carry is still judged
-in full. Both return a `*ValidationError` beside the
+in full, with two exceptions the SDK cannot read in full: a document holding a
+string that escapes a lone UTF-16 surrogate, where OBI-D-01 is decided and
+every other rule is inconclusive, and input nested deeper than encoding/json
+reads (10000 levels), where every rule is inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
@@ -43,8 +46,11 @@ OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
 OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
 embedded at build time. To exercise the core conformance corpus, check out the
-spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and
-run `go test ./...` from the root module.
+spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
+point `OB_SPEC_CORPUS` at its `conformance` directory, and run
+`go test . ./internal/jsonpointer ./internal/schemacompiler` from the root
+module. On this development branch the rest of the module is being
+reconnected to the core one package at a time and does not all build yet.
 
 The cross-SDK equivalence policy and corresponding public names are recorded
 in [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
