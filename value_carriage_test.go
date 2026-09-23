@@ -35,7 +35,7 @@ func TestExactNumbersAtSchemaBoundary(t *testing.T) {
 			if err := jsonvalue.Unmarshal([]byte(tc.input), &input); err != nil {
 				t.Fatal(err)
 			}
-			if err := ValidateAgainstSchema(input, schema, nil); (err == nil) != tc.valid {
+			if err := ValidateAgainstSchema(input, schema); (err == nil) != tc.valid {
 				t.Fatalf("valid=%v, error=%v", tc.valid, err)
 			}
 		})

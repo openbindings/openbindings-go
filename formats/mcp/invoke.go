@@ -493,7 +493,7 @@ func emitToolResult(
 				Code: invoke.ErrCodeResponseError,
 			}, false
 		}
-		if err := openbindings.ValidateAgainstSchema(value, applicationOutputSchema, nil); err != nil {
+		if err := openbindings.ValidateAgainstSchema(value, applicationOutputSchema); err != nil {
 			return &invoke.InvocationError{
 				Code: invoke.ErrCodeResponseError,
 			}, false

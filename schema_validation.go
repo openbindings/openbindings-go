@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
+	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema/kind"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -83,8 +84,8 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema JSONSchem
 			return
 		}
 		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
-			for _, line := range splitSchemaError(verr) {
-				c.violated("OBI-D-17", prefix, "not a well-formed JSON Schema 2020-12 schema: "+line)
+			for _, problem := range schemaProblems(verr) {
+				c.violated("OBI-D-17", prefix+jsonPointer(problem.location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.message)
 			}
 		} else {
 			if key != "" {
@@ -105,8 +106,8 @@ func validateAgainstOBISchema(c *ruleChecks, doc any) {
 		return
 	}
 	if verr := compiledOBISchema.Validate(doc); verr != nil {
-		for _, line := range splitSchemaError(verr) {
-			c.violated("OBI-D-02", "", "schema validation: "+line)
+		for _, problem := range schemaProblems(verr) {
+			c.violated("OBI-D-02", jsonPointer(problem.location...), "does not validate against the document schema: "+problem.message)
 		}
 	}
 }
@@ -167,7 +168,7 @@ func checkExamples(c *ruleChecks, i Interface, view func() any) {
 			if len(provided) == 0 {
 				continue
 			}
-			path := fmt.Sprintf("operations[%q].%s", opKey, position)
+			path := jsonPointer("operations", opKey, position)
 			switch schemaGraphLocality(schema, view, resources) {
 			case graphReachesExternal:
 				continue
@@ -187,8 +188,9 @@ func checkExamples(c *ruleChecks, i Interface, view func() any) {
 					value = ex.Output
 				}
 				if verr := compiled.Validate(value); verr != nil {
-					for _, line := range splitSchemaError(verr) {
-						c.violated("OBI-D-11", fmt.Sprintf("operations[%q].examples[%q].%s", opKey, ek, position), line)
+					examplePath := jsonPointer("operations", opKey, "examples", ek, position)
+					for _, problem := range schemaProblems(verr) {
+						c.violated("OBI-D-11", examplePath+jsonPointer(problem.location...), "does not validate against the operation's "+position+" schema: "+problem.message)
 					}
 				}
 			}
@@ -383,71 +385,10 @@ func embeddedSchemaResources(i Interface) map[string]any {
 	return resources
 }
 
-// buildSchemaDefs deep-copies the document's schemas map and rewrites
-// `$ref: "#/schemas/X"` → `$ref: "#/$defs/X"` so cross-schema refs
-// resolve inside the compound schema we compile per example.
-func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
-	if len(schemas) == 0 {
-		return nil
-	}
-	defs := make(map[string]any, len(schemas))
-	for name, sch := range schemas {
-		switch v := sch.(type) {
-		case map[string]any:
-			defs[name] = rewriteSchemaRefs(deepCopyJSON(v))
-		default:
-			// Boolean schemas carry no refs to rewrite; anything else is
-			// malformed (OBI-D-17's concern) and surfaces at compile time.
-			defs[name] = v
-		}
-	}
-	return defs
-}
-
-// compileExampleSchema builds a compound JSON Schema rooted at an isolated
-// schema, with a named schema map exposed under $defs, then compiles it. It
-// cannot preserve arbitrary references into an OBI document because it does
-// not receive that document; interface-aware callers use
-// CompileOperationSchema instead.
-func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema.Schema, error) {
-	var root any
-	switch v := opSchema.(type) {
-	case map[string]any:
-		copied := deepCopyJSON(v)
-		rootMap := copied.(map[string]any)
-		rewriteSchemaRefs(rootMap)
-		if len(defs) > 0 {
-			if existing, has := rootMap["$defs"]; has {
-				if existingMap, isMap := existing.(map[string]any); isMap {
-					for k, dv := range defs {
-						if _, present := existingMap[k]; !present {
-							existingMap[k] = dv
-						}
-					}
-				}
-			} else {
-				rootMap["$defs"] = defs
-			}
-		}
-		root = rootMap
-	case bool:
-		// Boolean schemas reference nothing; compile the boolean directly.
-		root = v
-	default:
-		return nil, fmt.Errorf("operation schema must be a JSON Schema object or boolean")
-	}
-	c := exactCountCompiler()
-	const url = "openbindings:///example-schema"
-	if err := c.AddResource(url, root); err != nil {
-		return nil, err
-	}
-	return c.Compile(url)
-}
-
 // CompileOperationSchema compiles an operation's input/output schema at its
 // canonical fragment inside the complete OBI document. The document, not an
 // extracted schema object, is the resolution root for same-document references
-// (OBI-D-16 / OBI-T-16).
+// (§7, OBI-D-16, OBI-T-16).
 func CompileOperationSchema(i *Interface, operationName, position string) (*CompiledSchema, error) {
 	if i == nil {
 		return nil, fmt.Errorf("interface is nil")
@@ -468,7 +409,13 @@ func CompileOperationSchema(i *Interface, operationName, position string) (*Comp
 	if target == nil {
 		return nil, fmt.Errorf("operation %q has no %s schema", operationName, position)
 	}
+	return compileDocumentSchema(i, "operations", operationName, position)
+}
 
+// compileDocumentSchema compiles the schema at a position of the complete OBI
+// document, given as JSON Pointer reference tokens, with the document as the
+// resolution root for same-document references (§7).
+func compileDocumentSchema(i *Interface, tokens ...string) (*CompiledSchema, error) {
 	data, err := json.Marshal(i)
 	if err != nil {
 		return nil, fmt.Errorf("marshal OBI document for schema compilation: %w", err)
@@ -493,9 +440,7 @@ func CompileOperationSchema(i *Interface, operationName, position string) (*Comp
 	if err := c.AddResource(url, document); err != nil {
 		return nil, err
 	}
-	escape := strings.NewReplacer("~", "~0", "/", "~1").Replace
-	fragment := "#/operations/" + escape(operationName) + "/" + position
-	compiled, err := c.Compile(url + fragment)
+	compiled, err := c.Compile(url + "#" + jsonPointer(tokens...))
 	if err != nil {
 		return nil, err
 	}
@@ -581,88 +526,130 @@ func registerInterfaceSchemaResources(c *jsonschema.Compiler, i *Interface) erro
 	return nil
 }
 
-func rewriteSchemaRefs(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		if ref, ok := t["$ref"].(string); ok && strings.HasPrefix(ref, "#/schemas/") {
-			t["$ref"] = "#/$defs/" + strings.TrimPrefix(ref, "#/schemas/")
-		}
-		for _, child := range t {
-			rewriteSchemaRefs(child)
-		}
-	case []any:
-		for _, child := range t {
-			rewriteSchemaRefs(child)
-		}
-	}
-	return v
+// schemaProblem is one established schema mismatch, at the location inside
+// the validated value the backend reports, as RFC 6901 reference tokens.
+type schemaProblem struct {
+	location []string
+	message  string
 }
 
-func deepCopyJSON(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, child := range t {
-			out[k] = deepCopyJSON(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, child := range t {
-			out[i] = deepCopyJSON(child)
-		}
-		return out
-	case []string:
-		out := make([]any, len(t))
-		for i, s := range t {
-			out[i] = s
-		}
-		return out
-	default:
-		return v
+// schemaProblems flattens a backend validation error into one problem per
+// failed constraint. An anyOf or oneOf that no alternative satisfies is one
+// problem at its own location, stating what each alternative lacked; a
+// report of one problem per alternative would read as several defects.
+func schemaProblems(err error) []schemaProblem {
+	var ve *jsonschema.ValidationError
+	if !errors.As(err, &ve) {
+		return []schemaProblem{{message: err.Error()}}
 	}
+	return collectSchemaProblems(ve)
 }
 
-func splitSchemaError(err error) []string {
-	if err == nil {
-		return nil
+func collectSchemaProblems(ve *jsonschema.ValidationError) []schemaProblem {
+	switch ve.ErrorKind.(type) {
+	case *kind.AnyOf, *kind.OneOf:
+		if len(ve.Causes) > 0 {
+			var alternatives []string
+			for _, cause := range ve.Causes {
+				for _, problem := range collectSchemaProblems(cause) {
+					alternatives = append(alternatives, relativeProblemText(ve.InstanceLocation, problem))
+				}
+			}
+			return []schemaProblem{{
+				location: ve.InstanceLocation,
+				message:  "satisfies none of the alternatives: " + strings.Join(alternatives, "; "),
+			}}
+		}
 	}
-	if ve, ok := err.(*jsonschema.ValidationError); ok {
-		return flattenValidationError(ve, "")
-	}
-	return []string{err.Error()}
-}
-
-func flattenValidationError(ve *jsonschema.ValidationError, prefix string) []string {
-	if ve == nil {
-		return nil
-	}
-	var out []string
 	if len(ve.Causes) == 0 {
-		out = append(out, fmt.Sprintf("%s%s", prefix, summarizeValidationError(ve)))
-		return out
+		return []schemaProblem{{location: ve.InstanceLocation, message: kindString(ve.ErrorKind)}}
 	}
-	for _, c := range ve.Causes {
-		out = append(out, flattenValidationError(c, prefix)...)
+	var out []schemaProblem
+	for _, cause := range ve.Causes {
+		out = append(out, collectSchemaProblems(cause)...)
 	}
 	return out
 }
 
-func summarizeValidationError(ve *jsonschema.ValidationError) string {
-	loc := ""
-	if len(ve.InstanceLocation) > 0 {
-		loc = "/" + strings.Join(ve.InstanceLocation, "/") + ": "
+// relativeProblemText renders a problem found under base, naming its location
+// relative to base when it lies deeper.
+func relativeProblemText(base []string, problem schemaProblem) string {
+	if len(problem.location) <= len(base) {
+		return problem.message
 	}
-	return loc + kindString(ve.ErrorKind)
+	return jsonPointer(problem.location[len(base):]...) + ": " + problem.message
 }
 
-// ValidateAgainstSchema validates a value against an operation-level JSON
-// Schema, resolving #/schemas/ references against the interface's named
-// schema pool. This is the same compilation and validation the operation
-// invoker applies to outputs under OBI-T-16, exported so tools can enforce
-// or test wire conformance on values they carry themselves.
-func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSONSchema) error {
-	compiled, err := compileExampleSchema(schema, buildSchemaDefs(schemas))
+// schemaProblemLines renders problems as "location: message" lines, with the
+// location as a JSON Pointer into the validated value.
+func schemaProblemLines(problems []schemaProblem) []string {
+	lines := make([]string, len(problems))
+	for i, problem := range problems {
+		if len(problem.location) == 0 {
+			lines[i] = problem.message
+			continue
+		}
+		lines[i] = jsonPointer(problem.location...) + ": " + problem.message
+	}
+	return lines
+}
+
+// jsonPointer builds an RFC 6901 JSON Pointer from unescaped reference
+// tokens. No tokens is the empty pointer, which addresses the whole value.
+func jsonPointer(tokens ...string) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		b.WriteByte('/')
+		b.WriteString(pointerTokenEscaper.Replace(token))
+	}
+	return b.String()
+}
+
+var pointerTokenEscaper = strings.NewReplacer("~", "~0", "/", "~1")
+
+// ValidateAgainstSchema validates a value against a standalone JSON Schema
+// 2020-12 schema, which is its own resolution root: `#` references resolve
+// within the schema itself, as JSON Schema defines for a schema that is not
+// embedded in another document. It suits schemas carried outside an OBI, such
+// as a protocol's own schema for a value. A schema at a position of an OBI
+// resolves against the whole document instead (§7); validate those with
+// ValidateOperationInput, ValidateOperationOutput, or
+// ValidateAgainstNamedSchema.
+//
+// A nil error means the value validates. A *SchemaValidationError is an
+// established mismatch; a *SchemaGraphUnavailableError means the schema's
+// graph could not be fully resolved, as for any reference outside the schema,
+// so no verdict was reached.
+func ValidateAgainstSchema(value any, schema JSONSchema) error {
+	compiled, err := compileStandaloneSchema(schema)
+	return validateCompiledSchema(value, compiled, err)
+}
+
+func compileStandaloneSchema(schema JSONSchema) (*jsonschema.Schema, error) {
+	switch schema.(type) {
+	case map[string]any, bool:
+	default:
+		return nil, fmt.Errorf("a schema is a JSON Schema object or boolean")
+	}
+	c := exactCountCompiler()
+	const url = "openbindings:///schema"
+	if err := c.AddResource(url, schema); err != nil {
+		return nil, err
+	}
+	return c.Compile(url)
+}
+
+// ValidateAgainstNamedSchema validates a value against the entry name in the
+// document's schemas map, with the complete OBI document as the resolution
+// root for same-document references (§7).
+func ValidateAgainstNamedSchema(value any, iface *Interface, name string) error {
+	if iface == nil {
+		return validateCompiledSchema(value, nil, fmt.Errorf("interface is nil"))
+	}
+	if _, ok := iface.Schemas[name]; !ok {
+		return validateCompiledSchema(value, nil, fmt.Errorf("schema %q is not defined", name))
+	}
+	compiled, err := compileDocumentSchema(iface, "schemas", name)
 	return validateCompiledSchema(value, compiled, err)
 }
 
@@ -733,7 +720,7 @@ func projectSchemaValidationError(err error) error {
 	}
 	var mismatch *jsonschema.ValidationError
 	if errors.As(err, &mismatch) {
-		return &SchemaValidationError{lines: splitSchemaError(mismatch), cause: err}
+		return &SchemaValidationError{lines: schemaProblemLines(schemaProblems(mismatch)), cause: err}
 	}
 	return err
 }

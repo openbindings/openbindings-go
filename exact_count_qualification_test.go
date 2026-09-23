@@ -18,7 +18,7 @@ func TestExactLargeCountQualification(t *testing.T) {
 	} {
 		t.Run(test.keyword, func(t *testing.T) {
 			schema := map[string]any{test.keyword: json.Number("18446744073709551616")}
-			err := ValidateAgainstSchema(test.value, schema, nil)
+			err := ValidateAgainstSchema(test.value, schema)
 			if (err == nil) != test.valid {
 				t.Fatalf("valid=%v; want %v; error=%v", err == nil, test.valid, err)
 			}
@@ -106,7 +106,7 @@ func TestExactCountFailedBranchDoesNotLeakCoverage(t *testing.T) {
 		data  []any
 		valid bool
 	}{{[]any{1}, true}, {[]any{1, 2}, false}} {
-		if err := ValidateAgainstSchema(test.data, schema, nil); (err == nil) != test.valid {
+		if err := ValidateAgainstSchema(test.data, schema); (err == nil) != test.valid {
 			t.Fatalf("%v: %v", test.data, err)
 		}
 	}

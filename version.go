@@ -166,13 +166,14 @@ type semver struct {
 // semverPattern is the official SemVer 2.0.0 regex from semver.org.
 var semverPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
 
-// IsValidSemver reports whether v is a valid Semantic Versioning 2.0.0 string.
+// IsValidSemver reports whether v is exactly a Semantic Versioning 2.0.0
+// string. Surrounding whitespace is not part of the grammar, so " 0.2.0" is
+// not valid.
 func IsValidSemver(v string) bool {
-	return semverPattern.MatchString(strings.TrimSpace(v))
+	return semverPattern.MatchString(v)
 }
 
 func parseSemverStrict(v string) (semver, error) {
-	v = strings.TrimSpace(v)
 	m := semverPattern.FindStringSubmatch(v)
 	if m == nil {
 		return semver{}, fmt.Errorf("invalid semver: %q", v)

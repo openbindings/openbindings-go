@@ -12,13 +12,13 @@ func TestValidateAgainstSchemaDistinguishesGraphUnavailable(t *testing.T) {
 			map[string]any{"type": "string"},
 			map[string]any{"$ref": "https://example.invalid/missing.json"},
 		},
-	}, nil)
+	})
 	var unavailable *SchemaGraphUnavailableError
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("expected SchemaGraphUnavailableError, got %T: %v", err, err)
 	}
 
-	err = ValidateAgainstSchema(42, map[string]any{"type": "string"}, nil)
+	err = ValidateAgainstSchema(42, map[string]any{"type": "string"})
 	if err == nil {
 		t.Fatal("expected instance mismatch")
 	}

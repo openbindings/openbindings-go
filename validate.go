@@ -3,7 +3,6 @@ package openbindings
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/url"
 	"regexp"
 	"sort"
@@ -90,15 +89,8 @@ func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 		report, verr := c.conclude()
 		return nil, report, verr
 	}
-	// OBI-T-04 precedes interpretation under this version's semantics, the
-	// embedded document schema included. A missing or malformed version is
-	// OBI-D-12's concern, decided with the other rules.
-	if object, ok := raw.(map[string]any); ok {
-		if version, ok := object["openbindings"].(string); ok {
-			if refusal := versionRefusalOf(version); refusal != nil {
-				return nil, ValidationReport{}, refusal
-			}
-		}
+	if refusal := declaredVersionRefusal(raw); refusal != nil {
+		return nil, ValidationReport{}, refusal
 	}
 	checkDeclaredVersion(&c, raw)
 	validateAgainstOBISchema(&c, raw)
@@ -118,17 +110,35 @@ func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 func checkDeclaredVersion(c *ruleChecks, raw any) {
 	object, _ := raw.(map[string]any)
 	value, present := object["openbindings"]
+	checkVersionValue(c, value, present)
+}
+
+// checkVersionValue records OBI-D-12's evidence for the declared
+// openbindings value: required, and exactly a SemVer 2.0.0 string.
+func checkVersionValue(c *ruleChecks, value any, present bool) {
 	version, isString := value.(string)
 	switch {
 	case !present:
-		c.violated("OBI-D-12", "openbindings", "required")
+		c.violated("OBI-D-12", "", "missing the required openbindings member")
 	case !isString:
-		c.violated("OBI-D-12", "openbindings", fmt.Sprintf("must be a SemVer 2.0.0 string; got %s", jsonTypeName(value)))
-	case strings.TrimSpace(version) == "":
-		c.violated("OBI-D-12", "openbindings", "required")
+		c.violated("OBI-D-12", "/openbindings", fmt.Sprintf("must be a SemVer 2.0.0 string; got %s", jsonTypeName(value)))
 	case !IsValidSemver(version):
-		c.violated("OBI-D-12", "openbindings", fmt.Sprintf("%q is not a valid SemVer 2.0.0 string", version))
+		c.violated("OBI-D-12", "/openbindings", fmt.Sprintf("%q is not a valid SemVer 2.0.0 string", version))
 	}
+}
+
+// declaredVersionRefusal applies OBI-T-04 to the version a document's generic
+// view declares. The decision precedes interpretation under this version's
+// semantics, the embedded document schema included. A missing or malformed
+// version is OBI-D-12's concern, decided with the other rules, so it is not a
+// refusal.
+func declaredVersionRefusal(raw any) *VersionRefusalError {
+	object, _ := raw.(map[string]any)
+	version, ok := object["openbindings"].(string)
+	if !ok {
+		return nil
+	}
+	return versionRefusalOf(version)
 }
 
 // versionRefusalOf applies OBI-T-04 to a declared version. It returns nil for
@@ -171,13 +181,10 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		return docView
 	}
 
-	// OBI-D-12: the openbindings field is a valid SemVer 2.0.0 string.
+	// OBI-D-12: the openbindings field is a valid SemVer 2.0.0 string. The
+	// typed model holds a required string, so an empty value is its absence.
 	if !o.versionDecided {
-		if strings.TrimSpace(i.OpenBindings) == "" {
-			c.violated("OBI-D-12", "openbindings", "required")
-		} else if !IsValidSemver(i.OpenBindings) {
-			c.violated("OBI-D-12", "openbindings", fmt.Sprintf("%q is not a valid SemVer 2.0.0 string", i.OpenBindings))
-		}
+		checkVersionValue(c, i.OpenBindings, i.OpenBindings != "")
 	}
 
 	// Same-document schema $refs are resolved against the document root for
@@ -199,13 +206,9 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 	}
 	sort.Strings(schKeys)
 	for _, k := range schKeys {
-		validateIdent(c, "schemas key", k)
-		validateSchemaWellFormedness(c, fmt.Sprintf("schemas[%q]", k), i.Schemas[k], validSchemaShapes)
-		walkSchema(c, fmt.Sprintf("schemas[%q]", k), i.Schemas[k], refView, false)
-	}
-
-	if i.Operations == nil {
-		c.violated("OBI-D-02", "operations", "required")
+		validateIdent(c, jsonPointer("schemas", k), k)
+		validateSchemaWellFormedness(c, jsonPointer("schemas", k), i.Schemas[k], validSchemaShapes)
+		walkSchema(c, jsonPointer("schemas", k), i.Schemas[k], refView, false)
 	}
 
 	opKeys := make([]string, 0, len(i.Operations))
@@ -225,7 +228,7 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		op := i.Operations[k]
 
 		// OBI-D-03: operation keys must match the identifier pattern.
-		validateIdent(c, "operations key", k)
+		validateIdent(c, jsonPointer("operations", k), k)
 
 		// Alias checks (OBI-D-04 collisions, OBI-D-03 alias pattern).
 		// Per OBI-D-04, an operation's "identifiers" = its key + aliases. All
@@ -234,13 +237,9 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		//   - same alias listed by two operations
 		//   - alias listed twice within the same operation's array
 		//   - alias equal to the operation's own key
-		aliasPath := fmt.Sprintf("operations[%q].aliases", k)
 		seenAlias := map[string]struct{}{}
-		for _, a := range op.Aliases {
-			if strings.TrimSpace(a) == "" {
-				c.violated("OBI-D-03", aliasPath, "must not contain empty strings")
-				continue
-			}
+		for idx, a := range op.Aliases {
+			aliasPath := jsonPointer("operations", k, "aliases", strconv.Itoa(idx))
 			validateIdent(c, aliasPath, a)
 			if a == k {
 				c.violated("OBI-D-04", aliasPath, fmt.Sprintf("%q duplicates the operation's own key", a))
@@ -265,16 +264,16 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		// Check operation input/output schemas for well-formedness (OBI-D-17)
 		// and walk them for OBI-D-05/D-06/D-07/D-16.
 		if op.Input != nil {
-			validateSchemaWellFormedness(c, fmt.Sprintf("operations[%q].input", k), op.Input, validSchemaShapes)
-			walkSchema(c, fmt.Sprintf("operations[%q].input", k), op.Input, refView, false)
+			validateSchemaWellFormedness(c, jsonPointer("operations", k, "input"), op.Input, validSchemaShapes)
+			walkSchema(c, jsonPointer("operations", k, "input"), op.Input, refView, false)
 		} else if op.InputPresent {
-			c.violated("OBI-D-17", fmt.Sprintf("operations[%q].input", k), "a schema is a JSON Schema 2020-12 object or boolean; got null")
+			c.violated("OBI-D-17", jsonPointer("operations", k, "input"), "a schema is a JSON Schema 2020-12 object or boolean; got null")
 		}
 		if op.Output != nil {
-			validateSchemaWellFormedness(c, fmt.Sprintf("operations[%q].output", k), op.Output, validSchemaShapes)
-			walkSchema(c, fmt.Sprintf("operations[%q].output", k), op.Output, refView, false)
+			validateSchemaWellFormedness(c, jsonPointer("operations", k, "output"), op.Output, validSchemaShapes)
+			walkSchema(c, jsonPointer("operations", k, "output"), op.Output, refView, false)
 		} else if op.OutputPresent {
-			c.violated("OBI-D-17", fmt.Sprintf("operations[%q].output", k), "a schema is a JSON Schema 2020-12 object or boolean; got null")
+			c.violated("OBI-D-17", jsonPointer("operations", k, "output"), "a schema is a JSON Schema 2020-12 object or boolean; got null")
 		}
 
 		// OBI-D-03: example keys must match the identifier pattern.
@@ -284,49 +283,32 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		}
 		sort.Strings(exKeys)
 		for _, ek := range exKeys {
-			validateIdent(c, fmt.Sprintf("operations[%q].examples key", k), ek)
+			validateIdent(c, jsonPointer("operations", k, "examples", ek), ek)
 		}
 
-		diagnoseUnknownFields(c, fmt.Sprintf("operations[%q]", k), op.Unknown)
+		diagnoseUnknownFields(c, jsonPointer("operations", k), op.Unknown)
 		for _, ek := range exKeys {
-			diagnoseUnknownFields(c, fmt.Sprintf("operations[%q].examples[%q]", k, ek), op.Examples[ek].Unknown)
+			diagnoseUnknownFields(c, jsonPointer("operations", k, "examples", ek), op.Examples[ek].Unknown)
 		}
 	}
 
 	// Validate named consumption points. Dependency keys share the document
 	// identifier grammar (OBI-D-03), and operation values resolve only against
 	// literal operation-map keys, never aliases (OBI-D-19). The structural
-	// requirements for each entry and bindingSpecs are also enforced by the
-	// embedded document schema (OBI-D-02).
+	// requirements for each entry and its bindingSpecs belong to the embedded
+	// document schema (OBI-D-02).
 	depKeys := make([]string, 0, len(i.Dependencies))
 	for k := range i.Dependencies {
 		depKeys = append(depKeys, k)
 	}
 	sort.Strings(depKeys)
 	for _, k := range depKeys {
-		validateIdent(c, "dependencies key", k)
+		validateIdent(c, jsonPointer("dependencies", k), k)
 		dependency := i.Dependencies[k]
-		if strings.TrimSpace(dependency.Operation) == "" {
-			c.violated("OBI-D-02", fmt.Sprintf("dependencies[%q].operation", k), "required")
-		} else if _, ok := i.Operations[dependency.Operation]; !ok {
-			c.violated("OBI-D-19", fmt.Sprintf("dependencies[%q].operation", k), fmt.Sprintf("references unknown operation key %q", dependency.Operation))
+		if _, ok := i.Operations[dependency.Operation]; !ok {
+			c.violated("OBI-D-19", jsonPointer("dependencies", k, "operation"), fmt.Sprintf("references unknown operation key %q", dependency.Operation))
 		}
-		if dependency.BindingSpecs != nil {
-			bindingSpecsPath := fmt.Sprintf("dependencies[%q].bindingSpecs", k)
-			if len(dependency.BindingSpecs) == 0 {
-				c.violated("OBI-D-02", bindingSpecsPath, "must contain at least one item")
-			}
-			seen := make(map[string]bool, len(dependency.BindingSpecs))
-			for _, bindingSpec := range dependency.BindingSpecs {
-				if bindingSpec == "" {
-					c.violated("OBI-D-02", bindingSpecsPath, "must not contain an empty string")
-				} else if seen[bindingSpec] {
-					c.violated("OBI-D-02", bindingSpecsPath, fmt.Sprintf("%q is listed more than once", bindingSpec))
-				}
-				seen[bindingSpec] = true
-			}
-		}
-		diagnoseUnknownFields(c, fmt.Sprintf("dependencies[%q]", k), dependency.Unknown)
+		diagnoseUnknownFields(c, jsonPointer("dependencies", k), dependency.Unknown)
 	}
 
 	// Validate sources.
@@ -337,22 +319,16 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 	sort.Strings(srcKeys)
 	for _, k := range srcKeys {
 		// OBI-D-03: source keys must match the identifier pattern.
-		validateIdent(c, "sources key", k)
+		validateIdent(c, jsonPointer("sources", k), k)
 		src := i.Sources[k]
-		if strings.TrimSpace(src.BindingSpec) == "" {
-			c.violated("OBI-D-02", fmt.Sprintf("sources[%q].bindingSpec", k), "required")
-		}
-		hasLocation := strings.TrimSpace(src.Location) != ""
-		hasContent := src.Content != nil
-		if !hasLocation && !hasContent {
-			c.violated("OBI-D-02", fmt.Sprintf("sources[%q]", k), "must have location or content")
-		}
 		// OBI-D-05: sources[*].location must be a well-formed, absolute reference
 		// (absolute URI or a bindingSpec-defined absolute address; never relative).
-		if hasLocation {
-			validateLocation(c, fmt.Sprintf("sources[%q].location", k), src.Location)
+		// Its presence and the bindingSpec requirement belong to the embedded
+		// document schema (OBI-D-02).
+		if src.Location != "" {
+			validateLocation(c, jsonPointer("sources", k, "location"), src.Location)
 		}
-		diagnoseUnknownFields(c, fmt.Sprintf("sources[%q]", k), src.Unknown)
+		diagnoseUnknownFields(c, jsonPointer("sources", k), src.Unknown)
 	}
 
 	// Validate transforms. OBI-D-18: every value in the transforms map parses
@@ -367,8 +343,8 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 	sort.Strings(trKeys)
 	for _, k := range trKeys {
 		// OBI-D-03: transform keys must match the identifier pattern.
-		validateIdent(c, "transforms key", k)
-		validateTransformExpression(c, fmt.Sprintf("transforms[%q]", k), i.Transforms[k])
+		validateIdent(c, jsonPointer("transforms", k), k)
+		validateTransformExpression(c, jsonPointer("transforms", k), i.Transforms[k])
 	}
 
 	// Validate bindings.
@@ -379,22 +355,16 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 	sort.Strings(bndKeys)
 	for _, k := range bndKeys {
 		// OBI-D-03: binding keys must match the identifier pattern.
-		validateIdent(c, "bindings key", k)
+		validateIdent(c, jsonPointer("bindings", k), k)
 		b := i.Bindings[k]
-		if b.Preference != nil && (math.IsNaN(*b.Preference) || math.IsInf(*b.Preference, 0) || math.Trunc(*b.Preference) != *b.Preference || math.Abs(*b.Preference) > 9007199254740991) {
-			c.violated("OBI-D-02", fmt.Sprintf("bindings[%q].preference", k), "must be a safe integer")
+		// OBI-D-08 and OBI-D-09: bindings reference an existing operation and
+		// source. The members' presence, spelling, and the preference range
+		// belong to the embedded document schema (OBI-D-02).
+		if _, ok := i.Operations[b.Operation]; !ok {
+			c.violated("OBI-D-08", jsonPointer("bindings", k, "operation"), fmt.Sprintf("references unknown operation %q", b.Operation))
 		}
-		// OBI-D-08: bindings[*].operation must reference an existing operation.
-		if strings.TrimSpace(b.Operation) == "" {
-			c.violated("OBI-D-02", fmt.Sprintf("bindings[%q].operation", k), "required")
-		} else if _, ok := i.Operations[b.Operation]; !ok {
-			c.violated("OBI-D-08", fmt.Sprintf("bindings[%q].operation", k), fmt.Sprintf("references unknown operation %q", b.Operation))
-		}
-		// OBI-D-09: bindings[*].source must reference an existing source.
-		if strings.TrimSpace(b.Source) == "" {
-			c.violated("OBI-D-02", fmt.Sprintf("bindings[%q].source", k), "required")
-		} else if _, ok := i.Sources[b.Source]; !ok {
-			c.violated("OBI-D-09", fmt.Sprintf("bindings[%q].source", k), fmt.Sprintf("references unknown source %q", b.Source))
+		if _, ok := i.Sources[b.Source]; !ok {
+			c.violated("OBI-D-09", jsonPointer("bindings", k, "source"), fmt.Sprintf("references unknown source %q", b.Source))
 		}
 
 		// Validate transform references (OBI-D-10) and inline transform
@@ -402,30 +372,30 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		if b.InputTransform != nil {
 			if b.InputTransform.IsRef() {
 				if problem := transformRefProblem(b.InputTransform.Ref, i.Transforms); problem != "" {
-					c.violated("OBI-D-10", fmt.Sprintf("bindings[%q].inputTransform.$ref", k), problem)
+					c.violated("OBI-D-10", jsonPointer("bindings", k, "inputTransform", "$ref"), problem)
 				}
 			} else {
-				validateTransformExpression(c, fmt.Sprintf("bindings[%q].inputTransform", k), b.InputTransform.Inline)
+				validateTransformExpression(c, jsonPointer("bindings", k, "inputTransform"), b.InputTransform.Inline)
 			}
 		}
 		if b.OutputTransform != nil {
 			if b.OutputTransform.IsRef() {
 				if problem := transformRefProblem(b.OutputTransform.Ref, i.Transforms); problem != "" {
-					c.violated("OBI-D-10", fmt.Sprintf("bindings[%q].outputTransform.$ref", k), problem)
+					c.violated("OBI-D-10", jsonPointer("bindings", k, "outputTransform", "$ref"), problem)
 				}
 			} else {
-				validateTransformExpression(c, fmt.Sprintf("bindings[%q].outputTransform", k), b.OutputTransform.Inline)
+				validateTransformExpression(c, jsonPointer("bindings", k, "outputTransform"), b.OutputTransform.Inline)
 			}
 		}
 
-		diagnoseUnknownFields(c, fmt.Sprintf("bindings[%q]", k), b.Unknown)
+		diagnoseUnknownFields(c, jsonPointer("bindings", k), b.Unknown)
 	}
 
 	// OBI-D-13: whether a binding is identifiable from itself and its source
 	// alone is defined by the source's governing binding specification, so the
 	// core cannot decide it.
 	if len(i.Bindings) > 0 {
-		c.inconclusive("OBI-D-13", "bindings", "whether each binding identifies its target is decided by its binding specification, not the core")
+		c.inconclusive("OBI-D-13", "/bindings", "whether each binding identifies its target is decided by its binding specification, not the core")
 	}
 
 	diagnoseUnknownFields(c, "", i.Unknown)
@@ -818,11 +788,13 @@ var arraySchemaKeywords = map[string]bool{
 // walkSchema walks a JSON Schema 2020-12 value and applies:
 //   - OBI-D-06: $schema, where present, MUST equal the 2020-12 dialect URI.
 //   - OBI-D-07: $vocabulary keyword is forbidden anywhere in any schema.
-//   - OBI-D-05: $ref and $id values MUST be absolute or same-document and
-//     well-formed URI references (RFC 3986 §4.1); $dynamicRef and
-//     $dynamicAnchor do not appear at OBI positions at all. A nested $id
-//     inside a schema that already declares one is resource-internal and
-//     exempt from the absoluteness check, per §10 clause 2.
+//   - OBI-D-05: every $ref is a well-formed URI reference (RFC 3986 §4.1);
+//     at OBI positions it is a same-document JSON Pointer fragment in literal
+//     form or an absolute URI, an $id is absolute, and $dynamicRef and
+//     $dynamicAnchor do not appear. A schema that declares its own $id is a
+//     schema resource whose references, nested $ids, anchors, and dynamic
+//     pair are its internal business (§7 item 2), so those form constraints
+//     stop at its boundary.
 //
 // Recursion follows JSON Schema keyword shapes so that property names under
 // `properties`/`patternProperties`/`$defs`/etc. are not themselves treated as
@@ -839,12 +811,13 @@ func walkSchema(c *ruleChecks, prefix string, schema any, doc any, inID bool) {
 	// distinguishes an $id at an OBI position (must be absolute, OBI-D-05)
 	// from a nested $id inside a schema that already declares one (resolves
 	// against that resource's base per JSON Schema 2020-12 and MAY be
-	// relative — resource-internal, §10 clause 2).
+	// relative — resource-internal, §7 item 2).
 	wasInID := inID
 
 	// A schema that declares its own $id is a distinct schema resource: its
-	// $ref (and its subtree's) resolve against that resource's base per §10,
-	// so OBI-D-16's root-context resolution check does not apply inside it.
+	// $ref (and its subtree's) resolve against that resource's base (§7), so
+	// neither the OBI-position reference forms of OBI-D-05 nor OBI-D-16's
+	// root-context resolution apply inside it.
 	if v, ok := s["$id"]; ok {
 		if _, isStr := v.(string); isStr {
 			inID = true
@@ -853,7 +826,7 @@ func walkSchema(c *ruleChecks, prefix string, schema any, doc any, inID bool) {
 
 	if v, ok := s["$schema"]; ok {
 		if str, ok := v.(string); ok && str != draft202012URI {
-			c.violated("OBI-D-06", prefix+".$schema", fmt.Sprintf("%q must equal %q", str, draft202012URI))
+			c.violated("OBI-D-06", prefix+jsonPointer("$schema"), fmt.Sprintf("%q must equal %q", str, draft202012URI))
 		}
 	}
 	if _, ok := s["$vocabulary"]; ok {
@@ -861,7 +834,7 @@ func walkSchema(c *ruleChecks, prefix string, schema any, doc any, inID bool) {
 	}
 	// The dynamic pair does not appear at OBI positions at all: dynamic
 	// resolution follows the runtime dynamic scope rather than the document
-	// (§10 clause 2). Inside a schema declaring its own $id, both are that
+	// (§7 item 2). Inside a schema declaring its own $id, both are that
 	// resource's internal business — the same scope carve-out as $ref/$anchor.
 	if !inID {
 		if _, ok := s["$dynamicRef"]; ok {
@@ -873,9 +846,9 @@ func walkSchema(c *ruleChecks, prefix string, schema any, doc any, inID bool) {
 	}
 	if v, ok := s["$ref"]; ok {
 		if str, ok := v.(string); ok {
-			validateURIRef(c, prefix+".$ref", str)
-			if !strings.HasPrefix(str, "#") && !referenceIsAbsolute(str) {
-				c.violated("OBI-D-05", prefix+".$ref", fmt.Sprintf("%q must be a same-document fragment or an absolute URI, not a relative reference", str))
+			validateURIRef(c, prefix+jsonPointer("$ref"), str)
+			if !strings.HasPrefix(str, "#") && !inID && !referenceIsAbsolute(str) {
+				c.violated("OBI-D-05", prefix+jsonPointer("$ref"), fmt.Sprintf("%q must be a same-document fragment or an absolute URI, not a relative reference", str))
 			} else if strings.HasPrefix(str, "#") && !inID && strings.Contains(str, "%") {
 				// Literal form (§7): same-document fragments are written with
 				// the pointer's characters unencoded, so every addressable
@@ -885,24 +858,30 @@ func walkSchema(c *ruleChecks, prefix string, schema any, doc any, inID bool) {
 				// declaring its own $id the fragment is resource-internal and
 				// resolves per JSON Schema 2020-12, so this gate is OBI-position
 				// only (!inID).
-				c.violated("OBI-D-05", prefix+".$ref", fmt.Sprintf("%q is not in literal form; a same-document fragment is written with the pointer's characters unencoded (percent-encoding is not a conformant OBI reference)", str))
+				c.violated("OBI-D-05", prefix+jsonPointer("$ref"), fmt.Sprintf("%q is not in literal form; a same-document fragment is written with the pointer's characters unencoded (percent-encoding is not a conformant OBI reference)", str))
 			} else if strings.HasPrefix(str, "#") && str != "#" && !strings.HasPrefix(str, "#/") && !inID {
 				// Inside a schema declaring its own $id, fragments resolve
 				// against that resource's base per JSON Schema — the same
 				// scope carve-out as OBI-D-16.
-				c.violated("OBI-D-05", prefix+".$ref", fmt.Sprintf("%q is a plain-name fragment; a same-document schema $ref is a JSON Pointer fragment (bare # or #/...), and the schemas map is the document's named-schema mechanism", str))
+				c.violated("OBI-D-05", prefix+jsonPointer("$ref"), fmt.Sprintf("%q is a plain-name fragment; a same-document schema $ref is a JSON Pointer fragment (bare # or #/...), and the schemas map is the document's named-schema mechanism", str))
 			} else if (str == "#" || strings.HasPrefix(str, "#/")) && !inID {
 				if doc == nil {
-					c.inconclusive("OBI-D-16", prefix+".$ref", fmt.Sprintf("%q was not resolved: no generic view of the document could be produced", str))
+					c.inconclusive("OBI-D-16", prefix+jsonPointer("$ref"), fmt.Sprintf("%q was not resolved: no generic view of the document could be produced", str))
 				} else if !docPointerResolves(doc, strings.TrimPrefix(str, "#")) {
-					c.violated("OBI-D-16", prefix+".$ref", fmt.Sprintf("%q does not resolve within the document", str))
+					c.violated("OBI-D-16", prefix+jsonPointer("$ref"), fmt.Sprintf("%q does not resolve within the document", str))
 				}
 			}
 		}
 	}
+	// Every $id is a well-formed URI reference; one at an OBI position is
+	// also absolute, while a nested $id resolves against its enclosing
+	// resource's base.
 	if v, ok := s["$id"]; ok {
-		if str, ok := v.(string); ok && !wasInID && !referenceIsAbsolute(str) {
-			c.violated("OBI-D-05", prefix+".$id", fmt.Sprintf("%q must be an absolute URI", str))
+		if str, ok := v.(string); ok {
+			idPath := prefix + jsonPointer("$id")
+			if screenURIChars(c, idPath, str) && !wasInID && !referenceIsAbsolute(str) {
+				c.violated("OBI-D-05", idPath, fmt.Sprintf("%q must be an absolute URI", str))
+			}
 		}
 	}
 
@@ -922,15 +901,15 @@ func walkSchema(c *ruleChecks, prefix string, schema any, doc any, inID bool) {
 				}
 				sort.Strings(subKeys)
 				for _, sk := range subKeys {
-					walkSchema(c, fmt.Sprintf("%s.%s.%s", prefix, k, sk), m[sk], doc, inID)
+					walkSchema(c, prefix+jsonPointer(k, sk), m[sk], doc, inID)
 				}
 			}
 		case singleSchemaKeywords[k]:
-			walkSchema(c, prefix+"."+k, v, doc, inID)
+			walkSchema(c, prefix+jsonPointer(k), v, doc, inID)
 		case arraySchemaKeywords[k]:
 			if arr, ok := v.([]any); ok {
 				for idx, item := range arr {
-					walkSchema(c, fmt.Sprintf("%s.%s[%d]", prefix, k, idx), item, doc, inID)
+					walkSchema(c, prefix+jsonPointer(k, strconv.Itoa(idx)), item, doc, inID)
 				}
 			}
 		}

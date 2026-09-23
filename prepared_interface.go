@@ -62,9 +62,9 @@ type PreparedInterface struct {
 
 var nextSnapshotID atomic.Uint64
 
-// PrepareInterface gates, snapshots, and indexes an OBI without requiring JCS.
-// It refuses a document on any established violation of the document rules
-// it checks, as Validate does, and never freezes or retains the caller's maps.
+// PrepareInterface gates, snapshots, and indexes an OBI. It refuses a document
+// on any violation of the document rules Interface.Validate decides, and
+// never freezes or retains the caller's maps.
 func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 	if iface == nil {
 		return nil, fmt.Errorf("openbindings: interface is required")
@@ -77,7 +77,7 @@ func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 	if err := jsonvalue.Unmarshal(encoded, &snapshot); err != nil {
 		return nil, fmt.Errorf("openbindings: snapshot interface: %w", err)
 	}
-	if err := snapshot.validateWithDocument(nil, withoutDocumentSchemaValidation()); err != nil {
+	if err := snapshot.validateWithDocument(nil); err != nil {
 		return nil, err
 	}
 

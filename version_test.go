@@ -46,7 +46,7 @@ func TestIsSupportedVersion(t *testing.T) {
 		{name: "invalid 1.0", version: "1.0", wantErr: true},
 		{name: "invalid letters", version: "a.b.c", wantErr: true},
 		{name: "invalid negative", version: "-1.0.0", wantErr: true},
-		{name: "trims whitespace", version: " " + MinSupportedVersion + " ", want: true},
+		{name: "surrounding whitespace is not SemVer", version: " " + MinSupportedVersion + " ", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -180,7 +180,9 @@ func TestIsValidSemver(t *testing.T) {
 		{"1.0.0-x.7.z.92", true},
 		{"1.0.0+20130313144700", true},
 		{"1.0.0-beta+exp.sha.5114f85", true},
-		{"  1.2.3  ", true}, // trims
+		{"  1.2.3  ", false}, // whitespace is not part of the grammar
+		{" 1.2.3", false},
+		{"1.2.3\n", false},
 		{"", false},
 		{"1.2", false},
 		{"1.2.3.4", false},
@@ -207,7 +209,7 @@ func TestParseSemverStrict(t *testing.T) {
 		{name: "valid 0.1.0", input: "0.1.0", want: semver{major: 0, minor: 1, patch: 0}},
 		{name: "valid 1.2.3", input: "1.2.3", want: semver{major: 1, minor: 2, patch: 3}},
 		{name: "valid large numbers", input: "10.20.30", want: semver{major: 10, minor: 20, patch: 30}},
-		{name: "valid with whitespace", input: "  1.2.3  ", want: semver{major: 1, minor: 2, patch: 3}},
+		{name: "surrounding whitespace", input: "  1.2.3  ", wantErr: true},
 		{name: "valid with prerelease", input: "1.0.0-alpha.1", want: semver{major: 1, minor: 0, patch: 0, preRelease: []string{"alpha", "1"}}},
 		{name: "valid with build", input: "1.0.0+exp", want: semver{major: 1, minor: 0, patch: 0, build: "exp"}},
 		{name: "valid with pre + build", input: "1.0.0-beta+exp", want: semver{major: 1, minor: 0, patch: 0, preRelease: []string{"beta"}, build: "exp"}},

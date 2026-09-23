@@ -3,6 +3,7 @@ package openbindings
 import (
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -67,8 +68,8 @@ func TestValidateDocument_BindingIdentifiabilityIsLeftToTheBindingSpecification(
 	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-13"}) {
 		t.Fatalf("inconclusive = %v, want only OBI-D-13", report.Inconclusive)
 	}
-	if checks := report.InconclusiveChecks(); len(checks) != 1 || checks[0].Path != "bindings" {
-		t.Fatalf("want one OBI-D-13 finding at bindings: %+v", checks)
+	if checks := report.InconclusiveChecks(); len(checks) != 1 || checks[0].Path != "/bindings" {
+		t.Fatalf("want one OBI-D-13 finding at /bindings: %+v", checks)
 	}
 }
 
@@ -95,7 +96,7 @@ func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t 
 		t.Fatalf("OBI-D-13 = %s, want inconclusive and retained", report.Evidence["OBI-D-13"])
 	}
 	violations := report.Violations()
-	if len(violations) != 1 || violations[0].Path != `bindings["tasks.create.api"].operation` {
+	if len(violations) != 1 || violations[0].Path != `/bindings/tasks.create.api/operation` {
 		t.Fatalf("violations = %+v, want one located at the binding's operation", violations)
 	}
 }
@@ -209,4 +210,104 @@ func TestValidateDocument_ExampleScope(t *testing.T) {
 			t.Fatalf("OBI-D-11 = %s, want inconclusive; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
 		}
 	})
+}
+
+func TestValidateDocument_ReferencesInsideASchemaResourceAreItsOwn(t *testing.T) {
+	withInput := func(input string) string {
+		return `{"openbindings":"0.2.0","operations":{"a":{"input":` + input + `}}}`
+	}
+	tests := []struct {
+		name  string
+		input string
+		want  RuleEvidenceStatus
+	}{
+		{"relative $ref beside the $id", `{"$id":"https://example.com/s/task.json","$ref":"person.json"}`, EvidenceSatisfied},
+		{"relative $ref below the $id", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$ref":"person.json"}}}`, EvidenceSatisfied},
+		{"relative $ref at an OBI position", `{"properties":{"owner":{"$ref":"person.json"}}}`, EvidenceViolated},
+		{"malformed $ref inside a resource", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$ref":"per son.json"}}}`, EvidenceViolated},
+		{"malformed nested $id", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$id":"per son.json"}}}`, EvidenceViolated},
+		{"malformed $id at an OBI position", `{"$id":"https://example.com/s/ta sk.json"}`, EvidenceViolated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := mustValidateDocument(t, withInput(tt.input))
+			if got := report.Evidence["OBI-D-05"]; got != tt.want {
+				t.Fatalf("OBI-D-05 = %s, want %s; findings %+v", got, tt.want, report.Findings)
+			}
+		})
+	}
+}
+
+func TestValidateDocument_WhitespaceAroundTheVersionViolatesD12(t *testing.T) {
+	for _, version := range []string{" 0.2.0", "0.2.0 ", "0.2.0\n"} {
+		report := mustValidateDocument(t, `{"openbindings":`+strconv.Quote(version)+`,"operations":{}}`)
+		if report.Evidence["OBI-D-12"] != EvidenceViolated {
+			t.Fatalf("%q: OBI-D-12 = %s, want violated", version, report.Evidence["OBI-D-12"])
+		}
+	}
+}
+
+func TestFindingPaths_AreJSONPointers(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0",
+		"schemas":{"T":{"type":"object","properties":{"a/b~c":{"minLength":"3"}}}},
+		"operations":{"a":{"output":{"$ref":"#/schemas/T"},"examples":{"one":{"output":{"n":"x"}}}},
+		              "b":{"input":{"type":"object","properties":{"n":{"type":"integer"}}},"examples":{"two":{"input":{"n":"x"}}}}},
+		"sources":{"s":{"bindingSpec":"x@1"}}}`)
+	want := map[string]string{
+		"/schemas/T/properties/a~1b~0c/minLength": "OBI-D-17",
+		"/operations/b/examples/two/input/n":      "OBI-D-11",
+		"/sources/s":                              "OBI-D-02",
+	}
+	got := map[string]string{}
+	for _, finding := range report.Violations() {
+		got[finding.Path] = finding.Rule
+	}
+	for path, rule := range want {
+		if got[path] != rule {
+			t.Fatalf("want %s at %q; violations %+v", rule, path, report.Violations())
+		}
+	}
+	root := mustValidateDocument(t, `{"operations":{}}`)
+	var rootFinding bool
+	for _, finding := range root.Violations() {
+		if finding.Rule == "OBI-D-02" && finding.Path == "" && strings.Contains(finding.Message, "'openbindings'") {
+			rootFinding = true
+		}
+	}
+	if !rootFinding {
+		t.Fatalf("a missing top-level member is reported at the document, the empty pointer; got %+v", root.Violations())
+	}
+}
+
+func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
+	var refusal *VersionRefusalError
+	if _, err := ParseDocument([]byte(`{"openbindings":"0.3.0","name":"future"}`)); !errors.As(err, &refusal) {
+		t.Fatalf("an unsupported version is refused, not judged by the 0.2 schema; got %v", err)
+	}
+	data := []byte(`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1"}}}`)
+	_, parseErr := ParseDocument(data)
+	_, _, validateErr := ValidateDocument(data)
+	var parsed, validated *ValidationError
+	if !errors.As(parseErr, &parsed) || !errors.As(validateErr, &validated) {
+		t.Fatalf("want ValidationErrors, got %v and %v", parseErr, validateErr)
+	}
+	if !reflect.DeepEqual(parsed.Problems, validated.Problems) {
+		t.Fatalf("ParseDocument and ValidateDocument word the same OBI-D-02 violation differently:\n%q\n%q", parsed.Problems, validated.Problems)
+	}
+}
+
+func TestPrepareInterface_GatesOnTheDocumentSchema(t *testing.T) {
+	fractional := 1.5
+	iface := &Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"op": {}},
+		Sources:      map[string]Source{"s": {BindingSpec: "x@1", Location: "https://example.com/x"}},
+		Bindings:     map[string]BindingEntry{"b": {Operation: "op", Source: "s", Preference: &fractional}},
+	}
+	if _, err := iface.Validate(); err == nil {
+		t.Fatal("a fractional preference violates the document schema")
+	}
+	if _, err := PrepareInterface(iface); err == nil {
+		t.Fatal("PrepareInterface must refuse what Validate establishes as a violation")
+	}
 }

@@ -6,6 +6,34 @@
 
 ### Fixed
 
+- **A relative `$ref` inside a schema resource is no longer an OBI-D-05
+  violation.** A schema that declares its own `$id` is a schema resource
+  whose references are its internal business (§7), so the OBI-position
+  reference forms stop at its boundary. Every `$id`, nested ones included,
+  is now held to RFC 3986 well-formedness as every `$ref` already was.
+- **`ParseDocument` refuses an unsupported version before applying the
+  schema.** It judged a `0.3.0` document against the 0.2 document schema
+  and reported it non-conformant; it now returns the `*VersionRefusalError`
+  (OBI-T-04), as `ValidateDocument` already did. Its schema violations are
+  built by the same rule checks as validation, so their text matches.
+- **`PrepareInterface` checks the document schema (OBI-D-02).** It skipped
+  that rule while documenting that it refused documents as `Validate` does.
+- **A version with surrounding whitespace is not SemVer.** `IsValidSemver`,
+  `IsSupportedVersion`, and OBI-D-12 no longer trim, so `" 0.2.0"` violates
+  OBI-D-12.
+- **One defect is one finding.** Checks that restated the embedded document
+  schema are gone, so OBI-D-02 has one owner. An `anyOf` or `oneOf` that no
+  alternative satisfies is one finding at its own location that says what
+  each alternative lacked; a source with neither `location` nor `content`
+  was three findings.
+- **Schema compilation never reads local files.** The schema backend's
+  default loader read `file:` references from disk, so a document could make
+  validation read the validating machine's files and a verdict could depend
+  on that machine. Every external reference now leaves the schema graph
+  unavailable (`*SchemaGraphUnavailableError`), as `http(s)` references
+  already did (§7, OBI-T-16). The 2020-12 meta-schemas are built in and
+  still resolve.
+
 - **`canonicaljson` refuses numbers it cannot carry exactly.** A JSON number
   whose exact value is not representable in IEEE 754 binary64 (for example
   `9007199254740993`, or a decimal with more precision than a double holds)
@@ -60,6 +88,23 @@
   SDK decode boundary.
 
 ### Changed
+
+- **Finding and diagnostic paths are JSON Pointers** (breaking, pre-1.0).
+  `Finding.Path` and `Diagnostic.Path` are RFC 6901 pointers into the
+  document, such as `/bindings/createTask/operation`; the empty pointer is
+  the whole document, and a missing member is reported at the object that
+  lacks it. Schema-derived findings (OBI-D-02, OBI-D-11, OBI-D-17) now carry
+  the location the schema check reports instead of an empty path, down to
+  the offending keyword or example member. Key and alias findings point at
+  the entry. `ValidationError` problems use the same paths.
+- **`ValidateAgainstSchema` validates a standalone schema** (breaking,
+  pre-1.0). It took a pool of named schemas and rewrote `#/schemas/X` into
+  the schema's own `$defs`, where a same-named local entry won, so it could
+  validate a value against the wrong schema. It now takes only the schema,
+  which is its own resolution root as JSON Schema defines. A schema at a
+  position of an OBI resolves against the whole document (§7):
+  `ValidateOperationInput`, `ValidateOperationOutput`, and the new
+  `ValidateAgainstNamedSchema` do that.
 
 - **Non-Core helpers moved out of the Go root package.** Binding
   implementation support types and exact-match checking moved to

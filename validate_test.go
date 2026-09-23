@@ -87,7 +87,7 @@ func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid semver")
 	}
-	if !containsProblem(err, `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-12)`) {
+	if !containsProblem(err, `/openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-12)`) {
 		t.Fatalf("expected OBI-D-12 problem, got %v", err)
 	}
 }
@@ -133,7 +133,7 @@ func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T)
 	if err.Error() == "" || err.Error() == "non-conformant interface" {
 		t.Fatalf("expected detailed error, got %q", err.Error())
 	}
-	if want := `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-12)`; !containsProblem(err, want) {
+	if want := `/openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-12)`; !containsProblem(err, want) {
 		t.Fatalf("expected problem %q, got %q", want, err.Error())
 	}
 }
@@ -163,8 +163,15 @@ func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, "sources[\"empty\"]: must have location or content (OBI-D-02)") {
-		t.Fatalf("expected location/content error, got %v", err)
+	// One defect is one finding: the document schema's anyOf reports that
+	// neither carriage member is present, at the source that lacks them.
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 {
+		t.Fatalf("want exactly one problem, got %v", err)
+	}
+	problem := ve.Problems[0]
+	if !strings.HasPrefix(problem, "/sources/empty: ") || !strings.Contains(problem, "'location'") || !strings.Contains(problem, "'content'") || !strings.HasSuffix(problem, "(OBI-D-02)") {
+		t.Fatalf("want one OBI-D-02 problem at the source naming both members, got %q", problem)
 	}
 }
 
@@ -201,7 +208,7 @@ func TestInterfaceValidate_EmptyTransformExpressionRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected empty named transform to be rejected (OBI-D-18)")
 	}
-	if !strings.Contains(err.Error(), `transforms["empty"]: not a syntactically valid JSONata expression (OBI-D-18)`) {
+	if !strings.Contains(err.Error(), `/transforms/empty: not a syntactically valid JSONata expression (OBI-D-18)`) {
 		t.Fatalf("expected OBI-D-18 problem for empty transform, got %v", err)
 	}
 }
@@ -541,7 +548,7 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `bindings["op.api"].inputTransform.$ref: references unknown transform "nonexistent" (OBI-D-10)`) {
+	if !containsProblem(err, `/bindings/op.api/inputTransform/$ref: references unknown transform "nonexistent" (OBI-D-10)`) {
 		t.Fatalf("expected transform ref error, got %v", err)
 	}
 }
@@ -566,7 +573,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `bindings["nonexistent.api"].operation: references unknown operation "nonexistent" (OBI-D-08)`) {
+	if !containsProblem(err, `/bindings/nonexistent.api/operation: references unknown operation "nonexistent" (OBI-D-08)`) {
 		t.Fatalf("expected operation ref error, got %v", err)
 	}
 }
@@ -588,7 +595,7 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `bindings["op.nonexistent"].source: references unknown source "nonexistent" (OBI-D-09)`) {
+	if !containsProblem(err, `/bindings/op.nonexistent/source: references unknown source "nonexistent" (OBI-D-09)`) {
 		t.Fatalf("expected source ref error, got %v", err)
 	}
 }
@@ -616,7 +623,7 @@ func TestInterfaceValidate_EmptyInlineTransformRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected empty inline transform to be rejected (OBI-D-18)")
 	}
-	if !strings.Contains(err.Error(), `bindings["op.api"].outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`) {
+	if !strings.Contains(err.Error(), `/bindings/op.api/outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`) {
 		t.Fatalf("expected OBI-D-18 problem for empty inline transform, got %v", err)
 	}
 }
@@ -707,7 +714,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid example input")
 	}
-	if !containsProblemSubstring(err, `operations["greet"].examples["bad"].input:`) {
+	if !containsProblemSubstring(err, `/operations/greet/examples/bad/input:`) {
 		t.Fatalf("expected OBI-D-11 input problem, got %v", err)
 	}
 	if !containsProblemSubstring(err, "OBI-D-11") {
@@ -752,7 +759,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid example output")
 	}
-	if !containsProblemSubstring(err, `operations["greet"].examples["bad"].output:`) {
+	if !containsProblemSubstring(err, `/operations/greet/examples/bad/output:`) {
 		t.Fatalf("expected OBI-D-11 output problem, got %v", err)
 	}
 	if !containsProblemSubstring(err, "OBI-D-11") {
@@ -840,10 +847,10 @@ func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 		t.Fatalf("expected error for invalid example against $ref schema")
 	}
 	// The valid example should not produce errors; only the invalid one should.
-	if !containsProblemSubstring(err, `operations["greet"].examples["invalid"].input:`) {
+	if !containsProblemSubstring(err, `/operations/greet/examples/invalid/input:`) {
 		t.Fatalf("expected problem for invalid example, got %v", err)
 	}
-	if containsProblemSubstring(err, `operations["greet"].examples["valid"].input:`) {
+	if containsProblemSubstring(err, `/operations/greet/examples/valid/input:`) {
 		t.Fatalf("valid example should not produce errors, got %v", err)
 	}
 }
@@ -923,7 +930,7 @@ func TestInterfaceValidate_ExampleValidation_ExplicitNullIsValidated(t *testing.
 	if err == nil {
 		t.Fatalf("expected explicit-null example input to fail against {\"type\":\"object\"}")
 	}
-	if !containsProblemSubstring(err, `operations["greet"].examples["nullCase"].input:`) {
+	if !containsProblemSubstring(err, `/operations/greet/examples/nullCase/input:`) {
 		t.Fatalf("expected null example input problem, got %v", err)
 	}
 	if !containsProblemSubstring(err, "OBI-D-11") {
@@ -1076,22 +1083,22 @@ func TestInterfaceValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.
 		{
 			name:    "type as number at input",
 			op:      Operation{Input: map[string]any{"type": 42.0}},
-			wantSub: `operations["op"].input: not a well-formed JSON Schema 2020-12 schema:`,
+			wantSub: `/operations/op/input/type: not a well-formed JSON Schema 2020-12 schema:`,
 		},
 		{
 			name:    "unknown simple type",
 			op:      Operation{Input: map[string]any{"type": "str"}},
-			wantSub: `operations["op"].input: not a well-formed JSON Schema 2020-12 schema:`,
+			wantSub: `/operations/op/input/type: not a well-formed JSON Schema 2020-12 schema:`,
 		},
 		{
 			name:    "nested minLength as string",
 			op:      Operation{Output: map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"minLength": "3"}}}},
-			wantSub: `operations["op"].output: not a well-formed JSON Schema 2020-12 schema:`,
+			wantSub: `/operations/op/output/properties/a/minLength: not a well-formed JSON Schema 2020-12 schema:`,
 		},
 		{
 			name:    "oneOf as object",
 			op:      Operation{Output: map[string]any{"oneOf": map[string]any{"type": "string"}}},
-			wantSub: `operations["op"].output: not a well-formed JSON Schema 2020-12 schema:`,
+			wantSub: `/operations/op/output/oneOf: not a well-formed JSON Schema 2020-12 schema:`,
 		},
 	}
 	for _, tc := range cases {
@@ -1128,10 +1135,10 @@ func TestInterfaceValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
 		t.Fatal("expected OBI-D-17 violations")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, `schemas["Task"]: a schema is a JSON Schema 2020-12 object or boolean; got number (OBI-D-17)`) {
+	if !strings.Contains(msg, `/schemas/Task: a schema is a JSON Schema 2020-12 object or boolean; got number (OBI-D-17)`) {
 		t.Errorf("expected schemas-map OBI-D-17 problem, got: %s", msg)
 	}
-	if !strings.Contains(msg, `operations["op"].output: a schema is a JSON Schema 2020-12 object or boolean; got string (OBI-D-17)`) {
+	if !strings.Contains(msg, `/operations/op/output: a schema is a JSON Schema 2020-12 object or boolean; got string (OBI-D-17)`) {
 		t.Errorf("expected output OBI-D-17 problem, got: %s", msg)
 	}
 }
@@ -1212,9 +1219,9 @@ func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		`transforms["unbalanced"]: not a syntactically valid JSONata expression (OBI-D-18)`,
-		`bindings["op.api"].inputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
-		`bindings["op.api"].outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
+		`/transforms/unbalanced: not a syntactically valid JSONata expression (OBI-D-18)`,
+		`/bindings/op.api/inputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
+		`/bindings/op.api/outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("expected problem %q, got: %s", want, msg)
@@ -1323,8 +1330,8 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsAreDiagnosed(t *test
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `sources["src"]`, "unknownField")
-	requireUnknownFieldDiagnostic(t, byPath, `bindings["op.src"]`, "unknownField")
+	requireUnknownFieldDiagnostic(t, byPath, `/sources/src`, "unknownField")
+	requireUnknownFieldDiagnostic(t, byPath, `/bindings/op.src`, "unknownField")
 }
 
 func TestInterfaceValidate_OperationExampleUnknownFieldsAreDiagnosed(t *testing.T) {
@@ -1345,7 +1352,7 @@ func TestInterfaceValidate_OperationExampleUnknownFieldsAreDiagnosed(t *testing.
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `operations["op"].examples["ex1"]`, "unknownField")
+	requireUnknownFieldDiagnostic(t, byPath, `/operations/op/examples/ex1`, "unknownField")
 }
 
 func TestInterfaceValidate_BindingEntryUnknownFieldsAreDiagnosed(t *testing.T) {
@@ -1369,7 +1376,7 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsAreDiagnosed(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `bindings["op.api"]`, "unknownBindingField")
+	requireUnknownFieldDiagnostic(t, byPath, `/bindings/op.api`, "unknownBindingField")
 }
 
 func TestInterfaceValidate_DependencyUnknownFieldsAreDiagnosed(t *testing.T) {
@@ -1385,7 +1392,7 @@ func TestInterfaceValidate_DependencyUnknownFieldsAreDiagnosed(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `dependencies["delivery"]`, "futurePolicy")
+	requireUnknownFieldDiagnostic(t, byPath, `/dependencies/delivery`, "futurePolicy")
 }
 
 func TestInterfaceValidate_ExtensionFieldsAreNotDiagnosed(t *testing.T) {

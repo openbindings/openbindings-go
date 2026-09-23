@@ -13,47 +13,33 @@ import (
 )
 
 // ParseDocument decodes a document for use: it checks the exact input bytes
-// (OBI-D-01) and the embedded document schema (OBI-D-02), refuses an
-// unsupported version (OBI-T-04), and unmarshals into an Interface. It is not
-// a conformance check; ValidateDocument reports every document rule.
+// (OBI-D-01), refuses an unsupported version (OBI-T-04), checks the embedded
+// document schema (OBI-D-02), and unmarshals into an Interface. It is not a
+// conformance check; ValidateDocument reports every document rule.
+//
+// The version decision comes first because the embedded schema is this
+// version's: a document declaring an unsupported version is refused, not
+// judged against rules it does not claim (§10.1). A refusal is a
+// *VersionRefusalError and schema violations are a *ValidationError, as from
+// Interface.Validate and ValidateDocument.
 func ParseDocument(data []byte) (*Interface, error) {
-	// OBI-D-01: the exact input is UTF-8 JSON with no duplicate object keys
-	// and no byte-order mark.
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse document: invalid JSON: %w (OBI-D-01)", err)
 	}
-	if verr := compiledOBISchema.Validate(raw); verr != nil {
-		lines := splitSchemaError(verr)
-		return nil, &ValidationError{
-			Problems: prefixLines("schema validation", lines),
-		}
+	if refusal := declaredVersionRefusal(raw); refusal != nil {
+		return nil, refusal
 	}
-
+	var c ruleChecks
+	validateAgainstOBISchema(&c, raw)
+	if verr := c.violationError(); verr != nil {
+		return nil, verr
+	}
 	var iface Interface
 	if err := json.Unmarshal(data, &iface); err != nil {
 		return nil, fmt.Errorf("parse document: %w", err)
 	}
-
-	// OBI-T-04: a document declaring a well-formed version outside this SDK's
-	// supported set is refused rather than interpreted, on every entry point.
-	// The schema pattern above already rejects a malformed version string, so
-	// the value here is well-formed SemVer. The refusal is the same
-	// *VersionRefusalError Interface.Validate and ValidateDocument return, so
-	// the diagnostic does not depend on the entry point.
-	if refusal := versionRefusalOf(iface.OpenBindings); refusal != nil {
-		return nil, refusal
-	}
-
 	return &iface, nil
-}
-
-func prefixLines(prefix string, lines []string) []string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = fmt.Sprintf("%s: %s", prefix, l)
-	}
-	return out
 }
 
 // FormatValidationErrors returns a human-readable multi-line string from a ValidationError.

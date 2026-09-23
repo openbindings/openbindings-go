@@ -22,7 +22,7 @@ func TestExactValidatorPredicateCapability(t *testing.T) {
 					t.Errorf("validation panicked: %v", recovered)
 				}
 			}()
-			err := ValidateAgainstSchema(value, schema, nil)
+			err := ValidateAgainstSchema(value, schema)
 			var capability *jsonvalue.CapabilityError
 			if !errors.As(err, &capability) {
 				t.Fatalf("want explicit numeric capability refusal, got %v", err)
@@ -31,7 +31,7 @@ func TestExactValidatorPredicateCapability(t *testing.T) {
 	}
 	// No numeric predicate is needed for a boolean schema. Carriage alone is
 	// not subject to arithmetic work limits.
-	if err := ValidateAgainstSchema(value, true, nil); err != nil {
+	if err := ValidateAgainstSchema(value, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -39,7 +39,7 @@ func TestExactValidatorPredicateCapability(t *testing.T) {
 func TestSchemaUnicodePropertyNames(t *testing.T) {
 	for _, pattern := range []string{`^\p{Letter}+$`, `^\p{L}+$`} {
 		for _, data := range []string{"letters", "éλ", "123"} {
-			err := ValidateAgainstSchema(data, map[string]any{"pattern": pattern}, nil)
+			err := ValidateAgainstSchema(data, map[string]any{"pattern": pattern})
 			if (err == nil) != (data != "123") {
 				t.Errorf("%s / %s: %v", pattern, data, err)
 			}
