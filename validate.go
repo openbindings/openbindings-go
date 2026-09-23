@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
-	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // ValidateOptions gives validation the capabilities it does not carry
@@ -114,7 +113,7 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 // documentView encodes a host document and decodes the generic JSON view the
 // document rules judge.
 func documentView(i Interface) (any, error) {
-	data, err := jsonvalue.Marshal(i)
+	data, err := json.Marshal(i)
 	if err != nil {
 		return nil, fmt.Errorf("openbindings: encode interface: %w", err)
 	}

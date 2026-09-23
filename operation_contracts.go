@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -43,11 +44,13 @@ type operationContracts struct {
 	loader      *documentLoader
 	compiler    *jsonschema.Compiler
 
-	// references memoizes, per location, the locations the references inside
-	// the value there name; checked memoizes the resource-limit check of a
-	// location.
-	references map[string][]string
+	// Memoized per location: the graph walked from it, what the positions
+	// under it reference, the resource-limit check of its value, and the
+	// resource holding it.
+	graphs     map[string]schemaGraph
+	references map[string]localReferences
 	checked    map[string]error
+	resources  map[string]string
 }
 
 func newOperationContracts(view any, schemas documentSchemas) *operationContracts {
@@ -61,8 +64,10 @@ func newOperationContracts(view any, schemas documentSchemas) *operationContract
 	return &operationContracts{
 		schemas:    schemas,
 		container:  container,
-		references: map[string][]string{},
+		graphs:     map[string]schemaGraph{},
+		references: map[string]localReferences{},
 		checked:    map[string]error{},
+		resources:  map[string]string{},
 	}
 }
 
@@ -95,26 +100,39 @@ var schemaKeywords = sync.OnceValue(func() map[string]bool {
 // reaches: an external one, which the SDK does not obtain, so err reports the
 // graph unavailable; or a JSON Schema meta-schema, which the schema library
 // carries.
+//
+// The graph is walked before the library is given it (see graph), so what it
+// reaches is known however far the library compiles: the library skips a
+// position no evaluation can apply, such as a then with no if, which §5.2
+// still counts.
 func (o *operationContracts) compile(key, position string) (compiled *CompiledSchema, outside string, err error) {
 	target := jsonpointer.Format("operations", key, position)
-	if err := o.check(target); err != nil {
-		return nil, "", err
+	g := o.graph(target)
+	switch {
+	case g.external:
+		return nil, g.outside, fmt.Errorf("the schema graph reaches %s, which the document does not embed", g.outside)
+	case g.problem != "":
+		return nil, g.outside, errors.New(g.problem)
+	}
+	if err := o.check(g); err != nil {
+		return nil, g.outside, err
 	}
 	if o.compiler == nil {
 		if err := o.prepare(); err != nil {
-			return nil, "", err
+			return nil, g.outside, err
 		}
 	}
 	o.loader.external = ""
 	schema, err := o.compiler.Compile(o.documentURL + "#" + fragment(target))
 	if err != nil {
-		return nil, o.loader.external, err
+		return nil, cmp.Or(g.outside, o.loader.external), err
 	}
 	metaSchema, problem := o.inspect(schema)
+	outside = cmp.Or(g.outside, metaSchema)
 	if problem != "" {
-		return nil, metaSchema, errors.New(problem)
+		return nil, outside, errors.New(problem)
 	}
-	return &CompiledSchema{backend: schema}, metaSchema, nil
+	return &CompiledSchema{backend: schema}, outside, nil
 }
 
 // prepare registers the document with a new compiler and compiles every
@@ -129,7 +147,7 @@ func (o *operationContracts) prepare() error {
 	}
 	for _, id := range slices.Sorted(maps.Keys(o.schemas.resources)) {
 		location := o.schemas.resources[id].location
-		if o.check(location) == nil {
+		if o.check(o.graph(location)) == nil {
 			// A resource that does not compile is not learned; a graph that
 			// reaches it reports why.
 			_, _ = c.Compile(o.documentURL + "#" + fragment(location))
@@ -139,12 +157,13 @@ func (o *operationContracts) prepare() error {
 	return nil
 }
 
-// check reports why the schema library must not be given the graph from a
-// location: a value the library can reach from it holds a number beyond the
-// numeric limits of schema evaluation, or nests deeper than schemaDepthLimit.
-// Both are resource limits met before the library does the work (§10.5).
-func (o *operationContracts) check(start string) error {
-	for _, location := range o.reachable(start) {
+// check reports why the schema library must not be given a graph: a value it
+// is handed holds a number beyond the numeric limits of schema evaluation, or
+// nests deeper than schemaDepthLimit. Both are resource limits met before the
+// library does the work (§10.5). Each entry is checked whole, since the
+// library checks a value it reaches against the meta-schemas whole.
+func (o *operationContracts) check(g schemaGraph) error {
+	for _, location := range g.entries {
 		err, done := o.checked[location]
 		if !done {
 			value, _ := jsonpointer.Resolve(o.container, location)
@@ -162,94 +181,188 @@ func (o *operationContracts) check(start string) error {
 	return nil
 }
 
-// reachable returns, in order of discovery, the locations of the values the
-// schema library can reach when it compiles the schema at start: a superset,
-// since every reference inside a reached value is followed, whether or not
-// the library applies the keyword holding it. A same-document fragment names
-// a location from the document root; an absolute reference to a resource the
-// document embeds names that resource; a relative reference, which only a
-// resource's base resolves, names every embedded resource. A location inside
-// an embedded resource brings the whole resource, whose references resolve
-// against its own base.
-func (o *operationContracts) reachable(start string) []string {
-	var locations []string
-	seen := map[string]bool{}
+// schemaGraph is what a walk of the schema graph statically reachable from
+// one location finds (§5.2): every position evaluation can apply, whatever an
+// if would select, and the targets of their references, transitively. A
+// definition in $defs belongs to the graph only when a reference reaches it
+// (T16-S-04 of the core conformance corpus).
+type schemaGraph struct {
+	// entries are the locations the library is handed as schemas: the start,
+	// every reference target, and the embedded resource around each, sorted.
+	entries []string
+	// outside is the first resource outside the document the graph reaches,
+	// in sorted order. external is true unless it is a JSON Schema
+	// meta-schema the library carries.
+	outside  string
+	external bool
+	// problem states the first reference, in sorted order, that names no
+	// schema the document holds.
+	problem string
+}
+
+// graph walks the schema graph statically reachable from a location of the
+// container. References resolve as §7 and JSON Schema 2020-12 resolve them: a
+// same-document fragment from the document root, or from the embedded
+// resource holding the reference, and an absolute reference by the $id of a
+// resource the document embeds.
+func (o *operationContracts) graph(start string) schemaGraph {
+	if g, ok := o.graphs[start]; ok {
+		return g
+	}
+	entries := map[string]bool{}
+	var metaSchemas, externals, problems []string
 	queue := []string{start}
 	for len(queue) > 0 {
-		location := queue[0]
+		entry := queue[0]
 		queue = queue[1:]
-		if seen[location] {
+		if entries[entry] {
 			continue
 		}
-		seen[location] = true
-		if _, ok := jsonpointer.Resolve(o.container, location); !ok {
-			continue
+		entries[entry] = true
+		if resource := o.resourceAt(entry); resource != "" {
+			entries[o.schemas.resources[resource].location] = true
 		}
-		locations = append(locations, location)
-		queue = append(queue, o.referencedFrom(location)...)
-		for _, id := range slices.Sorted(maps.Keys(o.schemas.resources)) {
-			if resource := o.schemas.resources[id].location; strings.HasPrefix(location, resource+"/") {
-				queue = append(queue, resource)
-			}
-		}
+		local := o.referencesUnder(entry)
+		metaSchemas = append(metaSchemas, local.metaSchemas...)
+		externals = append(externals, local.externals...)
+		problems = append(problems, local.problems...)
+		queue = append(queue, local.targets...)
 	}
-	return locations
+	g := schemaGraph{entries: slices.Sorted(maps.Keys(entries))}
+	switch {
+	case len(externals) > 0:
+		g.outside, g.external = slices.Min(externals), true
+	case len(metaSchemas) > 0:
+		g.outside = slices.Min(metaSchemas)
+	}
+	if len(problems) > 0 {
+		g.problem = slices.Min(problems)
+	}
+	o.graphs[start] = g
+	return g
 }
 
-// referencedFrom returns the locations the $ref and $dynamicRef strings
-// anywhere in the value at location name.
-func (o *operationContracts) referencedFrom(location string) []string {
-	if targets, ok := o.references[location]; ok {
-		return targets
-	}
-	var targets []string
-	value, _ := jsonpointer.Resolve(o.container, location)
-	var walk func(node any)
-	walk = func(node any) {
-		switch node := node.(type) {
-		case []any:
-			for _, item := range node {
-				walk(item)
-			}
-		case map[string]any:
-			for _, key := range sortedKeys(node) {
-				if ref, isString := node[key].(string); isString && (key == "$ref" || key == "$dynamicRef") {
-					targets = append(targets, o.referenced(ref)...)
-				}
-				walk(node[key])
-			}
-		}
-	}
-	walk(value)
-	o.references[location] = targets
-	return targets
+// localReferences is what the references at the positions under one location
+// resolve to, not following them.
+type localReferences struct {
+	targets                          []string
+	metaSchemas, externals, problems []string
 }
 
-// referenced returns the locations a reference can name in the document.
-func (o *operationContracts) referenced(ref string) []string {
+// referencesUnder walks the positions under a location that evaluation can
+// apply (every subschema but a definition, which applies only through a
+// reference) and resolves the references there.
+func (o *operationContracts) referencesUnder(location string) localReferences {
+	if local, ok := o.references[location]; ok {
+		return local
+	}
+	var local localReferences
+	var walk func(location string)
+	walk = func(location string) {
+		node, _ := jsonpointer.Resolve(o.container, location)
+		object, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		for _, keyword := range []string{"$ref", "$dynamicRef"} {
+			ref, isString := object[keyword].(string)
+			if !isString {
+				continue
+			}
+			switch target, outside, external, problem := o.resolve(ref, location); {
+			case problem != "":
+				local.problems = append(local.problems, fmt.Sprintf("the %s %q at %s %s", keyword, ref, location, problem))
+			case external:
+				local.externals = append(local.externals, outside)
+			case outside != "":
+				local.metaSchemas = append(local.metaSchemas, outside)
+			default:
+				local.targets = append(local.targets, target)
+			}
+		}
+		forEachSubschema(object, func(_ any, tokens ...string) {
+			if tokens[0] != "$defs" && tokens[0] != "definitions" {
+				walk(location + jsonpointer.Format(tokens...))
+			}
+		})
+	}
+	walk(location)
+	o.references[location] = local
+	return local
+}
+
+// resolve resolves a reference held at a location: to the location it names
+// in the container, to a resource outside the document (external unless the
+// library carries it as a meta-schema), or to why it names no schema the
+// document holds.
+func (o *operationContracts) resolve(ref, at string) (target, outside string, external bool, problem string) {
 	parsed, err := url.Parse(ref)
 	if err != nil {
-		return nil
+		return "", "", false, "is not a URI reference"
 	}
-	switch {
-	case strings.HasPrefix(ref, "#"):
-		if parsed.Fragment == "" || strings.HasPrefix(parsed.Fragment, "/") {
-			return []string{parsed.Fragment}
+	id, fragment := o.resourceAt(at), parsed.Fragment
+	if !strings.HasPrefix(ref, "#") {
+		if !parsed.IsAbs() {
+			if id == "" {
+				return "", "", false, "is relative, with no base to resolve against"
+			}
+			base, _ := url.Parse(id)
+			parsed = base.ResolveReference(parsed)
 		}
-		return nil // a plain-name anchor lies in the resource that holds it
-	case parsed.IsAbs():
+		fragment = parsed.Fragment
 		parsed.Fragment, parsed.RawFragment = "", ""
-		if resource, embedded := o.schemas.resources[parsed.String()]; embedded {
-			return []string{resource.location}
-		}
-		return nil // outside the document
-	default:
-		var all []string
-		for _, id := range slices.Sorted(maps.Keys(o.schemas.resources)) {
-			all = append(all, o.schemas.resources[id].location)
-		}
-		return all
+		id = parsed.String()
 	}
+	if id == "" {
+		// The document root, which declares no anchors (§7).
+		if fragment != "" && !strings.HasPrefix(fragment, "/") {
+			return "", "", false, "is a plain-name fragment, which no schema at an OBI position declares"
+		}
+		if _, ok := jsonpointer.Resolve(o.container, fragment); !ok {
+			return "", "", false, "does not resolve within the document"
+		}
+		return fragment, "", false, ""
+	}
+	if why := o.schemas.ambiguous[id]; why != "" {
+		return "", "", false, fmt.Sprintf("names no one embedded schema: %s", why)
+	}
+	resource, embedded := o.schemas.resources[id]
+	if !embedded {
+		return "", id, !isBuiltInMetaSchema(id), ""
+	}
+	within := fragment
+	if fragment != "" && !strings.HasPrefix(fragment, "/") {
+		switch anchors := anchorLocations(resource.schema, fragment); len(anchors) {
+		case 1:
+			within = anchors[0]
+		case 0:
+			return "", "", false, fmt.Sprintf("names an anchor %s does not declare", id)
+		default:
+			return "", "", false, fmt.Sprintf("names an anchor more than one schema in %s declares", id)
+		}
+	}
+	target = resource.location + within
+	if _, ok := jsonpointer.Resolve(o.container, target); !ok {
+		return "", "", false, fmt.Sprintf("does not resolve within %s", id)
+	}
+	return target, "", false, ""
+}
+
+// resourceAt returns the $id of the innermost resource the document embeds
+// that holds a location, or "" for none: the base of a same-document fragment
+// held there.
+func (o *operationContracts) resourceAt(location string) string {
+	if id, ok := o.resources[location]; ok {
+		return id
+	}
+	innermost, depth := "", -1
+	for id, resource := range o.schemas.resources {
+		if (location == resource.location || strings.HasPrefix(location, resource.location+"/")) && len(resource.location) > depth {
+			innermost, depth = id, len(resource.location)
+		}
+	}
+	o.resources[location] = innermost
+	return innermost
 }
 
 // fragment writes a JSON Pointer as a URI fragment the way the schema library
@@ -471,7 +584,7 @@ func (l *documentLoader) Load(url string) (any, error) {
 		return nil, fmt.Errorf("%s names no one embedded schema: %s", url, why)
 	}
 	if resource, embedded := schemas.resources[url]; embedded {
-		if err := l.contracts.check(resource.location); err != nil {
+		if err := l.contracts.check(l.contracts.graph(resource.location)); err != nil {
 			return nil, err
 		}
 		return withID(resource.schema, url), nil

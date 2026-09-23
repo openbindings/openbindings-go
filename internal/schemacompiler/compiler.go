@@ -18,12 +18,30 @@ import (
 // validates nothing (OBI-T-16), so every external reference, file: and
 // http(s) alike, is unavailable. The JSON Schema meta-schemas are built into
 // the library and resolve without a loader. Patterns use Go's regexp, the
-// library's own engine; see Pattern for one it cannot compile.
+// library's own engine; see UncompiledPattern for one it cannot compile.
+//
+// format never rejects a value: §5.2 makes it an annotation at an operation
+// boundary whatever dialect a subschema declares, and the library otherwise
+// asserts it under the drafts before 2019-09 (which a reference to their
+// meta-schemas reaches) with no option to stop. Every format the library
+// checks is registered to accept every value; "regex" goes through
+// compilePattern, which never refuses a pattern.
 func New() *jsonschema.Compiler {
 	c := jsonschema.NewCompiler()
 	c.UseLoader(externalResourceRefusal{})
 	c.UseRegexpEngine(compilePattern)
+	for _, name := range libraryFormats {
+		c.RegisterFormat(&jsonschema.Format{Name: name, Validate: func(any) error { return nil }})
+	}
 	return c
+}
+
+// libraryFormats are the formats santhosh-tekuri/jsonschema v6.0.3 checks.
+// An unlisted format is never checked.
+var libraryFormats = []string{
+	"json-pointer", "relative-json-pointer", "uuid", "duration", "period",
+	"ipv4", "ipv6", "hostname", "email", "date", "time", "date-time",
+	"uri", "iri", "uri-reference", "iri-reference", "uri-template", "semver",
 }
 
 // compilePattern compiles a pattern with Go's regexp. A pattern Go's regexp

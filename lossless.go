@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openbindings/openbindings-go/jsonvalue"
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
 
 // The typed model decodes an OBI-defined object only if re-encoding it
@@ -246,7 +246,7 @@ func decodeMember(raw json.RawMessage, class memberClass, field reflect.Value) e
 // number the model cannot carry exactly, fails decoding.
 func exactPreference(raw json.RawMessage) (int64, error) {
 	token := string(bytes.TrimSpace(raw))
-	if !jsonvalue.IsNumber(json.Number(token)) {
+	if !schemacompiler.IsNumber(json.Number(token)) {
 		return 0, fmt.Errorf("%s is not a JSON number", token)
 	}
 	value, ok := new(big.Rat).SetString(token)

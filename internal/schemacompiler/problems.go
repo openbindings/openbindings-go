@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
-	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"golang.org/x/text/language"
@@ -135,7 +135,7 @@ func ValueProblem(v any) string {
 	case nil, bool, string, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return ""
 	case json.Number:
-		if !jsonvalue.IsNumber(v) {
+		if !IsNumber(v) {
 			return fmt.Sprintf("json.Number %q is not a JSON number", string(v))
 		}
 		return ""
@@ -162,19 +162,34 @@ func ValueProblem(v any) string {
 	}
 }
 
+// IsNumber reports whether n holds exactly one JSON number token, which
+// encoding/json does not check of an empty json.Number (it encodes one as 0).
+func IsNumber(n json.Number) bool {
+	s := string(n)
+	return s != "" && (s[0] == '-' || s[0] >= '0' && s[0] <= '9') && strings.TrimSpace(s) == s && json.Valid([]byte(s))
+}
+
+// The numeric limits of schema evaluation. The backend parses numbers into
+// math/big values: toward these limits the work grows, and past what
+// math/big parses v6.0.3 dereferences nil or drops the keyword, so a value or
+// schema holding such a number is not handed to it.
+const (
+	maxNumberLength   = 4096
+	maxNumberExponent = 10000
+)
+
+// ErrNumericLimit is wrapped by NumericLimit's error.
+var ErrNumericLimit = errors.New("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000)")
+
 // NumericLimit reports the first number in v, in key order, beyond the
-// numeric work the backend is given (jsonvalue.CheckNumericWork: at most 4096
-// characters, an exponent within ±10000): its location in v as a JSON Pointer
-// ("" for v itself) and an error wrapping the *jsonvalue.CapabilityError. It
-// returns a nil error when v holds none. The backend parses numbers into
-// math/big values: toward those limits the work grows, and past what math/big
-// parses v6.0.3 dereferences nil or drops the keyword, so such a value or
-// schema is not handed to it.
+// numeric limits of schema evaluation: its location in v as a JSON Pointer
+// ("" for v itself) and ErrNumericLimit. It returns a nil error when v holds
+// none. Only a json.Number can exceed them; Go's numeric types cannot.
 func NumericLimit(v any) (location string, err error) {
 	switch v := v.(type) {
 	case json.Number:
-		if err := jsonvalue.CheckNumericWork(v); err != nil {
-			return "", fmt.Errorf("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000): %w", err)
+		if !withinNumericLimits(string(v)) {
+			return "", ErrNumericLimit
 		}
 	case []any:
 		for i, item := range v {
@@ -190,6 +205,19 @@ func NumericLimit(v any) (location string, err error) {
 		}
 	}
 	return "", nil
+}
+
+func withinNumericLimits(token string) bool {
+	if len(token) > maxNumberLength {
+		return false
+	}
+	if i := strings.LastIndexAny(token, "eE"); i >= 0 {
+		exponent, ok := new(big.Int).SetString(token[i+1:], 10)
+		if !ok || exponent.CmpAbs(big.NewInt(maxNumberExponent)) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // Depth returns the nesting depth of v: 0 for a scalar, and one more than its

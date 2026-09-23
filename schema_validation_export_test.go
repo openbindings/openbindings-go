@@ -247,15 +247,14 @@ func TestValidateOperationInput_UnknownRootMembersAreNotSchemaKeywords(t *testin
 	}
 }
 
-// The schema library evaluates a schema under the draft it declares. Through
-// the built-in draft-07 meta-schema, whose dialect asserts format by default,
-// format asserts; in 2020-12 it never does. This is the library's behavior,
-// accepted rather than patched: §5.2 asks that format never assert at an
-// operation boundary.
-func TestValidateOperationInput_FormatAssertsOnlyWhereTheLibraryAssertsIt(t *testing.T) {
-	iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"http://json-schema.org/draft-07/schema#"}}}}`)
-	if err := ValidateOperationInput(map[string]any{"$id": "http://[bad uri", "pattern": "("}, iface, "op"); !errors.As(err, new(*SchemaValidationError)) {
-		t.Fatalf("the library asserts format under draft-07: want a mismatch, got %v", err)
+// format never asserts at an operation boundary, even through the built-in
+// meta-schemas of drafts that assert it by default (§5.2, OBI-T-16).
+func TestValidateOperationInput_FormatIsAnnotationInEveryDialect(t *testing.T) {
+	for _, meta := range []string{"http://json-schema.org/draft-04/schema#", "http://json-schema.org/draft-06/schema#", "http://json-schema.org/draft-07/schema#"} {
+		iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"`+meta+`"}}}}`)
+		if err := ValidateOperationInput(map[string]any{"$schema": "not a uri", "pattern": "("}, iface, "op"); err != nil {
+			t.Errorf("%s: format must not assert: %v", meta, err)
+		}
 	}
 }
 
@@ -323,19 +322,26 @@ func TestValidateOperationInput_ConflictingIDsOnlyAffectGraphsThatReachThem(t *t
 	}
 }
 
-// The schema library compiles only what can apply: a then or else no if can
-// select is not compiled, so a reference inside it is not in the graph. This
-// is the library's behavior, accepted rather than patched: §5.2 counts every
-// schema-bearing position as statically reachable.
-func TestValidateOperationInput_ApplicatorsNoIfSelectsAreNotCompiled(t *testing.T) {
+// Success needs the whole statically reachable graph, whatever branches the
+// evaluator would skip for a value, a then or else no if selects included
+// (§5.2, OBI-T-16).
+func TestValidateOperationInput_ApplicatorsTheEvaluatorSkipsStillCount(t *testing.T) {
+	var unavailable *SchemaGraphUnavailableError
 	for name, input := range map[string]string{
-		"then under a false if": `{"if":false,"then":{"$ref":"https://ext.example/x"}}`,
-		"then with no if":       `{"then":{"$ref":"https://ext.example/x"}}`,
+		"then under a false if":   `{"if":false,"then":{"$ref":"https://ext.example/x"}}`,
+		"then with no if":         `{"then":{"$ref":"https://ext.example/x"}}`,
+		"else with a missing ref": `{"type":"string","else":{"$ref":"#/schemas/Missing"}}`,
 	} {
 		iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":`+input+`}}}`)
-		if err := ValidateOperationInput("x", iface, "op"); err != nil {
-			t.Errorf("%s: want a verdict, got %v", name, err)
+		if err := ValidateOperationInput("x", iface, "op"); !errors.As(err, &unavailable) {
+			t.Errorf("%s: want graph unavailable, got %v", name, err)
 		}
+	}
+	// An example whose graph reaches outside the document is outside
+	// OBI-D-11, a then with no if notwithstanding.
+	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"$ref":"https://ext.example/x.json"}},"examples":{"e":{"input":5}}}}}`), ValidateOptions{})
+	if report.Evidence["OBI-D-11"] != EvidenceSatisfied {
+		t.Fatalf("OBI-D-11 %q", report.Evidence["OBI-D-11"])
 	}
 }
 

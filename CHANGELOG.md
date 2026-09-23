@@ -203,6 +203,13 @@
 
 ### Changed
 
+- **Core depends on no other package of the SDK.** It used `jsonvalue` for
+  four helpers, and so compiled that package's invocation, schema-comparison
+  and binding-specification helpers, `internal/value`, `internal/jstring`,
+  and the private copy of encoding/json. Core now keeps its number checks
+  beside its use of the JSON Schema library and encodes with encoding/json:
+  a host object holding an empty `json.Number` is validated as the `0`
+  `json.Marshal` writes for it.
 - **The document model does not carry lone UTF-16 surrogates** (breaking,
   pre-1.0). A string escaping an isolated surrogate (`"\uD800"`) is RFC 8259
   JSON, so it breaks no document rule, but a Go string cannot hold it and
@@ -244,13 +251,15 @@
   what the patches did, the library's behavior stands: patterns use Go's
   `regexp`, so an ECMAScript-only pattern such as a lookahead leaves the
   graph unavailable; the pre-2019 `dependencies` and `$recursiveRef` are
-  evaluated in 2020-12 schemas; `format` asserts inside a schema the library
-  evaluates under draft-07 or earlier, which only a reference to a built-in
-  meta-schema reaches; a `then` or `else` no `if` can select is not
-  compiled, so a reference inside it is not in the graph; counts beyond the
-  largest Go `int` are not corrected; and a document schema finding about a
-  map key can name the wrong parent map, because v6.0.3 reuses that
-  location's storage. A number beyond the numeric limits of schema
+  evaluated in 2020-12 schemas; counts beyond the largest Go `int` are not
+  corrected; and a document schema finding about a map key can name the
+  wrong parent map, because v6.0.3 reuses that location's storage. Two
+  library behaviors are corrected through its public options instead:
+  `format` never rejects a value, in any draft (the library otherwise
+  enforces it under draft-07 and earlier, which a reference to their
+  meta-schemas reaches, with no option to stop), and the graph an operation
+  schema reaches is walked by core itself, so a `then` or `else` no `if`
+  selects counts, as §5.2 has it, though the library does not compile it. A number beyond the numeric limits of schema
   evaluation (4096 characters, an exponent within ±10000) in a value, a
   schema, or the document leaves that check without a verdict instead of
   reaching the library, where v6.0.3 dereferences nil. The

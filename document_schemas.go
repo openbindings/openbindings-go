@@ -185,7 +185,7 @@ func resolveInResource(resource schemaResource, fragment string) resolution {
 		}
 		return resolved
 	default:
-		switch found := findAnchor(resource.schema, fragment); {
+		switch found := anchorLocations(resource.schema, fragment); {
 		case len(found) == 0:
 			return missing
 		case len(found) > 1:
@@ -196,13 +196,14 @@ func resolveInResource(resource schemaResource, fragment string) resolution {
 	}
 }
 
-// findAnchor returns every schema in a resource that declares a plain-name
-// anchor, by $anchor or $dynamicAnchor. The search does not enter a nested
-// resource, whose anchors are its own.
-func findAnchor(resource map[string]any, name string) []map[string]any {
-	var found []map[string]any
-	var search func(node any, root bool)
-	search = func(node any, root bool) {
+// anchorLocations returns the location, as a JSON Pointer from the resource,
+// of every schema in a resource that declares a plain-name anchor, by $anchor
+// or $dynamicAnchor. The search does not enter a nested resource, whose
+// anchors are its own.
+func anchorLocations(resource map[string]any, name string) []string {
+	var found []string
+	var search func(node any, location string, root bool)
+	search = func(node any, location string, root bool) {
 		object, isObject := node.(map[string]any)
 		if !isObject {
 			return
@@ -211,12 +212,12 @@ func findAnchor(resource map[string]any, name string) []map[string]any {
 			return
 		}
 		if object["$anchor"] == name || object["$dynamicAnchor"] == name {
-			found = append(found, object)
+			found = append(found, location)
 		}
-		forEachSubschema(object, func(child any, _ ...string) {
-			search(child, false)
+		forEachSubschema(object, func(child any, tokens ...string) {
+			search(child, location+jsonpointer.Format(tokens...), false)
 		})
 	}
-	search(resource, true)
+	search(resource, "", true)
 	return found
 }
