@@ -8,18 +8,14 @@ import (
 	"testing"
 )
 
-func TestSupportedRange(t *testing.T) {
-	min, max := SupportedRange()
-	if min == "" {
-		t.Error("min version should not be empty")
+// The declaration and the version this SDK writes agree: documents built
+// with the SDK declare a version it supports.
+func TestSupportedVersions_AuthoringVersionIsSupported(t *testing.T) {
+	if supported, err := IsSupportedVersion(AuthoringVersion); !supported {
+		t.Fatalf("AuthoringVersion %s is not supported: %v", AuthoringVersion, err)
 	}
-	if max == "" {
-		t.Error("max version should not be empty")
-	}
-	minParsed, _ := parseSemverStrict(min)
-	maxParsed, _ := parseSemverStrict(max)
-	if compareSemver(minParsed, maxParsed) > 0 {
-		t.Errorf("min (%s) should be <= max (%s)", min, max)
+	if want := supportedLine.major + "." + supportedLine.minor + ".x"; SupportedVersions != want {
+		t.Fatalf("SupportedVersions %q parsed as the line %s", SupportedVersions, want)
 	}
 }
 
@@ -30,24 +26,23 @@ func TestIsSupportedVersion(t *testing.T) {
 		want    bool
 		wantErr bool
 	}{
-		{name: "exact min version", version: MinSupportedVersion, want: true},
-		{name: "exact max version", version: MaxTestedVersion, want: true},
-		// OBI-T-04 acceptance is patch-lenient within a supported minor line:
-		// a higher patch than MaxTestedVersion is accepted (it is what
-		// Validate/ParseDocument do), even though it is outside the tested range.
-		{name: "higher patch is accepted", version: "0.2.1", want: true},
-		{name: "much higher patch is accepted", version: "0.2.99", want: true},
-		{name: "below min", version: "0.1.0", want: false},
-		{name: "below min minor pre-1", version: "0.1.9", want: false},
-		{name: "much below min", version: "0.0.1", want: false},
-		{name: "above max major", version: "1.0.0", want: false},
-		{name: "above max pre-1 minor", version: "0.3.0", want: false},
-		{name: "unsupported prerelease", version: "0.2.0-rc.1", want: false},
+		{name: "the authoring version", version: AuthoringVersion, want: true},
+		// A release of the supported line is supported whatever its patch.
+		{name: "higher patch", version: "0.2.1", want: true},
+		{name: "much higher patch", version: "0.2.99", want: true},
+		{name: "build metadata is ignored", version: "0.2.0+build.1", want: true},
+		{name: "lower minor pre-1", version: "0.1.0", want: false},
+		{name: "lower minor, higher patch", version: "0.1.9", want: false},
+		{name: "much lower", version: "0.0.1", want: false},
+		{name: "higher major", version: "1.0.0", want: false},
+		{name: "higher minor pre-1", version: "0.3.0", want: false},
+		{name: "a prerelease of a supported release", version: "0.2.0-rc.1", want: false},
+		{name: "a prerelease of a later patch", version: "0.2.1-rc.1", want: false},
 		{name: "invalid empty", version: "", wantErr: true},
 		{name: "invalid 1.0", version: "1.0", wantErr: true},
 		{name: "invalid letters", version: "a.b.c", wantErr: true},
 		{name: "invalid negative", version: "-1.0.0", wantErr: true},
-		{name: "surrounding whitespace is not SemVer", version: " " + MinSupportedVersion + " ", wantErr: true},
+		{name: "surrounding whitespace is not SemVer", version: " " + AuthoringVersion + " ", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -61,6 +56,36 @@ func TestIsSupportedVersion(t *testing.T) {
 				t.Errorf("IsSupportedVersion(%q) = %v, want %v", tt.version, got, tt.want)
 			}
 		})
+	}
+}
+
+// A prerelease is supported only when named explicitly (§8.1): naming one
+// supports it, build metadata aside, and supports nothing else.
+func TestIsSupportedVersion_PrereleasesAreNamed(t *testing.T) {
+	defer func(saved []string) { supportedPrereleases = saved }(supportedPrereleases)
+	supportedPrereleases = []string{"0.3.0-rc.1"}
+	for version, want := range map[string]bool{
+		"0.3.0-rc.1": true, "0.3.0-rc.1+build.2": true,
+		"0.3.0-rc.2": false, "0.3.0": false, "0.2.0-rc.1": false,
+	} {
+		if got, err := IsSupportedVersion(version); got != want || err != nil {
+			t.Errorf("IsSupportedVersion(%q) = %v, %v; want %v", version, got, err, want)
+		}
+	}
+}
+
+// A refusal says which way the version misses the supported line.
+func TestVersionRefusal_SaysWhy(t *testing.T) {
+	for version, want := range map[string]string{
+		"0.3.0":      `document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)`,
+		"1.0.0":      `document declares version "1.0.0", newer than the release line this implementation supports (0.2.x)`,
+		"0.1.9":      `document declares version "0.1.9", older than the release line this implementation supports (0.2.x)`,
+		"0.3.0-rc.1": `document declares version "0.3.0-rc.1", newer than the release line this implementation supports (0.2.x)`,
+		"0.2.0-rc.1": `document declares version "0.2.0-rc.1", a pre-release this implementation does not support`,
+	} {
+		if msg, refused, err := versionRefusal(version); !refused || err != nil || msg != want {
+			t.Errorf("%s: %q, %v, %v", version, msg, refused, err)
+		}
 	}
 }
 
@@ -101,67 +126,6 @@ func TestIsSupportedVersion_MatchesValidateAndParseRefusal(t *testing.T) {
 			validateVersionRefuses := verr != nil && strings.Contains(verr.Error(), "(OBI-T-04)")
 			if accepted == validateVersionRefuses {
 				t.Errorf("drift: IsSupportedVersion(%q)=%v but Validate version-refuses=%v (%v)", v, accepted, validateVersionRefuses, verr)
-			}
-		})
-	}
-}
-
-func TestIsHigherMajorOrPre1MinorThanMaxTested(t *testing.T) {
-	// MaxTestedVersion is currently "0.2.0" — pre-1.0, so OBI-T-04 also refuses higher minor.
-	tests := []struct {
-		name    string
-		version string
-		want    bool
-		wantErr bool
-	}{
-		{name: "exact max", version: MaxTestedVersion, want: false},
-		{name: "lower minor pre-1", version: "0.1.0", want: false},
-		{name: "higher patch only", version: "0.2.5", want: false},
-		{name: "higher minor pre-1 (OBI-T-04 refusal)", version: "0.3.0", want: true},
-		{name: "higher major", version: "1.0.0", want: true},
-		{name: "much higher major", version: "5.0.0", want: true},
-		{name: "invalid", version: "not-a-version", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := isHigherMajorOrPre1MinorThanMaxTested(tt.version)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("isHigherMajorOrPre1MinorThanMaxTested(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
-				return
-			}
-			if !tt.wantErr && got != tt.want {
-				t.Errorf("isHigherMajorOrPre1MinorThanMaxTested(%q) = %v, want %v", tt.version, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsUnsupportedPrerelease(t *testing.T) {
-	// MinSupportedVersion == MaxTestedVersion == "0.2.0": no prerelease is in range.
-	tests := []struct {
-		name    string
-		version string
-		want    bool
-		wantErr bool
-	}{
-		{name: "release version is not a prerelease", version: "0.2.0", want: false},
-		{name: "patch release is not a prerelease", version: "0.2.1", want: false},
-		{name: "build metadata is not a prerelease", version: "0.2.0+build.1", want: false},
-		{name: "prerelease of supported version is unsupported", version: "0.2.0-rc.1", want: true},
-		{name: "prerelease of a higher version is unsupported", version: "0.3.0-rc.1", want: true},
-		{name: "invalid", version: "not-a-version", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := isUnsupportedPrerelease(tt.version)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("isUnsupportedPrerelease(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
-				return
-			}
-			if !tt.wantErr && got != tt.want {
-				t.Errorf("isUnsupportedPrerelease(%q) = %v, want %v", tt.version, got, tt.want)
 			}
 		})
 	}

@@ -1,7 +1,6 @@
 package openbindings
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,17 +9,18 @@ import (
 	"testing"
 )
 
-// stubEngine stands in for the application's transform engine: it refuses
+// stubParser stands in for the application's transform parser: it refuses
 // the expressions in refuse, cannot decide those in undecided, and parses
-// every other. What the pinned language accepts is the chosen engine's to
-// decide, not the core's.
-type stubEngine struct {
+// every other. What the pinned language accepts is the chosen parser's to
+// decide, not the core's. Validation takes a parser alone, never an
+// evaluator.
+type stubParser struct {
 	refuse    map[string]bool
 	undecided map[string]bool
 	parsed    *[]string
 }
 
-func (e stubEngine) Parse(expression string) error {
+func (e stubParser) Parse(expression string) error {
 	if e.parsed != nil {
 		*e.parsed = append(*e.parsed, expression)
 	}
@@ -33,21 +33,17 @@ func (e stubEngine) Parse(expression string) error {
 	return nil
 }
 
-func (stubEngine) Evaluate(context.Context, string, any, map[string]any) (any, error) {
-	return nil, errors.New("the stub does not evaluate")
-}
-
 const documentWithTransforms = `{"openbindings":"0.2.0","operations":{"op":{}},
 	"sources":{"api":{"bindingSpec":"x@1","location":"https://api.example.com/api.json"}},
 	"transforms":{"bad":"(a + b","good":"x"},
 	"bindings":{"b":{"operation":"op","source":"api","inputTransform":"items[","outputTransform":{"$ref":"#/transforms/good"}}}}`
 
-// OBI-D-18 is decided by the engine validation is given, for every named and
+// OBI-D-18 is decided by the parser validation is given, for every named and
 // inline expression; a named-transform reference is not an expression.
-func TestValidateDocument_TheGivenEngineDecidesTransformSyntax(t *testing.T) {
+func TestValidateDocument_TheGivenParserDecidesTransformSyntax(t *testing.T) {
 	var parsed []string
-	engine := stubEngine{refuse: map[string]bool{"(a + b": true, "items[": true}, parsed: &parsed}
-	_, report, err := ValidateDocument([]byte(documentWithTransforms), ValidateOptions{Transforms: engine})
+	parser := stubParser{refuse: map[string]bool{"(a + b": true, "items[": true}, parsed: &parsed}
+	_, report, err := ValidateDocument([]byte(documentWithTransforms), ValidateOptions{Transforms: parser})
 	if !errors.As(err, new(*ValidationError)) || report.Evidence["OBI-D-18"] != EvidenceViolated {
 		t.Fatalf("want OBI-D-18 violated, got %v and evidence %q", err, report.Evidence["OBI-D-18"])
 	}
@@ -56,7 +52,7 @@ func TestValidateDocument_TheGivenEngineDecidesTransformSyntax(t *testing.T) {
 		if finding.Rule == "OBI-D-18" {
 			paths = append(paths, finding.Path)
 			if !strings.Contains(finding.Message, "the stub refuses") {
-				t.Errorf("the finding must carry the engine's reason: %q", finding.Message)
+				t.Errorf("the finding must carry the parser's reason: %q", finding.Message)
 			}
 		}
 	}
@@ -66,17 +62,17 @@ func TestValidateDocument_TheGivenEngineDecidesTransformSyntax(t *testing.T) {
 	}
 	slices.Sort(parsed)
 	if want := []string{"(a + b", "items[", "x"}; !slices.Equal(parsed, want) {
-		t.Fatalf("the engine parsed %q, want %q", parsed, want)
+		t.Fatalf("the parser parsed %q, want %q", parsed, want)
 	}
 }
 
-// Without an engine, OBI-D-18 is inconclusive at every expression and never
+// Without a parser, OBI-D-18 is inconclusive at every expression and never
 // violated, so a document with transforms is undetermined, not
 // non-conformant (§10.2).
-func TestValidateDocument_WithoutAnEngineTransformSyntaxIsInconclusive(t *testing.T) {
+func TestValidateDocument_WithoutAParserTransformSyntaxIsInconclusive(t *testing.T) {
 	_, report, err := ValidateDocument([]byte(documentWithTransforms), ValidateOptions{})
 	if err != nil {
-		t.Fatalf("no violation is established without an engine: %v", err)
+		t.Fatalf("no violation is established without a parser: %v", err)
 	}
 	if report.Evidence["OBI-D-18"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
 		t.Fatalf("OBI-D-18 %q, conclusion %q", report.Evidence["OBI-D-18"], report.Conclusion)
@@ -92,17 +88,17 @@ func TestValidateDocument_WithoutAnEngineTransformSyntaxIsInconclusive(t *testin
 	}
 }
 
-// An engine that cannot decide leaves OBI-D-18 inconclusive, never violated.
-func TestValidateDocument_AnUndecidedEngineIsInconclusive(t *testing.T) {
-	engine := stubEngine{undecided: map[string]bool{"(a + b": true, "items[": true}}
-	_, report, err := ValidateDocument([]byte(documentWithTransforms), ValidateOptions{Transforms: engine})
+// A parser that cannot decide leaves OBI-D-18 inconclusive, never violated.
+func TestValidateDocument_AnUndecidedParserIsInconclusive(t *testing.T) {
+	parser := stubParser{undecided: map[string]bool{"(a + b": true, "items[": true}}
+	_, report, err := ValidateDocument([]byte(documentWithTransforms), ValidateOptions{Transforms: parser})
 	if err != nil || report.Evidence["OBI-D-18"] != EvidenceInconclusive {
 		t.Fatalf("err %v, OBI-D-18 %q", err, report.Evidence["OBI-D-18"])
 	}
 }
 
-// A document without transforms needs no engine to be conformant.
-func TestValidateDocument_WithoutTransformsNoEngineIsNeeded(t *testing.T) {
+// A document without transforms needs no parser to be conformant.
+func TestValidateDocument_WithoutTransformsNoParserIsNeeded(t *testing.T) {
 	_, report, err := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"op":{}}}`), ValidateOptions{})
 	if err != nil || report.Conclusion != ConclusionConformant {
 		t.Fatalf("want conformant, got %v and %q", err, report.Conclusion)

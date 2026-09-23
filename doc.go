@@ -28,8 +28,10 @@
 // only the exact bytes decide and Validate leaves inconclusive. Validate returns a *ValidationError listing every violation it
 // establishes, which makes it a gate. A nil error is not conformance: a rule this SDK
 // cannot decide is inconclusive, not violated. OBI-D-18 takes a
-// [TransformEngine], which the SDK does not carry: an application gives one
-// through [ValidateOptions], and without one the rule is inconclusive. The
+// [TransformParser], which the SDK does not carry: an application gives one
+// through [ValidateOptions], and without one the rule is inconclusive.
+// Evaluating transforms takes a [TransformEvaluator]; one implementation of
+// the pinned language usually provides both. The
 // report beside the error carries the conclusion:
 //
 //	iface, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
@@ -40,9 +42,9 @@
 //
 // JSON Schema fields preserve object and boolean schema roots. Every
 // OBI declares its target spec version via the top-level openbindings
-// field, and a version is accepted exactly when [IsSupportedVersion] says
-// so: every release of the 0.2 line. [MinSupportedVersion] through
-// [MaxTestedVersion] is the narrower range this SDK is tested against.
+// field, and a version is interpreted exactly when [IsSupportedVersion] says
+// so: every version [SupportedVersions] states, which is every release of the
+// 0.2 line. A document written with this SDK declares [AuthoringVersion].
 //
 // # An Exact Document Model
 //

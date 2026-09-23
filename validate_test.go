@@ -989,7 +989,7 @@ func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
 	}
 	_, err := iface.Validate(ValidateOptions{})
 	if err == nil {
-		t.Fatal("a document below MinSupportedVersion must refuse")
+		t.Fatal("a document below the supported release line must refuse")
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "older than the release line this implementation supports (0.2.x)") || !strings.Contains(msg, "OBI-T-04") {

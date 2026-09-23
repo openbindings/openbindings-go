@@ -50,13 +50,15 @@ and the pre-1.0 version policy.
 
 ## Spec compatibility
 
-This SDK declares which spec versions it supports via:
+This SDK declares which spec versions it supports (§8.1) via:
 
-- `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion` (constants)
-- `openbindings.SupportedRange()` / `openbindings.IsSupportedVersion(v)`
+- `openbindings.SupportedVersions`, the supported set, and
+  `openbindings.IsSupportedVersion(v)`, which decides membership
+- `openbindings.AuthoringVersion`, the version a document written with the
+  SDK declares
 
-Located in `version.go`. When the spec bumps, update these constants in the
-same PR that adds support for the new version.
+Located in `version.go`. When the spec bumps, update them in the same PR that
+adds support for the new version.
 
 ## Broader context
 

@@ -106,5 +106,7 @@ revision`); resolvability returns when the release's tags land.
 - Minor versions MAY include breaking changes; document them under
   **Changed** or **Removed** in the module's changelog.
 - Patch versions are for bug fixes and non-breaking changes.
-- When bumping `MaxTestedVersion` in `version.go`, call that out in the
-  CHANGELOG entry.
+- Record the specification versions a release was tested against in its
+  CHANGELOG entry, and call out any change to the support declaration in
+  `version.go` (`SupportedVersions`, `AuthoringVersion`, or a named
+  prerelease).

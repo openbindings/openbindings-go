@@ -230,6 +230,19 @@
 
 ### Changed
 
+- **The version API states the supported set and the version documents
+  declare** (breaking, pre-1.0). `MinSupportedVersion`, `MaxTestedVersion`,
+  and `SupportedRange` are removed: they named a tested range, which §8.1
+  does not define, and did three jobs under one name. `SupportedVersions`
+  (`0.2.x`) states the versions this SDK supports, and `IsSupportedVersion`
+  still decides membership. `AuthoringVersion` (`0.2.0`) is the version a
+  document written with this SDK declares: the lowest version sufficient for
+  what the document model carries, as §8.1 asks of documents, where
+  `MaxTestedVersion` would have moved with every tested patch. A prerelease
+  is supported only when named explicitly (§8.1); it was inferred from the
+  tested range, which would have admitted `0.2.1-rc.1` once the range reached
+  0.2.1. None is named, so what the SDK accepts is unchanged, and a refusal
+  names the supported line (`0.2.x`).
 - **Core's tests use only core.** The operation-contract witnesses from the
   interfaces repository's comparison corpus are checked in `schemaprofile`,
   which owns that profile, and the `canonicaljson` example is in
@@ -260,21 +273,25 @@
   document". `ErrOperationNotFound` reads "no one operation is named", which
   covers an ambiguous name too, and a version refusal names the release line
   the SDK supports (0.2.x) rather than the tested version.
-- **Validation takes the transform engine it is given** (breaking, pre-1.0).
-  `Interface.Validate` and `ValidateDocument` take a `ValidateOptions`, whose
-  `Transforms` field is a `TransformEngine`: an implementation of the pinned
-  transform language (§5.5) that parses expressions and evaluates them with
-  an input and named variables. The SDK carries none. An application
-  chooses one engine and gives the same engine to every layer that parses or
-  evaluates transforms, so the expression validation accepts is the
-  expression that runs. OBI-D-18 is decided by that engine; without one it
-  is inconclusive at every expression, as §10.2 provides for a validator
+- **Validation takes the transform parser it is given** (breaking, pre-1.0).
+  Core defines the two capabilities the specification names over the pinned
+  transform language (§5.5), and carries neither: `TransformParser` decides
+  whether an expression is in the language, and `TransformEvaluator`
+  evaluates one with an input and the context bindings a binding
+  specification defines (§5.5 clause 5). One implementation of the language
+  usually provides both, and an application gives the same one to every
+  layer that parses or evaluates transforms, so the expression validation
+  accepts is the expression that runs. `Interface.Validate` and
+  `ValidateDocument` take a `ValidateOptions`, whose `Transforms` field is a
+  `TransformParser`. OBI-D-18 is decided by that parser; without one it is
+  inconclusive at every expression, as §10.5 provides for a validator
   without a parser, so a document with transforms is
   conformance-undetermined rather than conformant. Core no longer imports
   the JSONata syntax package. `ErrTransformNoResult` marks an expression
   that yields no result (JSONata's undefined), and `ErrTransformUndecided`
-  an engine that could not decide (its own limits, not the expression): from
-  `Parse` it leaves OBI-D-18 inconclusive rather than violated.
+  one that could not be decided (the implementation's own limits, not the
+  expression): from `Parse` it leaves OBI-D-18 inconclusive rather than
+  violated.
 - **The JSON Schema library is an ordinary dependency** (behavior changes in
   rare cases). Core validated with a private, patched copy of
   `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3; it now requires the
@@ -806,10 +823,9 @@
   `0.2.99`, etc. — the versions `Validate`/`ParseDocument` actually process —
   and continues to report `false` for a different major, a pre-1.0 different
   minor, and unsupported prereleases. The oracle now shares the single refusal
-  predicate the validation paths use, so it cannot drift from them.
-  `MinSupportedVersion`/`MaxTestedVersion`/`SupportedRange()` are unchanged and
-  remain the maintainer-*tested* range — a distinct, narrower notion (a version
-  can be accepted without being inside the tested range).
+  predicate the validation paths use, so it cannot drift from them. The
+  tested-range constants were later removed; see the `SupportedVersions`
+  entry.
 
 - **Added `ErrCodeUnavailable` (`ERR_UNAVAILABLE`) to the open code space.**
   Binding implementations decide when their governing rules use it. The

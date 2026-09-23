@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,30 +30,23 @@ type conformanceTest struct {
 	DocumentBase64       string          `json:"documentBase64,omitempty"`
 	Valid                bool            `json:"valid"`
 	Violates             []string        `json:"violates,omitempty"`
-	RequiresMaxTested    string          `json:"requiresMaxTested,omitempty"`
 	RequiresMinSupported string          `json:"requiresMinSupported,omitempty"`
 	RequiresSupports     string          `json:"requiresSupports,omitempty"`
 }
 
 // conformanceSkip evaluates a test's version-gate annotations against this
-// SDK's version constants. A non-empty result means the test must not be
+// SDK's support declaration. A non-empty result means the test must not be
 // administered to this SDK; the harness reports it via t.Skip. Skips are
-// never failures — they surface separately in the test output. An
-// annotation that fails to parse gates nothing (the test runs), matching
-// the annotations' pre-existing behavior.
+// never failures; they surface separately in the test output. An annotation
+// that fails to parse gates nothing (the test runs).
 func conformanceSkip(tt conformanceTest) (reason string, skip bool) {
-	if tt.RequiresMaxTested != "" {
-		higher, err := isHigherMajorOrPre1MinorThanMaxTested(tt.RequiresMaxTested)
-		if err == nil && higher {
-			return fmt.Sprintf("requires MaxTested >= %s", tt.RequiresMaxTested), true
-		}
-	}
 	if tt.RequiresMinSupported != "" {
-		// Downward-refusal tests apply only when the SDK's minimum
-		// supported version is at or above the annotation's value.
-		lower, err := isLowerThanMinSupported(tt.RequiresMinSupported)
-		if err == nil && !lower && tt.RequiresMinSupported != MinSupportedVersion {
-			return fmt.Sprintf("requires MinSupported >= %s", tt.RequiresMinSupported), true
+		// Downward-refusal tests apply only when the lowest version this SDK
+		// supports is at or above the annotation's value. The lowest is read
+		// from the declaration, SupportedVersions, not from the refusal code
+		// the test exercises.
+		if annotated, err := parseSemverStrict(tt.RequiresMinSupported); err == nil && compareSemver(lowestSupported(), annotated) < 0 {
+			return fmt.Sprintf("requires the lowest supported version to be at least %s", tt.RequiresMinSupported), true
 		}
 	}
 	if tt.RequiresSupports != "" {
@@ -436,24 +430,23 @@ func testConcludeConformanceScenario(t *testing.T, raw json.RawMessage) {
 // stays correct across version bumps.
 func TestConformanceRequiresSupportsGate(t *testing.T) {
 	// Always outside acceptance: the next major is refused pre- and
-	// post-1.0 alike. Always inside acceptance: a higher patch within the
-	// supported minor line is accepted per OBI-T-04 — note it lies ABOVE
-	// MaxTestedVersion, pinning that the gate is the acceptance predicate,
-	// not tested-range membership.
-	nextMajor := successor(maxTestedSemver.major) + ".0.0"
-	higherPatch := maxTestedSemver.major + "." + maxTestedSemver.minor + "." + successor(maxTestedSemver.patch)
+	// post-1.0 alike. Always inside acceptance: the authoring version, and a
+	// higher patch of the supported line.
+	authoring, _ := parseSemverStrict(AuthoringVersion)
+	nextMajor := successor(authoring.major) + ".0.0"
+	higherPatch := authoring.major + "." + authoring.minor + "." + successor(authoring.patch)
 
 	cases := []struct {
 		annotation string
 		wantSkip   bool
 	}{
-		{MinSupportedVersion, false}, // in range exactly → administer
-		{higherPatch, false},         // above MaxTested but accepted → administer
-		{nextMajor, true},            // refused major → skip
+		{AuthoringVersion, false}, // supported → administer
+		{higherPatch, false},      // supported → administer
+		{nextMajor, true},         // refused major → skip
 	}
-	if maxTestedSemver.major == "0" {
+	if authoring.major == "0" {
 		// While pre-1.0, the next minor is refused too.
-		nextMinor := "0." + successor(maxTestedSemver.minor) + ".0"
+		nextMinor := "0." + successor(authoring.minor) + ".0"
 		cases = append(cases, struct {
 			annotation string
 			wantSkip   bool
@@ -501,7 +494,7 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 }
 
 // capabilityRules are the document rules whose checking takes a capability
-// the corpus run does not give validation: OBI-D-18 takes a transform engine,
+// the corpus run does not give validation: OBI-D-18 takes a transform parser,
 // and the SDK carries none. A validator without the capability leaves such a
 // rule inconclusive (§10.2), so the run expects it inconclusive wherever the
 // fixture expects it violated.
@@ -578,4 +571,10 @@ func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt confor
 func successor(n string) string {
 	value, _ := new(big.Int).SetString(n, 10)
 	return value.Add(value, big.NewInt(1)).String()
+}
+
+// lowestSupported is the lowest version SupportedVersions declares: the
+// first release of the supported line.
+func lowestSupported() semver {
+	return semver{major: supportedLine.major, minor: cmp.Or(supportedLine.minor, "0"), patch: "0"}
 }

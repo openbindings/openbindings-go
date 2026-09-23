@@ -10,7 +10,7 @@ its environment, independently of protocol. See the
 [spec](https://github.com/openbindings/spec) and
 [guides](https://github.com/openbindings/spec/tree/main/guides) for details.
 
-**Spec version:** implements OpenBindings 0.2. To ask whether this SDK will accept a document of a given version, call `openbindings.IsSupportedVersion(version)` — the OBI-T-04 acceptance oracle: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would process (not refuse) that version (a malformed one is an OBI-D-12 violation, not a refusal), so it is patch-lenient within a supported minor line (a 0.2.0 SDK accepts 0.2.1, 0.2.99, …) and refuses a different major, a pre-1.0 different minor, and unsupported prereleases. `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion` / `openbindings.SupportedRange()` are a distinct, narrower notion — the maintainer-*tested* range — and a version can be accepted without falling inside it.
+**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-12 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
 
 > **Draft status:** this branch implements the unreleased 0.2 working draft.
 > The module manifests intentionally require `v0.2.0`, which does not exist
@@ -29,7 +29,7 @@ core-only validator records them as inconclusive rather than passing or
 failing them. A document with bindings is therefore conformance-undetermined
 here until something that implements its binding specifications adds that
 evidence. OBI-D-18 needs a parser for the transform language: the SDK carries
-none, so an application passes its `TransformEngine` in
+none, so an application passes its `TransformParser` in
 `ValidateOptions.Transforms`, and without one the rule is inconclusive.
 `Interface.Validate(options)` does the same for a document already in
 memory, where OBI-D-01 is inconclusive because a host object no longer
@@ -661,12 +661,14 @@ optional `BindingPreflighter` capability; see [preflighting an operation](PREFLI
 ## Transforms (invoking tools only)
 
 OpenBindings 0.2.0 uses the documented JSONata 2.1 language for binding
-transforms. The core package defines `TransformEngine`, an implementation of
-the pinned transform language that parses (OBI-D-18) and evaluates (OBI-T-10),
-and carries none. An application chooses one engine and gives the same engine
-to every layer that parses or evaluates transforms, so the expression
-validation accepts is the expression that runs. Document validation receives
-it in `ValidateOptions.Transforms`.
+transforms. The core package defines the two capabilities the specification
+names over that language, and carries neither: `TransformParser` decides
+whether an expression is in the language (OBI-D-18), and `TransformEvaluator`
+evaluates one under §5.5's contract (OBI-T-10). One implementation of the
+language usually provides both, and an application gives the same one to
+every layer that parses or evaluates transforms, so the expression validation
+accepts is the expression that runs. Document validation receives the parser
+in `ValidateOptions.Transforms`.
 
 Invocation remains explicitly dependency-injected. The official adapter uses
 the independent JSONata runtime's closed JSON-text boundary:

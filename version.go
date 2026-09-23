@@ -4,60 +4,52 @@ import (
 	"cmp"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
-// Supported OpenBindings versions for this SDK.
-const (
-	MinSupportedVersion = "0.2.0"
-	MaxTestedVersion    = "0.2.0"
-)
+// SupportedVersions states the specification versions this SDK supports
+// (§8.1): every release of the 0.2 line, and no prerelease. IsSupportedVersion
+// decides membership.
+const SupportedVersions = "0.2.x"
 
-// SupportedRange returns MinSupportedVersion and MaxTestedVersion, the
-// versions this SDK is tested against. It accepts more: every version of
-// their release line (0.2.x while they are 0.2 versions), as
-// IsSupportedVersion reports.
-func SupportedRange() (min, max string) {
-	return MinSupportedVersion, MaxTestedVersion
-}
+// AuthoringVersion is the specification version a document written with this
+// SDK declares: the lowest version sufficient for everything the document
+// model carries, as §8.1 asks of documents.
+const AuthoringVersion = "0.2.0"
 
-var (
-	minSupportedSemver semver
-	maxTestedSemver    semver
-)
+// supportedPrereleases lists the prerelease versions this SDK supports, each
+// named explicitly: a prerelease is a draft, and supporting its release does
+// not imply supporting it (§8.1). There are none.
+var supportedPrereleases []string
+
+// supportedLine is SupportedVersions parsed: its major version, and while
+// pre-1.0 its minor version, which are the release line's own.
+var supportedLine semver
 
 func init() {
-	var err error
-	minSupportedSemver, err = parseSemverStrict(MinSupportedVersion)
-	if err != nil {
-		panic(fmt.Sprintf("openbindings: invalid MinSupportedVersion %q: %v", MinSupportedVersion, err))
+	line, ok := strings.CutSuffix(SupportedVersions, ".x")
+	major, minor, _ := strings.Cut(line, ".")
+	if !ok || !isNumericIdentifier(major) || (major == "0") != (minor != "") || minor != "" && !isNumericIdentifier(minor) {
+		panic(fmt.Sprintf("openbindings: SupportedVersions %q is not a release line", SupportedVersions))
 	}
-	maxTestedSemver, err = parseSemverStrict(MaxTestedVersion)
-	if err != nil {
-		panic(fmt.Sprintf("openbindings: invalid MaxTestedVersion %q: %v", MaxTestedVersion, err))
+	supportedLine = semver{major: major, minor: minor}
+	if supported, err := IsSupportedVersion(AuthoringVersion); !supported {
+		panic(fmt.Sprintf("openbindings: AuthoringVersion %q is not a supported version: %v", AuthoringVersion, err))
 	}
 }
 
-// IsSupportedVersion reports whether this SDK will ACCEPT (process rather than
-// refuse) a document declaring OpenBindings version v — the OBI-T-04 acceptance
-// question, not a tested-range membership test. It returns true iff Validate /
-// ParseDocument would NOT emit a version refusal for v: a different major is
-// refused; while pre-1.0 a different minor is refused; a higher or lower PATCH
-// is never a refusal; a prerelease is accepted only when explicitly supported.
-// So a 0.2.0 SDK accepts 0.2.1, 0.2.99, etc. and refuses 0.1.x / 0.3.x. This is
-// distinct from — and wider than — the maintainer-tested range reported by
-// MinSupportedVersion / MaxTestedVersion / SupportedRange: a version can be
-// accepted without being inside the tested range.
+// IsSupportedVersion reports whether this SDK interprets a document declaring
+// version v rather than refusing it (OBI-T-04): whether v belongs to
+// SupportedVersions. A release of the supported line is supported whatever
+// its patch version, a prerelease only when it is named explicitly, and
+// build metadata is ignored (§8.1). Validate, ParseDocument, and
+// CompileOperationSchema refuse exactly the versions it reports false for.
 //
-// It shares the single refusal predicate (versionRefusal) that Validate and
-// ParseDocument use, so the oracle cannot drift from the actual accept/refuse
-// decision. A malformed (non-SemVer) v is no version at all: IsSupportedVersion
+// A malformed (non-SemVer) v is no version at all: IsSupportedVersion
 // returns false and a parse error, while validation reports such a document
 // under OBI-D-12 rather than refusing it.
 func IsSupportedVersion(v string) (bool, error) {
-	if _, err := parseSemverStrict(v); err != nil {
-		return false, err
-	}
 	_, refused, err := versionRefusal(v)
 	if err != nil {
 		return false, err
@@ -65,103 +57,42 @@ func IsSupportedVersion(v string) (bool, error) {
 	return !refused, nil
 }
 
-// versionRefusal is the single OBI-T-04 accept/refuse evaluation shared by
-// Interface.Validate, ParseDocument, and IsSupportedVersion, so the diagnostic
-// path and the acceptance oracle consult the same ordered predicate chain and
-// cannot diverge. When this SDK MUST refuse to process a document declaring
-// SemVer version v it returns (msg, true, nil), where msg is the diagnostic
-// core to which callers add the "openbindings:" prefix and "(OBI-T-04)" suffix;
-// when the SDK accepts v it returns ("", false, nil). v MUST be well-formed
-// SemVer (callers gate on IsValidSemver or the schema pattern first); an
+// versionRefusal is the single OBI-T-04 decision that IsSupportedVersion and
+// every refusing entry point share. When this SDK refuses a document
+// declaring version v it returns (msg, true, nil), where msg is the
+// diagnostic core to which callers add the "openbindings:" prefix and
+// "(OBI-T-04)" suffix; when it supports v it returns ("", false, nil). An
 // unparseable v yields a non-nil error.
 func versionRefusal(v string) (msg string, refused bool, err error) {
-	if higher, err := isHigherMajorOrPre1MinorThanMaxTested(v); err != nil {
+	parsed, err := parseSemverStrict(v)
+	if err != nil {
 		return "", false, err
-	} else if higher {
-		return fmt.Sprintf("document declares version %q, newer than the release line this implementation supports (%s)", v, releaseLine(maxTestedSemver)), true, nil
 	}
-	if lower, err := isLowerThanMinSupported(v); err != nil {
-		return "", false, err
-	} else if lower {
-		return fmt.Sprintf("document declares version %q, older than the release line this implementation supports (%s)", v, releaseLine(minSupportedSemver)), true, nil
+	if len(parsed.preRelease) > 0 && slices.ContainsFunc(supportedPrereleases, func(p string) bool {
+		named, err := parseSemverStrict(p)
+		return err == nil && compareSemver(parsed, named) == 0
+	}) {
+		return "", false, nil
 	}
-	if pre, err := isUnsupportedPrerelease(v); err != nil {
-		return "", false, err
-	} else if pre {
+	switch order := compareReleaseLine(parsed); {
+	case order > 0:
+		return fmt.Sprintf("document declares version %q, newer than the release line this implementation supports (%s)", v, SupportedVersions), true, nil
+	case order < 0:
+		return fmt.Sprintf("document declares version %q, older than the release line this implementation supports (%s)", v, SupportedVersions), true, nil
+	case len(parsed.preRelease) > 0:
 		return fmt.Sprintf("document declares version %q, a pre-release this implementation does not support", v), true, nil
 	}
 	return "", false, nil
 }
 
-// isHigherMajorOrPre1MinorThanMaxTested reports whether v lies above the
-// release line this SDK declares support for, one of the conditions under
-// which it refuses a document (OBI-T-04). §8.1 leaves the supported set to
-// each processor; this SDK's is the release line of MaxTestedVersion, so v is
-// above it when it has a higher major version, or, while MaxTestedVersion is
-// pre-1.0, a higher minor version.
-//
-// Returns an error if v cannot be parsed as a SemVer 2.0.0 string.
-func isHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
-	parsed, err := parseSemverStrict(v)
-	if err != nil {
-		return false, err
+// compareReleaseLine orders v's release line against the supported one: by
+// major version, and while pre-1.0 by minor version, since pre-1.0 minors MAY
+// break (§8.1). A patch version never moves a version out of its line.
+func compareReleaseLine(v semver) int {
+	if order := compareNumeric(v.major, supportedLine.major); order != 0 || supportedLine.major != "0" {
+		return order
 	}
-	if compareNumeric(parsed.major, maxTestedSemver.major) > 0 {
-		return true, nil
-	}
-	if maxTestedSemver.major == "0" && parsed.major == "0" && compareNumeric(parsed.minor, maxTestedSemver.minor) > 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
-// isLowerThanMinSupported reports whether v lies below the release line this
-// SDK declares support for, the other condition under which it refuses a
-// document by its version number (OBI-T-04): a lower major version, or, while
-// MinSupportedVersion is pre-1.0, a lower minor version (pre-1.0 minors MAY
-// break, §8.1). A patch version is never a reason to refuse.
-func isLowerThanMinSupported(v string) (bool, error) {
-	parsed, err := parseSemverStrict(v)
-	if err != nil {
-		return false, err
-	}
-	if compareNumeric(parsed.major, minSupportedSemver.major) < 0 {
-		return true, nil
-	}
-	if minSupportedSemver.major == "0" && parsed.major == "0" && compareNumeric(parsed.minor, minSupportedSemver.minor) < 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
-// isUnsupportedPrerelease reports whether v carries a pre-release identifier
-// that this SDK does not declare support for. Per OBI-T-04 and §8.1, a tool
-// MUST NOT accept a prerelease unless it declares support for that specific
-// prerelease; "declares support" means the prerelease falls within this SDK's
-// supported range [MinSupportedVersion, MaxTestedVersion]. A prerelease sorts
-// below its release, so against a non-prerelease MaxTestedVersion no prerelease
-// is in range. Non-prerelease versions and build metadata are never flagged.
-//
-// Returns an error if v cannot be parsed as a SemVer 2.0.0 string.
-func isUnsupportedPrerelease(v string) (bool, error) {
-	parsed, err := parseSemverStrict(v)
-	if err != nil {
-		return false, err
-	}
-	if len(parsed.preRelease) == 0 {
-		return false, nil
-	}
-	inRange := compareSemver(parsed, minSupportedSemver) >= 0 && compareSemver(parsed, maxTestedSemver) <= 0
-	return !inRange, nil
-}
-
-// releaseLine names the versions refusal treats as one release line with v:
-// its major version, or while pre-1.0 its minor version.
-func releaseLine(v semver) string {
-	if v.major == "0" {
-		return "0." + v.minor + ".x"
-	}
-	return v.major + ".x"
+	return compareNumeric(v.minor, supportedLine.minor)
 }
 
 // semver represents a parsed Semantic Versioning 2.0.0 value. Its numeric

@@ -23,7 +23,7 @@ type ValidateOptions struct {
 	// Transforms parses the document's transform expressions for OBI-D-18.
 	// Without one, OBI-D-18 is inconclusive for every expression the
 	// document holds.
-	Transforms TransformEngine
+	Transforms TransformParser
 }
 
 // Validate checks a document already in memory against every document rule
@@ -43,7 +43,7 @@ type ValidateOptions struct {
 // conformant or conformance undetermined. OBI-D-13 is inconclusive for a
 // document with bindings, because only each binding's governing binding
 // specification decides it, and OBI-D-18 is inconclusive for a document with
-// transforms unless options gives a transform engine.
+// transforms unless options gives a transform parser.
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (OBI-T-04). A host
@@ -360,7 +360,7 @@ type documentCheck struct {
 
 	// transforms parses transform expressions for OBI-D-18; nil when
 	// validation was given none.
-	transforms TransformEngine
+	transforms TransformParser
 }
 
 // checkReference decides a referential rule (OBI-D-08, OBI-D-09, OBI-D-19)
@@ -537,12 +537,11 @@ func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, kn
 // checkTransformExpression decides OBI-D-18 for one transform expression: it
 // parses under the pinned transform language (§5.5). Parse-only: membership
 // in the language, not success of evaluation; a result that is absent and a
-// dynamic error remain evaluation outcomes. Without a transform engine the
-// rule is inconclusive, as the spec provides for a validator without a
-// parser.
+// dynamic error remain evaluation outcomes. Without a transform parser the
+// rule is inconclusive, as the spec provides (§10.5).
 func (d *documentCheck) checkTransformExpression(path, expression string) {
 	if d.transforms == nil {
-		d.c.inconclusive("OBI-D-18", path, "not parsed: validation was given no transform engine")
+		d.c.inconclusive("OBI-D-18", path, "not parsed: validation was given no transform parser")
 		return
 	}
 	switch err := d.transforms.Parse(expression); {
