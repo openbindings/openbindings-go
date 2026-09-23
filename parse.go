@@ -3,8 +3,6 @@ package openbindings
 import (
 	"errors"
 	"fmt"
-
-	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // ParseDocument decodes a document for use: it checks the exact input bytes
@@ -19,7 +17,9 @@ import (
 // a *ValidationError, as from Interface.Validate and ValidateDocument. A
 // document either check could not be applied to (input nested deeper than
 // the decoder reads, or a binding preference beyond the numeric limits of
-// schema evaluation) is not parsed, and returns another error.
+// schema evaluation) is not parsed, and returns another error, as is one
+// holding an escape of a lone UTF-16 surrogate, which the document model
+// does not carry.
 func ParseDocument(data []byte) (*Interface, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
@@ -28,6 +28,9 @@ func ParseDocument(data []byte) (*Interface, error) {
 		}
 		if errors.Is(err, errNestingLimit) {
 			return nil, fmt.Errorf("parse document: the input is %w, so OBI-D-01 was not checked", err)
+		}
+		if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
+			return nil, fmt.Errorf("parse document: %w", err)
 		}
 		return nil, &ValidationError{Findings: []Finding{{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err)}}}
 	}
@@ -59,7 +62,7 @@ func decodeDocumentBytes(data []byte) (any, error) {
 		return nil, err
 	}
 	var view any
-	if err := jsonvalue.Unmarshal(data, &view); err != nil {
+	if err := unmarshalJSON(data, &view); err != nil {
 		return nil, err
 	}
 	return view, nil

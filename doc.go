@@ -67,13 +67,16 @@
 //
 // A document the model cannot carry exactly fails decoding instead of being
 // altered: input that is not valid UTF-8, a duplicate member name in any
-// object, a JSON null at a member, map entry, or array element the model
-// types (null inside a schema, an example value, source content, or a kept
-// member is carried), a missing required string member, or a binding
-// preference that is not an integer number in range. ValidateDocument
-// still judges such a document in full, except input OBI-D-01 refuses (not
-// UTF-8, or repeating a member name), where which values the document holds
-// is not established.
+// object, a string escaping a lone UTF-16 surrogate (a Go string cannot hold
+// one, and encoding/json would replace it), a JSON null at a member, map
+// entry, or array element the model types (null inside a schema, an example
+// value, source content, or a kept member is carried), a missing required
+// string member, or a binding preference that is not an integer number in
+// range. ValidateDocument still judges such a document in full, except input
+// OBI-D-01 refuses (not UTF-8, or repeating a member name), where which values
+// the document holds is not established, and a document holding a lone
+// surrogate, where it decides OBI-D-01 and leaves the other rules
+// inconclusive.
 //
 // A typed field alone states its member: an Unknown or Extensions entry
 // named like a typed member is never encoded, so a nil field is absent.

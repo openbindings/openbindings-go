@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,8 +12,6 @@ import (
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
-
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
@@ -84,10 +83,16 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 		if refusal := declaredVersionRefusal(declaredVersionOf(data)); refusal != nil {
 			return nil, ValidationReport{}, refusal
 		}
-		if errors.Is(err, errNestingLimit) {
+		var lone *loneSurrogateError
+		switch {
+		case errors.Is(err, errNestingLimit):
 			// A resource limit met is no evidence of a violation (§10.5).
 			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err))
-		} else {
+		case errors.As(err, &lone):
+			// OBI-D-01 is decided: the input is UTF-8 JSON with no repeated
+			// name. The other rules read values this SDK cannot carry.
+			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01")
+		default:
 			c.violated("OBI-D-01", "", fmt.Sprintf("not a JSON document this specification accepts: %v", err))
 			c.inconclusiveExcept("the input is not a JSON document, so this rule was not checked", "OBI-D-01")
 		}
@@ -114,7 +119,7 @@ func documentView(i Interface) (any, error) {
 		return nil, fmt.Errorf("openbindings: encode interface: %w", err)
 	}
 	var view any
-	if err := jsonvalue.Unmarshal(data, &view); err != nil {
+	if err := unmarshalJSON(data, &view); err != nil {
 		return nil, fmt.Errorf("openbindings: decode encoded interface: %w", err)
 	}
 	return view, nil
@@ -159,7 +164,7 @@ func declaredVersionOf(data []byte) any {
 		return nil
 	}
 	var version any
-	if jsonvalue.Unmarshal(declared[0], &version) != nil {
+	if unmarshalJSON(declared[0], &version) != nil {
 		return nil
 	}
 	return map[string]any{"openbindings": version}

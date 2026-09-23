@@ -2,14 +2,13 @@ package openbindings
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
 	"sync"
-
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -30,9 +29,9 @@ import (
 //     number spelling.
 //
 // Decoding also refuses input the model's Go values cannot carry: invalid
-// UTF-8, and a duplicate member name in any object. Members are matched by
-// exact name, never case-folded. (An escaped lone UTF-16 surrogate is carried:
-// the SDK's codec keeps it in a Go string as WTF-8 and escapes it again.)
+// UTF-8, a duplicate member name in any object, and a string escaping a lone
+// UTF-16 surrogate, which a Go string cannot hold and encoding/json would
+// replace with U+FFFD. Members are matched by exact name, never case-folded.
 
 // LosslessFields is embedded in every OBI-defined object type to carry the
 // members its typed fields do not: Extensions holds `x-` members (§12) and
@@ -239,7 +238,7 @@ func decodeMember(raw json.RawMessage, class memberClass, field reflect.Value) e
 			return err
 		}
 	}
-	return jsonvalue.Unmarshal(raw, field.Addr().Interface())
+	return unmarshalJSON(raw, field.Addr().Interface())
 }
 
 // exactPreference decodes a preference exactly: a JSON number denoting an
@@ -247,7 +246,7 @@ func decodeMember(raw json.RawMessage, class memberClass, field reflect.Value) e
 // number the model cannot carry exactly, fails decoding.
 func exactPreference(raw json.RawMessage) (int64, error) {
 	token := string(bytes.TrimSpace(raw))
-	if !json.ValidNumberToken(token) {
+	if !jsonvalue.IsNumber(json.Number(token)) {
 		return 0, fmt.Errorf("%s is not a JSON number", token)
 	}
 	value, ok := new(big.Rat).SetString(token)

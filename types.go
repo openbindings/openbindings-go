@@ -2,9 +2,8 @@ package openbindings
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 )
 
 // JSONSchema holds a JSON Schema 2020-12 value in either of its two forms:

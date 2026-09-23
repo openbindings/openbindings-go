@@ -2,11 +2,10 @@ package openbindings
 
 import (
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"

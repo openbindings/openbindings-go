@@ -203,6 +203,18 @@
 
 ### Changed
 
+- **The document model does not carry lone UTF-16 surrogates** (breaking,
+  pre-1.0). A string escaping an isolated surrogate (`"\uD800"`) is RFC 8259
+  JSON, so it breaks no document rule, but a Go string cannot hold it and
+  encoding/json replaces it with U+FFFD. The model kept it through a private
+  copy of encoding/json that stored it as WTF-8, which the JSON Schema
+  library then counted as three characters, reporting false OBI-D-11
+  violations. Core now decodes with encoding/json and detects the escape:
+  decoding refuses such a document, `ParseDocument` refuses it naming where
+  the string is, and `ValidateDocument` decides OBI-D-01 and leaves every
+  other rule inconclusive. Member names are still compared exactly, so
+  `"\uD800"` and `"\uFFFD"` are two names. The TypeScript SDK, whose strings
+  are UTF-16, carries such strings; the difference is an accepted divergence.
 - **`ValidationError` carries findings** (breaking, pre-1.0). `Problems
   []string` is replaced by `Findings []Finding`, each naming its rule and
   location; the message is unchanged apart from saying "non-conformant
