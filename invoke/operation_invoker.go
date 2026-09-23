@@ -242,7 +242,7 @@ func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
 	if args.Site == nil {
 		site := &InvokeSite{
 			BindingSpec: args.Source.BindingSpec,
-			Selector:    args.Selector,
+			Selector:    cloneSelector(args.Selector),
 		}
 		if args.Binding != nil {
 			site.Operation = args.Binding.Operation
@@ -378,7 +378,7 @@ func (e *OperationInvoker) PreflightOperation(ctx context.Context, obi *openbind
 			Location:    sourceLocation(source.Location),
 			Content:     source.Content,
 		},
-		Selector:    contractSelector(binding.Selector),
+		Selector:    cloneSelector(binding.Selector),
 		Binding:     binding,
 		Context:     cfg.context,
 		Interface:   obi,
@@ -456,7 +456,7 @@ func (e *OperationInvoker) runCompiled(
 				Location:    sourceLocation(source.Location),
 				Content:     source.Content,
 			},
-			Selector:    contractSelector(binding.Selector),
+			Selector:    cloneSelector(binding.Selector),
 			Binding:     binding,
 			Context:     contextData,
 			Interface:   iface,
@@ -470,7 +470,7 @@ func (e *OperationInvoker) runCompiled(
 			InvokedAs:   invokedAs,
 			BindingKey:  bindingKey,
 			BindingSpec: source.BindingSpec,
-			Selector:    contractSelector(binding.Selector),
+			Selector:    cloneSelector(binding.Selector),
 		}
 		if inv := e.invoker.findInvoker(source.BindingSpec); inv != nil {
 			stampSite(site, inv)
@@ -774,7 +774,7 @@ func (e *OperationInvoker) runOutputs(
 	}
 }
 
-func transformPacket(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor *openbindings.TransformOrRef, p *valueio.Packet, limits value.Limits) (*valueio.Packet, error) {
+func transformPacket(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor openbindings.TransformOrRef, p *valueio.Packet, limits value.Limits) (*valueio.Packet, error) {
 	logical, err := p.View(ctx, limits, true)
 	if err != nil {
 		return nil, err
@@ -966,7 +966,7 @@ func selectBinding(iface *openbindings.Interface, opKey string, availableSpecs m
 }
 
 // applyTransformRef resolves a TransformOrRef and evaluates it.
-func evaluateTransform(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor *openbindings.TransformOrRef, data any) (any, error) {
+func evaluateTransform(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor openbindings.TransformOrRef, data any) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -976,10 +976,11 @@ func evaluateTransform(ctx context.Context, eval TransformEvaluator, transforms 
 
 	expr, ok := tor.Resolve(transforms)
 	if !ok {
-		if tor.IsRef() {
-			return nil, fmt.Errorf("%w: %q", ErrTransformRefNotFound, tor.Reference.Ref)
+		ref := ""
+		if reference, isRef := tor.(*openbindings.TransformReference); isRef && reference != nil {
+			ref = reference.Ref
 		}
-		return nil, fmt.Errorf("openbindings: invalid transform: neither ref nor inline")
+		return nil, fmt.Errorf("%w: %q", ErrTransformRefNotFound, ref)
 	}
 
 	if expr == "" {
@@ -996,7 +997,7 @@ func evaluateTransform(ctx context.Context, eval TransformEvaluator, transforms 
 	return result, nil
 }
 
-func applyTransformRef(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor *openbindings.TransformOrRef, data any) (any, error) {
+func applyTransformRef(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor openbindings.TransformOrRef, data any) (any, error) {
 	if tor == nil {
 		return data, nil
 	}

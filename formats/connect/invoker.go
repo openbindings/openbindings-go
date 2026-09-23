@@ -151,7 +151,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // unsupported method) is reported as no requirement: the invocation is the
 // authority for that refusal, and preflight is advisory.
 func (e *Invoker) PreflightBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	svcName, methodName, err := parseSelector(args.Selector)
+	svcName, methodName, err := parseSelector(openbindings.Value(args.Selector))
 	if err != nil {
 		return nil, nil
 	}
@@ -234,7 +234,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	// ----- Pre-side-effect failures: fire before any input is consumed and
 	// before any network I/O, so a no-input-consumed retry is safe. -----
 
-	svcName, methodName, err := parseSelector(args.Selector)
+	svcName, methodName, err := parseSelector(openbindings.Value(args.Selector))
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
 		return

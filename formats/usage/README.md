@@ -119,7 +119,7 @@ Input schemas derived from usage specs inherit the source format's thin value ty
 ### Invocation flow
 
 1. Loads and caches the bare usage artifact (inline content, an ABSOLUTE file location, or an `exec:` locator running the binary's own spec emission), checking `min_usage_version` against the supported range
-2. Resolves the binding selector — a space-separated command path — against the command tree (empty selector = the root command)
+2. Resolves the binding selector — a space-separated command path — against the command tree (an absent selector addresses the root command; an empty one is refused, USAGE-D-03)
 3. Consults the `FieldRouter` chain per input field and applies the channel mechanics (stdin piping, `-` operands, temp-file materialization) with loud slot-compatibility refusals, then builds argv from the remaining fields (flags by name, positionals in declared order)
 4. Executes the binary via `os/exec` with the constructed argv and routed stdin
 5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the application value. Exit/stderr and decode/classify/route provenance remain below the abstract invocation boundary.

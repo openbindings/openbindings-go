@@ -103,7 +103,7 @@ func (b *compiledOperationBehavior) Preflight(ctx context.Context, opts ...Invok
 			Location:    sourceLocation(b.source.Location),
 			Content:     b.source.Content,
 		},
-		Selector:             contractSelector(b.binding.Selector),
+		Selector:             cloneSelector(b.binding.Selector),
 		Binding:              b.binding,
 		Context:              cfg.context,
 		Interface:            b.interface_,
@@ -116,7 +116,7 @@ func (b *compiledOperationBehavior) Preflight(ctx context.Context, opts ...Invok
 		InvokedAs:   b.operationKey,
 		BindingKey:  b.bindingKey,
 		BindingSpec: b.source.BindingSpec,
-		Selector:    contractSelector(b.binding.Selector),
+		Selector:    cloneSelector(b.binding.Selector),
 	}
 	if runtime := b.invoker.invoker.findInvoker(b.source.BindingSpec); runtime != nil {
 		stampSite(args.Site, runtime)
@@ -158,7 +158,7 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 		return nil, fmt.Errorf("openbindings: operation invoker is required")
 	}
 	actual, ok := prepared.Binding(binding.Key)
-	if !ok || !samePreparedBinding(actual, binding) {
+	if !ok || !actual.Equal(binding) {
 		return nil, fmt.Errorf("openbindings: binding %q is not part of the prepared interface", binding.Key)
 	}
 	supported := false
@@ -206,7 +206,7 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 					Location:    sourceLocation(source.Location),
 					Content:     source.Content,
 				},
-				Selector:    contractSelector(bindingEntry.Selector),
+				Selector:    cloneSelector(bindingEntry.Selector),
 				Binding:     &bindingEntry,
 				Interface:   snapshot,
 				InputSchema: operation.Input,
@@ -215,7 +215,7 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 					InvokedAs:   binding.OperationKey,
 					BindingKey:  binding.Key,
 					BindingSpec: binding.BindingSpec,
-					Selector:    contractSelector(binding.Selector),
+					Selector:    cloneSelector(binding.Selector),
 				},
 			}
 			stampSite(args.Site, runtime)

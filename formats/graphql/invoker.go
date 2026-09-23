@@ -142,7 +142,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
-	rootType, fieldName, err := parseSelector(args.Selector)
+	rootType, fieldName, err := parseSelector(openbindings.Value(args.Selector))
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
 		return
@@ -272,7 +272,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 // args.Context, without parsing a source, reading caller input,
 // introspecting, or dispatching.
 func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	rootType, _, err := parseSelector(args.Selector)
+	rootType, _, err := parseSelector(openbindings.Value(args.Selector))
 	if err != nil {
 		return nil, nil
 	}
@@ -425,12 +425,12 @@ func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.I
 		items = append(items, item{key: key, binding: binding})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return synthesize.ContractSelector(items[i].binding.Selector) < synthesize.ContractSelector(items[j].binding.Selector)
+		return openbindings.Value(items[i].binding.Selector) < openbindings.Value(items[j].binding.Selector)
 	})
 	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(items))
 	for _, item := range items {
 		requirements := []string{"document"}
-		if strings.HasPrefix(synthesize.ContractSelector(item.binding.Selector), "subscription/") {
+		if strings.HasPrefix(openbindings.Value(item.binding.Selector), "subscription/") {
 			requirements = append(requirements, "subscriptionTarget")
 		}
 		entries = append(entries, synthesize.SynthesisCoverageEntry{

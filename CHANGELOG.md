@@ -6,11 +6,15 @@
 
 ### Fixed
 
-- **A relative `$ref` inside a schema resource is no longer an OBI-D-05
-  violation.** A schema that declares its own `$id` is a schema resource
-  whose references are its internal business (§7), so the OBI-position
-  reference forms stop at its boundary. Every `$id`, nested ones included,
-  is now held to RFC 3986 well-formedness as every `$ref` already was.
+- **OBI-D-05 stops at a schema resource's boundary.** A schema that declares
+  its own `$id` is a schema resource whose references, nested `$id`s, and
+  dynamic pair are its internal business, resolved per JSON Schema exactly as
+  for an externally fetched schema (§7). A relative or malformed `$ref`
+  inside one was an OBI-D-05 violation; OBI-D-05 now judges only the
+  resource's own `$id`, which must be an absolute, well-formed URI
+  (`https://[::1` is not). A same-document fragment whose pointer has an
+  invalid escape (`#/$defs/~2`) is not a JSON Pointer: it violates OBI-D-05
+  and no longer resolves for OBI-D-16.
 - **`ParseDocument` refuses an unsupported version before applying the
   schema.** It judged a `0.3.0` document against the 0.2 document schema
   and reported it non-conformant; it now returns the `*VersionRefusalError`
@@ -31,8 +35,45 @@
   validation read the validating machine's files and a verdict could depend
   on that machine. Every external reference now leaves the schema graph
   unavailable (`*SchemaGraphUnavailableError`), as `http(s)` references
-  already did (§7, OBI-T-16). The 2020-12 meta-schemas are built in and
+  already did (§7, OBI-T-16). The JSON Schema meta-schemas are built in and
   still resolve.
+- **Operation contracts compile against the schemas the document holds, and
+  nothing else.** The whole OBI was compiled as a JSON Schema, so its
+  unknown members acted as schema keywords: a root `$defs` supplied embedded
+  resources, and a root `"type": 5` made every operation's graph
+  unavailable (OBI-T-02, §7). The root is now a container whose locations
+  become schemas only when an operation schema reaches them. A same-document
+  pointer into the interior of an embedded `$id` resource resolves the
+  references there against that resource's base. Two schemas declaring one
+  `$id` leave the graph unavailable instead of one silently winning. The
+  backend carries these as recorded patches (`patches/README.md`).
+- **`format` never asserts at an operation boundary** (§5.2, OBI-T-16). The
+  backend asserted it under the draft-04, draft-06, and draft-07 dialects,
+  which a reference to their built-in meta-schema reaches.
+- **The document rules no longer depend on typed decoding.** When the typed
+  model could not decode a document, `ValidateDocument` reported every
+  remaining rule inconclusive, OBI-D-02 and OBI-D-12 included although both
+  were decided, and missed violations it could establish, such as an
+  OBI-D-17 `"input": null` or an OBI-D-08 dangling operation. Every rule now
+  judges the document's JSON. A member of the wrong JSON type is OBI-D-02's
+  violation, and the rules that needed its contents are inconclusive at its
+  position; every other position is still judged. `Interface.Validate` and
+  `PrepareInterface` judge the encoding of the host object the same way.
+- **OBI-D-11 follows a fragment into an embedded resource.** An example
+  behind `https://example.com/t#/$defs/S`, into a schema the document embeds
+  by that `$id`, was left unchecked; it is now validated.
+- **OBI-T-02 diagnoses the transform `$ref` object.** Its unknown members
+  are now reported like those of every other OBI-defined object.
+- **A document schema finding about a map key is located at the key**, not
+  at the whole document.
+- **A present empty `selector` no longer runs a Usage root command.** An
+  absent selector addresses the root command and USAGE-D-03 refuses `""`,
+  but invocation received both as `""` and ran the root.
+- **Synthesized documents state no empty optional collection.** The exact
+  model made synthesizers emit the empty `bindings` and `dependencies` maps
+  their skeletons start with; `synthesize.FinalizeSynthesis` now omits empty
+  optional collections, keeping an empty dependency `bindingSpecs`, which
+  accepts no binding family.
 
 - **`canonicaljson` refuses numbers it cannot carry exactly.** A JSON number
   whose exact value is not representable in IEEE 754 binary64 (for example
@@ -89,8 +130,10 @@
 
 ### Changed
 
-- **The document model is exact** (breaking, pre-1.0). Re-encoding a
-  decoded document dropped members whose value is a Go zero value
+- **The document model is exact** (breaking, pre-1.0). Decoding matched
+  member names without regard to case, so `"OPERATION"` beside `"operation"`
+  replaced the binding's operation, and it accepted duplicate member names.
+  Re-encoding a decoded document dropped members whose value is a Go zero value
   (`deprecated: false`, empty strings, empty arrays and maps) and every
   member of a transform's `$ref` object besides `$ref`, extensions included.
   So `Interface.Validate()` missed violations its bytes carry, such as a
@@ -104,17 +147,30 @@
   and empty is present. Example values are `json.RawMessage`, where `null` is
   a present value, like `Source.Content`; `InputPresent`, `OutputPresent`,
   `HasInput`, `HasOutput`, and `Source.ContentPresent` are gone.
+  `NonZero` sets an optional member from a producer's possibly empty value.
   `BindingEntry.Preference` is an exact `*int64`. `TransformOrRef` is a
-  tagged union whose `Reference` keeps the `$ref` object's other members, so
-  `{"$ref": ""}` stays an object. A document the model cannot carry exactly
-  fails decoding instead of being altered: JSON null at any other known
-  position (members, map entries, and array elements), a missing required
-  string member, or a preference that is not an integer in range.
-  `ValidateDocument` still judges such a document from its bytes.
-  `PreparedBindingDescriptor.Selector` keeps selector presence. The
-  binding-invoker (0.1), interface-synthesizer (0.2), and source-inspector
-  (0.1) contracts require a selector string, so the SDK sends an absent
-  selector to them as `""` at one documented projection each.
+  sealed union of `InlineTransform` and `*TransformReference`, which keeps
+  the `$ref` object's other members, so `{"$ref": ""}` stays an object and
+  no transform holds both forms; `IsRef` is gone. Members are matched by
+  exact name, and a case variant is an unknown member. A document the model
+  cannot carry exactly fails decoding instead of being altered: invalid
+  UTF-8, a duplicate member name, JSON null where null is not a value
+  (members, map entries, and array elements), a missing required string
+  member, or a preference that is not an integer number in range (`"7"` is
+  not). A typed field alone states its member: an `Unknown` or `Extensions`
+  entry of the same name is never encoded. `ValidateDocument` still judges
+  such a document in full. `PreparedBindingDescriptor.Selector` keeps
+  selector presence; compare descriptors with the new `Equal`.
+- **Invocation carries selector presence** (breaking, pre-1.0).
+  `invoke.BindingInvocationArgs.Selector`, `InvokeSite.Selector`, and the
+  realization records' `Selector` are `*string`, nil when the binding has no
+  selector, and each format invoker applies its binding specification's
+  rule for both cases. The binding-invoker (0.1) contract requires a
+  selector string, so a transport carrying these arguments over it sends an
+  absent selector as `""`. The interface-synthesizer (0.2) coverage and
+  source-inspector (0.1) target records require one too;
+  `synthesize.ContractSelector` is that projection. `BindingInvocationArgs`
+  gains `HookSite`, the consultation site the format invokers each built.
 
 - **Finding and diagnostic paths are JSON Pointers** (breaking, pre-1.0).
   `Finding.Path` and `Diagnostic.Path` are RFC 6901 pointers into the
@@ -124,14 +180,24 @@
   the location the schema check reports instead of an empty path, down to
   the offending keyword or example member. Key and alias findings point at
   the entry. `ValidationError` problems use the same paths.
-- **`ValidateAgainstSchema` validates a standalone schema** (breaking,
-  pre-1.0). It took a pool of named schemas and rewrote `#/schemas/X` into
-  the schema's own `$defs`, where a same-named local entry won, so it could
-  validate a value against the wrong schema. It now takes only the schema,
-  which is its own resolution root as JSON Schema defines. A schema at a
-  position of an OBI resolves against the whole document (§7):
-  `ValidateOperationInput`, `ValidateOperationOutput`, and the new
-  `ValidateAgainstNamedSchema` do that.
+- **Standalone schema validation moved to `schemavalidate`** (breaking,
+  pre-1.0). `ValidateAgainstSchema` took a pool of named schemas and
+  rewrote `#/schemas/X` into the schema's own `$defs`, where a same-named
+  local entry won, so it could validate a value against the wrong schema.
+  `schemavalidate.Validate(value, schema)` takes only the schema, which is
+  its own resolution root as JSON Schema defines. Validating against a
+  standalone schema is not a Core capability, so it lives outside the root
+  package. A schema at a position of an OBI resolves against the whole
+  document (§7):
+  `ValidateOperationInput` and `ValidateOperationOutput` do that. They and
+  `CompileOperationSchema` now return a plain error when there is nothing to
+  validate against (no such operation, or no schema at that position),
+  distinct from `*SchemaGraphUnavailableError`. `SchemaValidationError`
+  exposes its `Problems` and `Cause`.
+- **Root exports without a Core role are gone** (breaking, pre-1.0).
+  `FormatValidationErrors` had no callers; `IsOBInterface`, a shape probe
+  for fetched responses, is now private to retrieval and discovery; and
+  `PreparedInterface.Prepared` returned its receiver.
 
 - **Non-Core helpers moved out of the Go root package.** Binding
   implementation support types and exact-match checking moved to

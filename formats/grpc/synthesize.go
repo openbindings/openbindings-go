@@ -21,7 +21,7 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(s
 		BindingSpec: BindingSpec,
 	}
 	if sourceLocation != "" {
-		sourceEntry.Location = openbindings.NonZero(sourceLocation)
+		sourceEntry.Location = openbindings.Present(sourceLocation)
 	}
 
 	iface := openbindings.Interface{
@@ -72,7 +72,7 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(s
 			iface.Bindings[bindingKey] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Selector:  openbindings.NonZero(fqn),
+				Selector:  openbindings.Present(fqn),
 			}
 		}
 	}

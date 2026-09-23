@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -18,7 +19,7 @@ func TestDeliveryUnitBound_StdoutOverflowRefused(t *testing.T) {
 	}
 	_, ierr := invokeUsage(t, NewInvoker(), &invoke.BindingInvocationArgs{
 		Source:               testSource(),
-		Selector:             "echo",
+		Selector:             openbindings.Present("echo"),
 		MaxDeliveryUnitBytes: 1024,
 	}, map[string]any{"words": words})
 	if ierr == nil {

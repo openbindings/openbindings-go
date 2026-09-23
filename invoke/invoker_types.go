@@ -109,9 +109,14 @@ type InvocationSource struct {
 type BindingInvocationArgs struct {
 	ValueLimits ValueLimits      `json:"-"`
 	Source      InvocationSource `json:"source"`
-	// Selector is the format-specific pointer into the source artifact.
-	// Empty when the format doesn't use selectors.
-	Selector string `json:"selector"`
+	// Selector identifies the target within the source, nil when the binding
+	// has no selector member. The source's governing binding specification
+	// defines both cases, the absent one included (§5.3), and the invoker
+	// for that specification honors them (OBI-T-06). Revision 0.1 of the
+	// binding-invoker contract requires a selector string, so a transport
+	// that carries these arguments over that contract sends "" for an absent
+	// selector and loses the distinction there.
+	Selector *string `json:"selector,omitempty"`
 	// Binding is the selected binding entry. Populated by the operation
 	// invoker; optional for direct calls.
 	Binding *openbindings.BindingEntry `json:"-"`

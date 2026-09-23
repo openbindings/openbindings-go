@@ -186,7 +186,7 @@ func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvoca
 	if args.Source.BindingSpec != BindingSpec {
 		return nil, nil
 	}
-	if _, _, err := parseSelector(args.Selector); err != nil {
+	if _, _, err := parseSelector(openbindings.Value(args.Selector)); err != nil {
 		return nil, nil
 	}
 	location := strings.TrimSpace(args.Source.Location)

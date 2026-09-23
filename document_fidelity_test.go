@@ -187,3 +187,109 @@ func TestPreparedBinding_SelectorPresenceIsKeptAndCopied(t *testing.T) {
 		t.Fatal("a returned descriptor must not alias the prepared snapshot")
 	}
 }
+
+// Members are matched by exact name. A case variant of a typed member is an
+// unknown member (OBI-T-02) and never changes the typed one.
+func TestDocumentModel_MemberNamesAreExact(t *testing.T) {
+	var binding BindingEntry
+	if err := json.Unmarshal([]byte(`{"operation":"a","source":"s","OPERATION":"b","Selector":"x","Preference":1.5}`), &binding); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if binding.Operation != "a" || binding.Selector != nil || binding.Preference != nil {
+		t.Fatalf("a case variant changed a typed member: %+v", binding)
+	}
+	if len(binding.Unknown) != 3 {
+		t.Fatalf("case variants must be carried as unknown members, got %v", binding.Unknown)
+	}
+	var iface Interface
+	document := `{"openbindings":"0.2.0","OpenBindings":"9.9.9","operations":{}}`
+	if err := json.Unmarshal([]byte(document), &iface); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if iface.OpenBindings != "0.2.0" {
+		t.Fatalf("declared version = %q", iface.OpenBindings)
+	}
+	encoded, _ := json.Marshal(iface)
+	if got, want := decodedJSON(t, encoded), decodedJSON(t, []byte(document)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip changed the document: %s", encoded)
+	}
+}
+
+// Duplicate member names and quoted preferences are refused, at any depth, by
+// direct decoding as by ValidateDocument.
+func TestDocumentModel_RefusesDuplicatesAndQuotedPreferences(t *testing.T) {
+	for name, document := range map[string]string{
+		"duplicate root member":    `{"openbindings":"0.2.0","operations":{},"name":"a","name":"b"}`,
+		"duplicate map entry":      `{"openbindings":"0.2.0","operations":{"a":{},"a":{}}}`,
+		"duplicate inside schema":  `{"openbindings":"0.2.0","operations":{"a":{"input":{"type":"string","type":"number"}}}}`,
+		"quoted preference":        `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":"7"}}}`,
+		"invalid UTF-8 in a value": "{\"openbindings\":\"0.2.0\",\"name\":\"\xff\",\"operations\":{}}",
+	} {
+		var iface Interface
+		if err := json.Unmarshal([]byte(document), &iface); err == nil {
+			t.Errorf("%s: decoded a document the model cannot carry", name)
+		}
+	}
+}
+
+// Decode errors name the first offending member in declaration order, so the
+// same input always fails the same way.
+func TestDocumentModel_DecodeErrorsAreDeterministic(t *testing.T) {
+	document := []byte(`{"description":null,"deprecated":null,"tags":null,"idempotent":null,"examples":null}`)
+	var first string
+	for range 50 {
+		var operation Operation
+		err := json.Unmarshal(document, &operation)
+		if err == nil {
+			t.Fatal("decoded nulls the model cannot carry")
+		}
+		if first == "" {
+			first = err.Error()
+		} else if err.Error() != first {
+			t.Fatalf("decode error varies: %q then %q", first, err.Error())
+		}
+	}
+}
+
+// A typed field alone states its member: a nil field is absent even when the
+// lossless maps carry an entry of the same name.
+func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
+	binding := BindingEntry{Operation: "a", Source: "s", LosslessFields: LosslessFields{
+		Unknown:    map[string]json.RawMessage{"selector": json.RawMessage(`"x"`), "later": json.RawMessage(`1`)},
+		Extensions: map[string]json.RawMessage{"operation": json.RawMessage(`"b"`)},
+	}}
+	encoded, err := json.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := decodedJSON(t, encoded), decodedJSON(t, []byte(`{"operation":"a","source":"s","later":1}`)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("encoded %s", encoded)
+	}
+}
+
+func TestPreparedBindingDescriptor_Equal(t *testing.T) {
+	a := PreparedBindingDescriptor{Key: "b", OperationKey: "a", SourceKey: "s", BindingSpec: "x@1", Selector: Present("")}
+	b := a
+	b.Selector = Present("")
+	if !a.Equal(b) {
+		t.Fatal("equal descriptors with distinct selector pointers must be Equal")
+	}
+	b.Selector = nil
+	if a.Equal(b) {
+		t.Fatal("an absent selector differs from a present empty one")
+	}
+}
+
+// A host object whose encoding violates the document rules is refused with a
+// *ValidationError, as Validate reports it.
+func TestPrepareInterface_RefusesWhatValidateReports(t *testing.T) {
+	iface := &Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
+	_, err := PrepareInterface(iface)
+	var violation *ValidationError
+	if !errors.As(err, &violation) {
+		t.Fatalf("want a *ValidationError, got %T %v", err, err)
+	}
+	if _, verr := iface.Validate(); !errors.As(verr, &violation) {
+		t.Fatalf("Validate must report the same document: %v", verr)
+	}
+}

@@ -23,9 +23,9 @@ func cancellationInterface(direction string) *openbindings.Interface {
 	entry := iface.Bindings["echo.transformed"]
 	entry.InputTransform, entry.OutputTransform = nil, nil
 	if direction == "input" {
-		entry.InputTransform = &openbindings.TransformOrRef{Inline: "$"}
+		entry.InputTransform = openbindings.InlineTransform("$")
 	} else {
-		entry.OutputTransform = &openbindings.TransformOrRef{Inline: "$"}
+		entry.OutputTransform = openbindings.InlineTransform("$")
 	}
 	iface.Bindings["echo.transformed"] = entry
 	return iface
@@ -80,7 +80,7 @@ func TestCancellationTransformBoundaryGuards(t *testing.T) {
 			if !late {
 				cancel()
 			}
-			v, err := applyTransformRef(ctx, e, nil, &openbindings.TransformOrRef{Inline: "$"}, nil)
+			v, err := applyTransformRef(ctx, e, nil, openbindings.InlineTransform("$"), nil)
 			if !errors.Is(err, context.Canceled) || v != nil || called != late {
 				t.Fatalf("value=%v error=%v called=%v", v, err, called)
 			}

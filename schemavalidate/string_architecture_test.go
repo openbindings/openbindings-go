@@ -1,4 +1,4 @@
-package openbindings
+package schemavalidate
 
 import (
 	"testing"
@@ -17,7 +17,7 @@ func TestStringArchitectureObservation(t *testing.T) {
 		if err := jsonvalue.Unmarshal([]byte(raw), &schema); err != nil {
 			t.Fatal(err)
 		}
-		if err := ValidateAgainstSchema(value, schema); err != nil {
+		if err := Validate(value, schema); err != nil {
 			t.Errorf("string schema boundary %s: %v", raw, err)
 		}
 	}

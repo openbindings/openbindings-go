@@ -31,8 +31,9 @@ type ProviderRealizationDescriptor struct {
 	BindingKey   string `json:"bindingKey"`
 	SourceKey    string `json:"sourceKey"`
 	BindingSpec  string `json:"bindingSpec"`
-	Selector     string `json:"selector"`
-	Supported    bool   `json:"supported"`
+	// Selector is the binding's selector, nil when it has none.
+	Selector  *string `json:"selector,omitempty"`
+	Supported bool    `json:"supported"`
 
 	binding openbindings.PreparedBindingDescriptor
 }
@@ -63,7 +64,8 @@ type PreparedRealization struct {
 	BindingKey          string `json:"bindingKey"`
 	SourceKey           string `json:"sourceKey"`
 	BindingSpec         string `json:"bindingSpec"`
-	Selector            string `json:"selector"`
+	// Selector is the binding's selector, nil when it has none.
+	Selector *string `json:"selector,omitempty"`
 
 	provider *PreparedProvider
 	behavior CompiledRealizationBehavior
@@ -154,7 +156,7 @@ func PrepareProvider(options PreparedProviderOptions) (*PreparedProvider, error)
 			BindingKey:   binding.Key,
 			SourceKey:    binding.SourceKey,
 			BindingSpec:  binding.BindingSpec,
-			Selector:     contractSelector(binding.Selector),
+			Selector:     cloneSelector(binding.Selector),
 			Supported:    supported,
 			binding:      binding,
 		}

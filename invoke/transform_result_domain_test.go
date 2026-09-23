@@ -36,9 +36,9 @@ func TestTransformResultJSONDomain(t *testing.T) {
 						iface := opTestInterface()
 						entry := iface.Bindings["echo.transformed"]
 						entry.InputTransform = nil
-						transform := &openbindings.TransformOrRef{Inline: "$"}
+						var transform openbindings.TransformOrRef = openbindings.InlineTransform("$")
 						if referenced {
-							transform = &openbindings.TransformOrRef{Reference: &openbindings.TransformReference{Ref: "#/transforms/map"}}
+							transform = &openbindings.TransformReference{Ref: "#/transforms/map"}
 							iface.Transforms = map[string]openbindings.Transform{"map": "$"}
 						}
 						if direction == "input" {
@@ -75,7 +75,7 @@ func TestTransformResultJSONDomain(t *testing.T) {
 
 func TestTransformResultJSONControls(t *testing.T) {
 	for _, value := range []any{nil, false, "", float64(0), []any{float64(1)}, map[string]any{"n": json.Number("1e400")}, json.Number("9223372036854775807")} {
-		result, err := applyTransformRef(context.Background(), domainEvaluator{value: value}, nil, &openbindings.TransformOrRef{Inline: "$"}, nil)
+		result, err := applyTransformRef(context.Background(), domainEvaluator{value: value}, nil, openbindings.InlineTransform("$"), nil)
 		if err != nil {
 			t.Fatalf("valid JSON result rejected: %#v: %v", value, err)
 		}
@@ -85,7 +85,7 @@ func TestTransformResultJSONControls(t *testing.T) {
 			t.Fatalf("result changed: %s -> %s", before, after)
 		}
 	}
-	_, err := applyTransformRef(context.Background(), domainEvaluator{err: ErrTransformUndefined}, nil, &openbindings.TransformOrRef{Inline: "$"}, nil)
+	_, err := applyTransformRef(context.Background(), domainEvaluator{err: ErrTransformUndefined}, nil, openbindings.InlineTransform("$"), nil)
 	if !errors.Is(err, ErrTransformUndefined) {
 		t.Fatalf("undefined sentinel lost: %v", err)
 	}
@@ -103,7 +103,7 @@ func (streamDomainEvaluator) Evaluate(_ context.Context, _ string, data any) (an
 func TestTransformResultJSONStreamKeepsPriorOutput(t *testing.T) {
 	iface := opTestInterface()
 	binding := iface.Bindings["watchTyped.main"]
-	binding.OutputTransform = &openbindings.TransformOrRef{Inline: "$"}
+	binding.OutputTransform = openbindings.InlineTransform("$")
 	iface.Bindings["watchTyped.main"] = binding
 	mock := &mockBindingInvoker{}
 	op := newOpInvoker(mock, nil)

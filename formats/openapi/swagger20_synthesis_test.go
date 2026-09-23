@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
@@ -42,7 +43,7 @@ func TestSwagger20SynthesisEmitsFlatContractEnvelopeTransformAndCoverage(t *test
 	if binding.InputTransform == nil {
 		t.Fatal("missing inputTransform")
 	}
-	value, err := (openAPIJSONataEvaluator{}).Evaluate(context.Background(), binding.InputTransform.Inline, map[string]any{
+	value, err := (openAPIJSONataEvaluator{}).Evaluate(context.Background(), string(binding.InputTransform.(openbindings.InlineTransform)), map[string]any{
 		"path/id": "7", "query/id": "lookup", "body": map[string]any{"name": "Ada"},
 	})
 	if err != nil {
@@ -87,7 +88,7 @@ func TestSwagger20PreflightBindingReportsSelectedCredentialRequirement(t *testin
 	artifact := `{"swagger":"2.0","info":{"title":"Auth","version":"1"},"host":"api.example","schemes":["https"],"securityDefinitions":{"key":{"type":"apiKey","in":"header","name":"X-Key"}},"security":[{"key":[]}],"paths":{"/x":{"get":{"responses":{"204":{"description":"ok"}}}}}}`
 	args := &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI20, Content: jsonvalue.TextContent(artifact)},
-		Selector: "#/paths/~1x/get",
+		Selector: openbindings.Present("#/paths/~1x/get"),
 	}
 	details, err := NewInvoker().PreflightBinding(context.Background(), args)
 	if err != nil {

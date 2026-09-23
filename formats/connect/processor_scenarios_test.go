@@ -197,7 +197,12 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			ctx["apiKey"] = generic
 		}
 	}
-	selector, _ := scenario.Given.Binding["selector"].(string)
+	// The scenario's binding states the selector's presence as well as its
+	// value.
+	var selector *string
+	if value, ok := scenario.Given.Binding["selector"].(string); ok {
+		selector = &value
+	}
 	joined := strings.HasPrefix(scenario.ID, "CONN-FI-")
 	var call invoke.Invocation[any, any]
 	if joined {
@@ -272,14 +277,14 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
 }
 
-func connectOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
+func connectOperationForSelector(t *testing.T, iface *openbindings.Interface, selector *string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if openbindings.Value(binding.Selector) == selector {
+		if (binding.Selector == nil) == (selector == nil) && (selector == nil || *binding.Selector == *selector) {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized Connect interface has no binding for %q", selector)
+	t.Fatalf("synthesized Connect interface has no binding for selector %v", selector)
 	return ""
 }
 

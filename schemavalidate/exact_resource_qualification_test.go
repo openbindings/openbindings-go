@@ -1,11 +1,12 @@
-package openbindings
+package schemavalidate
 
 import (
 	"encoding/json"
 	"errors"
-	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 	"strings"
 	"testing"
+
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 
 	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
 	"github.com/openbindings/openbindings-go/jsonvalue"
@@ -22,7 +23,7 @@ func TestExactValidatorPredicateCapability(t *testing.T) {
 					t.Errorf("validation panicked: %v", recovered)
 				}
 			}()
-			err := ValidateAgainstSchema(value, schema)
+			err := Validate(value, schema)
 			var capability *jsonvalue.CapabilityError
 			if !errors.As(err, &capability) {
 				t.Fatalf("want explicit numeric capability refusal, got %v", err)
@@ -31,7 +32,7 @@ func TestExactValidatorPredicateCapability(t *testing.T) {
 	}
 	// No numeric predicate is needed for a boolean schema. Carriage alone is
 	// not subject to arithmetic work limits.
-	if err := ValidateAgainstSchema(value, true); err != nil {
+	if err := Validate(value, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -39,7 +40,7 @@ func TestExactValidatorPredicateCapability(t *testing.T) {
 func TestSchemaUnicodePropertyNames(t *testing.T) {
 	for _, pattern := range []string{`^\p{Letter}+$`, `^\p{L}+$`} {
 		for _, data := range []string{"letters", "éλ", "123"} {
-			err := ValidateAgainstSchema(data, map[string]any{"pattern": pattern})
+			err := Validate(data, map[string]any{"pattern": pattern})
 			if (err == nil) != (data != "123") {
 				t.Errorf("%s / %s: %v", pattern, data, err)
 			}
@@ -70,7 +71,7 @@ func TestSchemaRegexRefusalIsNotMismatch(t *testing.T) {
 		{map[string]any{"not": map[string]any{"pattern": "^ok$"}}, "secret-refuse", "other"},
 		{map[string]any{"if": map[string]any{"pattern": "^ok$"}, "then": true, "else": false}, "secret-refuse", "ok"},
 	} {
-		compiler := exactCountCompiler()
+		compiler := schemacompiler.New()
 		compiler.UseRegexpEngine(func(expression string) (jsonschema.Regexp, error) {
 			re, err := schemacompiler.RegexpEngine(expression)
 			return refusingSchemaRegexp{re}, err
@@ -107,7 +108,7 @@ func TestExactCapabilityAbortsSpeculationAndAllowsReuse(t *testing.T) {
 		{"if": map[string]any{"minimum": 0}, "then": false, "else": true},
 		{"$defs": map[string]any{"p": map[string]any{"minimum": 0}}, "$ref": "#/$defs/p"},
 	} {
-		compiler := exactCountCompiler()
+		compiler := schemacompiler.New()
 		if err := compiler.AddResource("urn:test:predicate", schema); err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +127,7 @@ func TestExactCapabilityAbortsSpeculationAndAllowsReuse(t *testing.T) {
 			}
 		}
 	}
-	compiler := exactCountCompiler()
+	compiler := schemacompiler.New()
 	if err := compiler.AddResource("urn:test:large", map[string]any{"minimum": huge}); err != nil {
 		t.Fatal(err)
 	}

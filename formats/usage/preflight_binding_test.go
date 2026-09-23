@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -35,7 +36,7 @@ func untouchableInvoker() (*Invoker, *atomic.Bool) {
 func preflightBindingArgs(bindCtx map[string]any) *invoke.BindingInvocationArgs {
 	return &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "/nonexistent/preflight-binding-must-not-run", Content: jsonvalue.TextContent(preflightBindingSpec)},
-		Selector: "ping",
+		Selector: openbindings.Present("ping"),
 		Context:  bindCtx,
 	}
 }

@@ -138,7 +138,12 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if content, present := scenario.Given.Source["content"]; present {
 		source.Content, _ = json.Marshal(content)
 	}
-	selector, _ := scenario.Given.Binding["selector"].(string)
+	// The scenario's binding states the selector's presence as well as its
+	// value.
+	var selector *string
+	if value, ok := scenario.Given.Binding["selector"].(string); ok {
+		selector = &value
+	}
 	configuration := cloneMap(scenario.Given.Configuration)
 	contextValue := map[string]any{}
 	if configuration != nil {
@@ -220,14 +225,14 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
 }
 
-func graphQLOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
+func graphQLOperationForSelector(t *testing.T, iface *openbindings.Interface, selector *string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if openbindings.Value(binding.Selector) == selector {
+		if (binding.Selector == nil) == (selector == nil) && (selector == nil || *binding.Selector == *selector) {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized GraphQL interface has no binding for %q", selector)
+	t.Fatalf("synthesized GraphQL interface has no binding for selector %v", selector)
 	return ""
 }
 

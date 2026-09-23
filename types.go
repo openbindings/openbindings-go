@@ -3,12 +3,8 @@ package openbindings
 import (
 	"bytes"
 	"fmt"
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
-	"math/big"
-	"strconv"
-	"strings"
 
-	"github.com/openbindings/openbindings-go/jsonvalue"
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 )
 
 // JSONSchema holds a JSON Schema 2020-12 value in either of its two forms:
@@ -93,85 +89,6 @@ func Value[T any](member *T) T {
 	return *member
 }
 
-// LosslessFields is embedded in every OBI-defined object to preserve members
-// the SDK does not model. Extensions holds keys starting with "x-"; Unknown
-// holds all other unrecognised keys. During marshaling, typed fields always win
-// over colliding Unknown/Extension entries.
-//
-// Together with the typed fields they make the model exact: re-encoding a
-// decoded document reproduces every member. An optional member is absent
-// exactly when its Go value is nil: optional strings and booleans are
-// pointers, optional collections distinguish nil (absent) from empty
-// (present), and a JSON null is carried only where null is itself a value
-// (example values and source content, as json.RawMessage). A document the
-// model cannot carry exactly fails decoding instead of being altered: a JSON
-// null at any other known position, a missing required string member, or a
-// preference that is not an integer in range. ValidateDocument still judges
-// such a document from its bytes.
-//
-// Each lossless type requires a parallel wire struct for encoding — when adding
-// fields to a typed struct, update both the public type and its wire counterpart.
-type LosslessFields struct {
-	// Extensions preserves `x-*` fields at the object level.
-	// It is populated by UnmarshalJSON and included by MarshalJSON.
-	Extensions map[string]json.RawMessage `json:"-"`
-
-	// Unknown preserves other unknown fields (forward-compat).
-	// It is populated by UnmarshalJSON and included by MarshalJSON.
-	Unknown map[string]json.RawMessage `json:"-"`
-}
-
-var (
-	operationShape = objectShape{
-		name: "operation",
-		known: knownSet(
-			"description", "deprecated", "tags", "aliases",
-			"idempotent", "input", "output", "examples",
-		),
-		stringLists: []string{"tags", "aliases"},
-	}
-	operationExampleShape = objectShape{
-		name:     "example",
-		known:    knownSet("description", "input", "output"),
-		nullable: map[string]bool{"input": true, "output": true},
-	}
-	sourceShape = objectShape{
-		name:     "source",
-		known:    knownSet("bindingSpec", "location", "content", "description"),
-		required: []string{"bindingSpec"},
-		nullable: map[string]bool{"content": true},
-	}
-	bindingEntryShape = objectShape{
-		name: "binding",
-		known: knownSet(
-			"operation", "source", "selector", "preference", "description", "deprecated",
-			"inputTransform", "outputTransform",
-		),
-		required: []string{"operation", "source"},
-	}
-	dependencyEntryShape = objectShape{
-		name:        "dependency",
-		known:       knownSet("operation", "bindingSpecs"),
-		required:    []string{"operation"},
-		stringLists: []string{"bindingSpecs"},
-	}
-	transformReferenceShape = objectShape{
-		name:     "transform reference",
-		known:    knownSet("$ref"),
-		required: []string{"$ref"},
-	}
-	interfaceShape = objectShape{
-		name: "document",
-		known: knownSet(
-			"openbindings", "name", "version", "description",
-			"schemas", "operations", "dependencies",
-			"sources", "bindings", "transforms",
-		),
-		required:    []string{"openbindings"},
-		stringLists: []string{"transforms"},
-	}
-)
-
 // OperationExample is a named, author-supplied sample of an operation's
 // caller-facing values (§5.1). Input and Output are the example values as
 // JSON: nil when the member is absent, and the bytes `null` when the example
@@ -184,32 +101,14 @@ type OperationExample struct {
 	LosslessFields
 }
 
-type operationExampleWire struct {
-	Description *string         `json:"description,omitempty"`
-	Input       json.RawMessage `json:"input,omitempty"`
-	Output      json.RawMessage `json:"output,omitempty"`
-}
+type operationExampleMembers OperationExample
 
 func (e *OperationExample) UnmarshalJSON(b []byte) error {
-	raw, err := decodeObject(b, operationExampleShape)
-	if err != nil {
-		return err
-	}
-	var w operationExampleWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	*e = OperationExample{Description: w.Description, Input: raw["input"], Output: raw["output"]}
-	e.Extensions, e.Unknown = splitLossless(raw, operationExampleShape.known)
-	return nil
+	return decodeObject(b, "example", (*operationExampleMembers)(e))
 }
 
 func (e OperationExample) MarshalJSON() ([]byte, error) {
-	return marshalLossless(e.Unknown, e.Extensions, operationExampleWire{
-		Description: e.Description,
-		Input:       e.Input,
-		Output:      e.Output,
-	})
+	return encodeObject(operationExampleMembers(e), e.LosslessFields)
 }
 
 // Operation is a protocol-independent capability contract (§5.1). Input and
@@ -234,53 +133,14 @@ type Operation struct {
 	LosslessFields
 }
 
-type operationWire struct {
-	Description *string  `json:"description,omitempty"`
-	Deprecated  *bool    `json:"deprecated,omitempty"`
-	Tags        []string `json:"tags,omitzero"`
-	Aliases     []string `json:"aliases,omitzero"`
-
-	Idempotent *bool      `json:"idempotent,omitempty"`
-	Input      JSONSchema `json:"input,omitempty"`
-	Output     JSONSchema `json:"output,omitempty"`
-
-	Examples map[string]OperationExample `json:"examples,omitzero"`
-}
+type operationMembers Operation
 
 func (o *Operation) UnmarshalJSON(b []byte) error {
-	raw, err := decodeObject(b, operationShape)
-	if err != nil {
-		return err
-	}
-	var w operationWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	*o = Operation{
-		Description: w.Description,
-		Deprecated:  w.Deprecated,
-		Tags:        w.Tags,
-		Aliases:     w.Aliases,
-		Idempotent:  w.Idempotent,
-		Input:       w.Input,
-		Output:      w.Output,
-		Examples:    w.Examples,
-	}
-	o.Extensions, o.Unknown = splitLossless(raw, operationShape.known)
-	return nil
+	return decodeObject(b, "operation", (*operationMembers)(o))
 }
 
 func (o Operation) MarshalJSON() ([]byte, error) {
-	return marshalLossless(o.Unknown, o.Extensions, operationWire{
-		Description: o.Description,
-		Deprecated:  o.Deprecated,
-		Tags:        o.Tags,
-		Aliases:     o.Aliases,
-		Idempotent:  o.Idempotent,
-		Input:       o.Input,
-		Output:      o.Output,
-		Examples:    o.Examples,
-	})
+	return encodeObject(operationMembers(o), o.LosslessFields)
 }
 
 // Source is a binding-specification-governed carrier or address (§5.4).
@@ -302,34 +162,14 @@ type Source struct {
 	LosslessFields
 }
 
-type sourceWire struct {
-	BindingSpec string          `json:"bindingSpec"`
-	Location    *string         `json:"location,omitempty"`
-	Content     json.RawMessage `json:"content,omitempty"`
-	Description *string         `json:"description,omitempty"`
-}
+type sourceMembers Source
 
 func (s *Source) UnmarshalJSON(b []byte) error {
-	raw, err := decodeObject(b, sourceShape)
-	if err != nil {
-		return err
-	}
-	var w sourceWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	*s = Source{BindingSpec: w.BindingSpec, Location: w.Location, Content: raw["content"], Description: w.Description}
-	s.Extensions, s.Unknown = splitLossless(raw, sourceShape.known)
-	return nil
+	return decodeObject(b, "source", (*sourceMembers)(s))
 }
 
 func (s Source) MarshalJSON() ([]byte, error) {
-	return marshalLossless(s.Unknown, s.Extensions, sourceWire{
-		BindingSpec: s.BindingSpec,
-		Location:    s.Location,
-		Content:     s.Content,
-		Description: s.Description,
-	})
+	return encodeObject(sourceMembers(s), s.LosslessFields)
 }
 
 // Transform is a JSONata expression string in the transform language §5.5
@@ -337,21 +177,30 @@ func (s Source) MarshalJSON() ([]byte, error) {
 // (OBI-T-10).
 type Transform = string
 
-// TransformOrRef is a binding's inputTransform or outputTransform: either an
-// inline JSONata expression or a reference object naming an entry of the
-// document's transforms map (§5.5). Exactly one form is active: a non-nil
-// Reference is the object form, and Inline is then empty.
-type TransformOrRef struct {
-	// Inline is the JSONata expression of an inline transform.
-	Inline string
+// TransformOrRef is a binding's inputTransform or outputTransform (§5.5): an
+// InlineTransform expression, or a *TransformReference naming an entry of the
+// document's transforms map. No other type implements it, and a nil
+// TransformOrRef is an absent member.
+type TransformOrRef interface {
+	// Resolve returns the JSONata expression the transform denotes: an inline
+	// expression itself, or the transforms entry a reference names. It
+	// reports false when a reference does not resolve.
+	Resolve(transforms map[string]Transform) (expression string, ok bool)
 
-	// Reference is the object form, {"$ref": "#/transforms/<name>"}.
-	Reference *TransformReference
+	transformOrRef()
 }
 
-// TransformReference is the object form of a binding transform. Its members
-// beyond $ref, extensions and unknown fields alike, are preserved (§12,
-// OBI-T-02).
+// InlineTransform is a transform written in place, as a JSONata expression.
+type InlineTransform string
+
+// Resolve returns the expression itself.
+func (t InlineTransform) Resolve(map[string]Transform) (string, bool) { return string(t), true }
+
+func (InlineTransform) transformOrRef() {}
+
+// TransformReference is the object form of a binding transform,
+// {"$ref": "#/transforms/<name>"}. Its members beyond $ref, extensions and
+// unknown fields alike, are preserved (§12, OBI-T-02).
 type TransformReference struct {
 	// Ref is the same-document fragment naming a transforms entry.
 	Ref string `json:"$ref"`
@@ -359,82 +208,51 @@ type TransformReference struct {
 	LosslessFields
 }
 
-type transformReferenceWire struct {
-	Ref string `json:"$ref"`
+type transformReferenceMembers TransformReference
+
+// Resolve returns the transforms entry Ref names.
+func (r *TransformReference) Resolve(transforms map[string]Transform) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	name, problem := transformReferenceName(r.Ref)
+	if problem != "" {
+		return "", false
+	}
+	expression, ok := transforms[name]
+	return expression, ok
 }
 
+func (*TransformReference) transformOrRef() {}
+
 func (r *TransformReference) UnmarshalJSON(b []byte) error {
-	raw, err := decodeObject(b, transformReferenceShape)
-	if err != nil {
-		return err
-	}
-	var w transformReferenceWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	*r = TransformReference{Ref: w.Ref}
-	r.Extensions, r.Unknown = splitLossless(raw, transformReferenceShape.known)
-	return nil
+	return decodeObject(b, "transform reference", (*transformReferenceMembers)(r))
 }
 
 func (r TransformReference) MarshalJSON() ([]byte, error) {
-	return marshalLossless(r.Unknown, r.Extensions, transformReferenceWire{Ref: r.Ref})
+	return encodeObject(transformReferenceMembers(r), r.LosslessFields)
 }
 
-// IsRef reports whether this is the reference object form.
-func (t TransformOrRef) IsRef() bool {
-	return t.Reference != nil
-}
-
-// Resolve returns the JSONata expression this transform denotes: the inline
-// expression, or the transforms entry its reference names. It returns
-// ("", false) when a reference does not resolve.
-func (t TransformOrRef) Resolve(transforms map[string]string) (string, bool) {
-	if t.Reference == nil {
-		return t.Inline, true
-	}
-	const prefix = "#/transforms/"
-	if !strings.HasPrefix(t.Reference.Ref, prefix) {
-		return "", false
-	}
-	name := strings.TrimPrefix(t.Reference.Ref, prefix)
-	if name == "" {
-		return "", false
-	}
-	expr, ok := transforms[name]
-	return expr, ok
-}
-
-func (t *TransformOrRef) UnmarshalJSON(b []byte) error {
-	trimmed := bytes.TrimSpace(b)
+// decodeTransform decodes a binding transform member: a string is an inline
+// expression, an object a reference.
+func decodeTransform(raw json.RawMessage) (TransformOrRef, error) {
+	trimmed := bytes.TrimSpace(raw)
 	switch {
 	case len(trimmed) > 0 && trimmed[0] == '"':
-		var s string
-		if err := json.Unmarshal(trimmed, &s); err != nil {
-			return err
+		var expression string
+		if err := json.Unmarshal(trimmed, &expression); err != nil {
+			return nil, err
 		}
-		*t = TransformOrRef{Inline: s}
-		return nil
+		return InlineTransform(expression), nil
 	case len(trimmed) > 0 && trimmed[0] == '{':
-		var reference TransformReference
+		reference := &TransformReference{}
 		if err := reference.UnmarshalJSON(trimmed); err != nil {
-			return err
+			return nil, err
 		}
-		*t = TransformOrRef{Reference: &reference}
-		return nil
+		return reference, nil
 	default:
-		return fmt.Errorf("transform: must be a JSONata expression string or a $ref object")
+		return nil, fmt.Errorf("a transform is a JSONata expression string or a $ref object")
 	}
-}
-
-func (t TransformOrRef) MarshalJSON() ([]byte, error) {
-	if t.Reference == nil {
-		return json.Marshal(t.Inline)
-	}
-	if t.Inline != "" {
-		return nil, fmt.Errorf("transform: both an inline expression and a reference are set")
-	}
-	return t.Reference.MarshalJSON()
 }
 
 // BindingEntry is an author-declared realization of an operation through a
@@ -454,87 +272,31 @@ type BindingEntry struct {
 
 	// InputTransform maps each caller-facing input value toward the source's
 	// expected input representation (§5.5).
-	InputTransform *TransformOrRef `json:"inputTransform,omitempty"`
+	InputTransform TransformOrRef `json:"inputTransform,omitempty"`
 	// OutputTransform maps each source output value toward the operation's
 	// output contract (§5.5).
-	OutputTransform *TransformOrRef `json:"outputTransform,omitempty"`
+	OutputTransform TransformOrRef `json:"outputTransform,omitempty"`
 
 	LosslessFields
 }
 
-type bindingEntryWire struct {
-	Operation   string       `json:"operation"`
-	Source      string       `json:"source"`
-	Selector    *string      `json:"selector,omitempty"`
-	Preference  *json.Number `json:"preference,omitempty"`
-	Description *string      `json:"description,omitempty"`
-	Deprecated  *bool        `json:"deprecated,omitempty"`
-
-	InputTransform  *TransformOrRef `json:"inputTransform,omitempty"`
-	OutputTransform *TransformOrRef `json:"outputTransform,omitempty"`
-}
+type bindingEntryMembers BindingEntry
 
 // maxPreference bounds a binding preference: the exactly representable
 // interoperable integer range of §5.3.
 const maxPreference = 9007199254740991
 
 func (be *BindingEntry) UnmarshalJSON(b []byte) error {
-	raw, err := decodeObject(b, bindingEntryShape)
-	if err != nil {
-		return err
-	}
-	var w bindingEntryWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	var preference *int64
-	if w.Preference != nil {
-		value, err := exactPreference(*w.Preference)
-		if err != nil {
-			return err
-		}
-		preference = &value
-	}
-	*be = BindingEntry{
-		Operation:       w.Operation,
-		Source:          w.Source,
-		Selector:        w.Selector,
-		Preference:      preference,
-		Description:     w.Description,
-		Deprecated:      w.Deprecated,
-		InputTransform:  w.InputTransform,
-		OutputTransform: w.OutputTransform,
-	}
-	be.Extensions, be.Unknown = splitLossless(raw, bindingEntryShape.known)
-	return nil
-}
-
-// exactPreference converts a preference number exactly: an integer value in
-// the §5.3 range, in any JSON spelling (1, 1.0, 1e3). Any other number is one
-// the model cannot carry exactly, so decoding fails.
-func exactPreference(n json.Number) (int64, error) {
-	value, ok := new(big.Rat).SetString(n.String())
-	if !ok || !value.IsInt() || value.Num().CmpAbs(big.NewInt(maxPreference)) > 0 {
-		return 0, fmt.Errorf("binding: preference %s is not an integer from -%d through %d", n, maxPreference, maxPreference)
-	}
-	return value.Num().Int64(), nil
+	return decodeObject(b, "binding", (*bindingEntryMembers)(be))
 }
 
 func (be BindingEntry) MarshalJSON() ([]byte, error) {
-	w := bindingEntryWire{
-		Operation:       be.Operation,
-		Source:          be.Source,
-		Selector:        be.Selector,
-		Description:     be.Description,
-		Deprecated:      be.Deprecated,
-		InputTransform:  be.InputTransform,
-		OutputTransform: be.OutputTransform,
+	for name, transform := range map[string]TransformOrRef{"inputTransform": be.InputTransform, "outputTransform": be.OutputTransform} {
+		if reference, ok := transform.(*TransformReference); ok && reference == nil {
+			return nil, fmt.Errorf("binding: %s holds a nil *TransformReference, which is neither transform form", name)
+		}
 	}
-	if be.Preference != nil {
-		preference := json.Number(strconv.FormatInt(*be.Preference, 10))
-		w.Preference = &preference
-	}
-	return marshalLossless(be.Unknown, be.Extensions, w)
+	return encodeObject(bindingEntryMembers(be), be.LosslessFields)
 }
 
 // DependencyEntry names an operation contract consumed at a local
@@ -549,33 +311,21 @@ type DependencyEntry struct {
 	LosslessFields
 }
 
-type dependencyEntryWire struct {
-	Operation    string   `json:"operation"`
-	BindingSpecs []string `json:"bindingSpecs,omitzero"`
-}
+type dependencyEntryMembers DependencyEntry
 
 func (d *DependencyEntry) UnmarshalJSON(b []byte) error {
-	raw, err := decodeObject(b, dependencyEntryShape)
-	if err != nil {
-		return err
-	}
-	var w dependencyEntryWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	*d = DependencyEntry{Operation: w.Operation, BindingSpecs: w.BindingSpecs}
-	d.Extensions, d.Unknown = splitLossless(raw, dependencyEntryShape.known)
-	return nil
+	return decodeObject(b, "dependency", (*dependencyEntryMembers)(d))
 }
 
 func (d DependencyEntry) MarshalJSON() ([]byte, error) {
-	return marshalLossless(d.Unknown, d.Extensions, dependencyEntryWire{Operation: d.Operation, BindingSpecs: d.BindingSpecs})
+	return encodeObject(dependencyEntryMembers(d), d.LosslessFields)
 }
 
 // Interface is the OpenBindings document shape (§5). OpenBindings is the
-// required specification version; every other member is optional and absent
-// exactly when nil, Operations included, so a document that omits it
-// re-encodes without it.
+// declared specification version. Every other member is absent exactly when
+// its Go value is nil. That includes Operations, which §5 requires: the model
+// carries a document that omits it, so Validate can report the omission
+// (OBI-D-02) and re-encoding leaves it omitted.
 type Interface struct {
 	OpenBindings string  `json:"openbindings"`
 	Name         *string `json:"name,omitempty"`
@@ -597,58 +347,12 @@ type Interface struct {
 	LosslessFields
 }
 
-type interfaceWire struct {
-	OpenBindings string  `json:"openbindings"`
-	Name         *string `json:"name,omitempty"`
-	Version      *string `json:"version,omitempty"`
-	Description  *string `json:"description,omitempty"`
-
-	Schemas      map[string]JSONSchema      `json:"schemas,omitzero"`
-	Operations   map[string]Operation       `json:"operations,omitzero"`
-	Dependencies map[string]DependencyEntry `json:"dependencies,omitzero"`
-
-	Sources  map[string]Source       `json:"sources,omitzero"`
-	Bindings map[string]BindingEntry `json:"bindings,omitzero"`
-
-	Transforms map[string]Transform `json:"transforms,omitzero"`
-}
+type interfaceMembers Interface
 
 func (i *Interface) UnmarshalJSON(b []byte) error {
-	raw, err := decodeObject(b, interfaceShape)
-	if err != nil {
-		return err
-	}
-	var w interfaceWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	*i = Interface{
-		OpenBindings: w.OpenBindings,
-		Name:         w.Name,
-		Version:      w.Version,
-		Description:  w.Description,
-		Schemas:      w.Schemas,
-		Operations:   w.Operations,
-		Dependencies: w.Dependencies,
-		Sources:      w.Sources,
-		Bindings:     w.Bindings,
-		Transforms:   w.Transforms,
-	}
-	i.Extensions, i.Unknown = splitLossless(raw, interfaceShape.known)
-	return nil
+	return decodeObject(b, "document", (*interfaceMembers)(i))
 }
 
 func (i Interface) MarshalJSON() ([]byte, error) {
-	return marshalLossless(i.Unknown, i.Extensions, interfaceWire{
-		OpenBindings: i.OpenBindings,
-		Name:         i.Name,
-		Version:      i.Version,
-		Description:  i.Description,
-		Schemas:      i.Schemas,
-		Operations:   i.Operations,
-		Dependencies: i.Dependencies,
-		Sources:      i.Sources,
-		Bindings:     i.Bindings,
-		Transforms:   i.Transforms,
-	})
+	return encodeObject(interfaceMembers(i), i.LosslessFields)
 }

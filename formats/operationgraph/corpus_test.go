@@ -431,7 +431,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 
 	call := opInvoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:    invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Selector:  "#/graphs/g",
+		Selector:  openbindings.Present("#/graphs/g"),
 		Interface: iface,
 	})
 

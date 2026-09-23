@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 
 	"github.com/coder/websocket"
@@ -22,7 +23,7 @@ func sendOnce(t *testing.T, binv *Invoker, source invoke.InvocationSource, bindC
 	t.Helper()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   source,
-		Selector: "#/operations/publish",
+		Selector: openbindings.Present("#/operations/publish"),
 		Context:  wsTextContext(bindCtx),
 	})
 	if err := call.Write(bg(), msg); err != nil {
@@ -120,7 +121,7 @@ func TestWSPool_ConcurrentSendsShareOneConnection(t *testing.T) {
 			defer wg.Done()
 			call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 				Source:   source,
-				Selector: "#/operations/publish",
+				Selector: openbindings.Present("#/operations/publish"),
 				Context:  wsTextContext(map[string]any{"bearerToken": "tok"}),
 			})
 			if err := call.Write(bg(), map[string]any{"seq": seq}); err != nil {
@@ -176,7 +177,7 @@ func TestWSPool_ClientStreamingFrames(t *testing.T) {
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
-		Selector: "#/operations/publish",
+		Selector: openbindings.Present("#/operations/publish"),
 		Context:  wsTextContext(map[string]any{"bearerToken": "tok"}),
 	})
 	for i := 1; i <= 3; i++ {
@@ -263,7 +264,7 @@ func TestWSPool_SendAndReceiveShareConnection(t *testing.T) {
 
 	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   source,
-		Selector: "#/operations/subscribe",
+		Selector: openbindings.Present("#/operations/subscribe"),
 	})
 	out := sub.Outputs()
 

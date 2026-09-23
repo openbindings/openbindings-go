@@ -13,6 +13,7 @@ import (
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	kafkadriver "github.com/openbindings/asyncapi-client/go/kafka"
 	mqttdriver "github.com/openbindings/asyncapi-client/go/mqtt"
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -53,7 +54,7 @@ func TestOpenBindingsAdapterDelegatesArbitraryProtocolDriver(t *testing.T) {
 }`)
 	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-		Selector: "#/operations/publish",
+		Selector: openbindings.Present("#/operations/publish"),
 	})
 	if err := call.Write(context.Background(), map[string]any{"id": float64(7)}); err != nil {
 		t.Fatal(err)
@@ -97,7 +98,7 @@ func TestLiveOpenBindingsAdapterUsesMQTTDriver(t *testing.T) {
 	args := func(selector string) *invoke.BindingInvocationArgs {
 		return &invoke.BindingInvocationArgs{
 			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-			Selector: selector,
+			Selector: openbindings.Present(selector),
 			Context:  map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
 		}
 	}
@@ -145,7 +146,7 @@ func TestLiveOpenBindingsAdapterPreservesMQTTOutputBeforeConnectionLoss(t *testi
 	defer func() { _ = invoker.Close() }()
 	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-		Selector: "#/operations/observe",
+		Selector: openbindings.Present("#/operations/observe"),
 		Context:  map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
 	})
 	outputs := call.Outputs()
@@ -188,7 +189,7 @@ func TestLiveOpenBindingsAdapterUsesKafkaDriver(t *testing.T) {
 	args := func(selector string) *invoke.BindingInvocationArgs {
 		return &invoke.BindingInvocationArgs{
 			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-			Selector: selector,
+			Selector: openbindings.Present(selector),
 		}
 	}
 
@@ -235,7 +236,7 @@ func TestLiveOpenBindingsAdapterUsesKafkaSCRAMWithoutProtocolFields(t *testing.T
 	args := func(selector string) *invoke.BindingInvocationArgs {
 		return &invoke.BindingInvocationArgs{
 			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-			Selector: selector,
+			Selector: openbindings.Present(selector),
 			Context:  map[string]any{"basic": map[string]any{"username": "orders", "password": "secret-password"}},
 		}
 	}

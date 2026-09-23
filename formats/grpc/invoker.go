@@ -158,7 +158,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // context requirement is decided before that, so preflight is complete
 // without them.
 func (e *Invoker) PreflightBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	if _, _, err := parseSelector(args.Selector); err != nil {
+	if _, _, err := parseSelector(openbindings.Value(args.Selector)); err != nil {
 		return nil, nil
 	}
 	target, addr, err := resolveTarget(args)
@@ -230,7 +230,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
-	svcName, methodName, err := parseSelector(args.Selector)
+	svcName, methodName, err := parseSelector(openbindings.Value(args.Selector))
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{
 			Code: invoke.ErrCodeInvalidSelector,

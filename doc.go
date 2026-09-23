@@ -1,7 +1,8 @@
 // Package openbindings is the core OpenBindings SDK for Go: the OBI
-// document model with lossless JSON handling, document validation,
-// operation resolution, schema validation at invocation boundaries, and
-// the Core-defined constants (versions and media type).
+// document model, which carries a document exactly, the document rules and
+// their conformance report, operation resolution, validation of values
+// against operation contracts (OBI-T-16), and the Core-defined constants
+// (versions and media type).
 //
 // The package is dependency-light and format-agnostic, and covers exactly
 // what the OpenBindings specification defines. The layers above it are
@@ -22,11 +23,15 @@
 //	    log.Fatal(err)
 //	}
 //
-// (json.Unmarshal into Interface also works and is lossless, but only
-// ParseDocument enforces OBI-D-01 on wire bytes.)
+// (json.Unmarshal into Interface also decodes a document exactly; ParseDocument
+// additionally refuses an unsupported version (OBI-T-04) and applies the
+// document schema (OBI-D-02).)
 //
-// Validate returns a *ValidationError listing every violation it establishes,
-// which makes it a gate. A nil error is not conformance: a rule this SDK
+// The document rules judge the JSON a document is: ValidateDocument judges
+// the bytes, and Validate the encoding of a host object, so both reach the
+// same evidence for the same document, including one the typed model cannot
+// carry. Validate returns a *ValidationError listing every violation it
+// establishes, which makes it a gate. A nil error is not conformance: a rule this SDK
 // cannot decide is inconclusive, not violated. The report beside the error
 // carries the conclusion:
 //
@@ -49,20 +54,22 @@
 //     collections distinguish nil (absent) from empty (present).
 //   - JSON null is carried where it is a value: example values and source
 //     content are json.RawMessage, where the bytes `null` are a present null.
-//   - Members the SDK does not model are kept: LosslessFields.Extensions for
-//     keys beginning with x-, LosslessFields.Unknown for other keys, at every
-//     OBI-defined object, a transform's $ref object included.
+//   - Members are matched by exact name. Members the SDK does not model,
+//     case variants of modeled ones included, are kept:
+//     LosslessFields.Extensions for keys beginning with x-,
+//     LosslessFields.Unknown for other keys, at every OBI-defined object, a
+//     transform's $ref object included.
+//   - A binding transform is an [InlineTransform] or a *[TransformReference],
+//     never both.
 //
 // A document the model cannot carry exactly fails decoding instead of being
-// altered: a JSON null at any other known position, a missing required
-// string member, or a binding preference that is not an integer in range.
-// ValidateDocument still judges such a document from its bytes.
+// altered: input that is not valid UTF-8, a duplicate member name in any
+// object, a JSON null at a position where null is not a value, a missing
+// required string member, or a binding preference that is not an integer
+// number in range. ValidateDocument still judges such a document in full.
 //
-// # Collision Semantics
-//
-// If a key exists both as a typed field and in Unknown/Extensions,
-// the typed field wins during marshaling. This matches the reality that
-// future spec versions may claim keys that were previously "unknown".
+// A typed field alone states its member: an Unknown or Extensions entry
+// named like a typed member is never encoded, so a nil field is absent.
 //
 // # Concurrency
 //
@@ -84,6 +91,8 @@
 //   - acquire: application-level ordering of direct retrieval, discovery,
 //     and optional synthesis
 //   - compare: interface and operation compatibility checking
+//   - schemavalidate: validation against standalone JSON Schemas, such as a
+//     protocol's own, outside any OBI
 //   - canonicaljson: RFC 8785 (JCS) deterministic JSON serialization
 //   - schemaprofile: the OpenBindings Schema Comparison Profile (OB-2020-12)
 package openbindings

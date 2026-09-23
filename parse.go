@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	"io"
-	"strings"
 	"unicode/utf8"
+
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -37,30 +37,9 @@ func ParseDocument(data []byte) (*Interface, error) {
 	}
 	var iface Interface
 	if err := json.Unmarshal(data, &iface); err != nil {
-		return nil, fmt.Errorf("parse document: %w", err)
+		return nil, fmt.Errorf("parse document: the document model cannot carry it: %w", err)
 	}
 	return &iface, nil
-}
-
-// FormatValidationErrors returns a human-readable multi-line string from a ValidationError.
-func FormatValidationErrors(err error) string {
-	var ve *ValidationError
-	if !asValidationError(err, &ve) {
-		return err.Error()
-	}
-	return strings.Join(ve.Problems, "\n")
-}
-
-func asValidationError(err error, target **ValidationError) bool {
-	if err == nil {
-		return false
-	}
-	ve, ok := err.(*ValidationError)
-	if ok {
-		*target = ve
-		return true
-	}
-	return false
 }
 
 // decodeDocumentBytes applies OBI-D-01 to the exact input bytes: valid UTF-8,
@@ -152,15 +131,4 @@ func scanJSONValue(dec *json.Decoder) error {
 		return fmt.Errorf("unexpected delimiter %q", delim)
 	}
 	return nil
-}
-
-// IsOBInterface is a cheap shape probe: it checks for an "openbindings" string
-// and an "operations" object. It does not validate the document.
-func IsOBInterface(v map[string]any) bool {
-	if v == nil {
-		return false
-	}
-	_, hasOB := v["openbindings"].(string)
-	_, hasOps := v["operations"].(map[string]any)
-	return hasOB && hasOps
 }

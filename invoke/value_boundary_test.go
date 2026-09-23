@@ -288,7 +288,7 @@ func TestTransformPanicRetiresOwnedAttempt(t *testing.T) {
 				if binding.Operation != "getUser" {
 					continue
 				}
-				transform := &openbindings.TransformOrRef{Inline: "$"}
+				var transform openbindings.TransformOrRef = openbindings.InlineTransform("$")
 				if phase == "input" {
 					binding.InputTransform = transform
 				} else {

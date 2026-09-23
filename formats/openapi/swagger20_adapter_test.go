@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	openapiprovider "github.com/openbindings/openapi-client/go/provider"
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -62,7 +63,7 @@ func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 					BindingSpec: BindingSpecOpenAPI20,
 					Content:     jsonvalue.TextContent(testCase.artifact),
 				},
-				Selector: testCase.selector,
+				Selector: openbindings.Present(testCase.selector),
 			})
 			_, invocationErr := driveSingle(t, call, nil)
 			if invocationErr == nil || invocationErr.Code != testCase.wantCode {
@@ -101,7 +102,7 @@ func TestSwagger20AdapterMapsQualifiedKeysAndConfiguration(t *testing.T) {
   ],"responses":{"204":{"description":"ok"}}}}}
 }`),
 		},
-		Selector: "#/paths/~1pets~1{id}/get",
+		Selector: openbindings.Present("#/paths/~1pets~1{id}/get"),
 		Context: map[string]any{"configuration": map[string]any{
 			"server": map[string]any{"baseUrl": "https://peer.example/root"},
 		}},
@@ -152,7 +153,7 @@ func TestSwagger20AdapterRefusesEnvelopeAndBodyBeforeDispatch(t *testing.T) {
 			roundTripper := &scenarioRoundTripper{peer: map[string]any{"status": 204}}
 			call := NewInvokerWithClient(&http.Client{Transport: roundTripper}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI20, Content: jsonvalue.TextContent(testCase.artifact)},
-				Selector: "#/paths/~1pets/post",
+				Selector: openbindings.Present("#/paths/~1pets/post"),
 				Context:  map[string]any{"configuration": map[string]any{"server": "https://peer.example"}},
 			})
 			_, invocationErr := driveOutputs(context.Background(), call, testCase.input)

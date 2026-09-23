@@ -318,12 +318,8 @@ func sortCoverage(values []CoverageEntry) {
 }
 
 // scenarioSelector projects a binding's optional selector onto the synthesis
-// scenario format, whose bindingSelector records an omitted selector as "".
-// That format cannot tell the absent-selector case the core model keeps
-// distinct (§5.3) from a present empty selector.
+// scenario format, whose bindingSelector records an omitted selector as "", as
+// the interface-synthesizer contract's coverage entries do.
 func scenarioSelector(selector *string) string {
-	if selector == nil {
-		return ""
-	}
-	return *selector
+	return synthesize.ContractSelector(selector)
 }

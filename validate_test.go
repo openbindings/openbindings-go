@@ -536,11 +536,9 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
-				Operation: "op",
-				Source:    "api",
-				InputTransform: &TransformOrRef{
-					Reference: &TransformReference{Ref: "#/transforms/nonexistent"},
-				},
+				Operation:      "op",
+				Source:         "api",
+				InputTransform: &TransformReference{Ref: "#/transforms/nonexistent"},
 			},
 		},
 	}
@@ -615,7 +613,7 @@ func TestInterfaceValidate_EmptyInlineTransformRejected(t *testing.T) {
 			"op.api": {
 				Operation:       "op",
 				Source:          "api",
-				OutputTransform: &TransformOrRef{Inline: ""},
+				OutputTransform: InlineTransform(""),
 			},
 		},
 	}
@@ -644,7 +642,7 @@ func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 			"pay.stripe": {
 				Operation:      "pay",
 				Source:         "stripe",
-				InputTransform: &TransformOrRef{Reference: &TransformReference{Ref: "#/transforms/toApi"}},
+				InputTransform: &TransformReference{Ref: "#/transforms/toApi"},
 			},
 		},
 	}
@@ -1187,7 +1185,7 @@ func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
 			"op.api": {
 				Operation:      "op",
 				Source:         "api",
-				InputTransform: &TransformOrRef{Inline: `{ "task_title": title }`},
+				InputTransform: InlineTransform(`{ "task_title": title }`),
 			},
 		},
 	}
@@ -1208,8 +1206,8 @@ func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
 			"op.api": {
 				Operation:       "op",
 				Source:          "api",
-				InputTransform:  &TransformOrRef{Inline: "items["},
-				OutputTransform: &TransformOrRef{Inline: `{ "id": }`},
+				InputTransform:  InlineTransform("items["),
+				OutputTransform: InlineTransform(`{ "id": }`),
 			},
 		},
 	}

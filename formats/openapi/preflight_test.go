@@ -52,7 +52,7 @@ func TestPreflightRequiredFailuresSurface(t *testing.T) {
 			if tc.content != "" {
 				source.Content = jsonvalue.TextContent(tc.content)
 			}
-			details, err := NewInvoker().PreflightBinding(t.Context(), &invoke.BindingInvocationArgs{Source: source, Selector: tc.selector})
+			details, err := NewInvoker().PreflightBinding(t.Context(), &invoke.BindingInvocationArgs{Source: source, Selector: openbindings.Present(tc.selector)})
 			var invocationErr *invoke.InvocationError
 			if details != nil || !errors.As(err, &invocationErr) || invocationErr.Code != tc.code {
 				t.Fatalf("prepare = (%v, %v), want %s", details, err, tc.code)
@@ -175,7 +175,7 @@ func TestPreflightConcurrentContextIsolation(t *testing.T) {
 			defer wg.Done()
 			args := &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(string(artifact))},
-				Selector: "#/paths/~1items/get",
+				Selector: openbindings.Present("#/paths/~1items/get"),
 			}
 			if supplied {
 				args.Context = map[string]any{"bearerToken": secret}

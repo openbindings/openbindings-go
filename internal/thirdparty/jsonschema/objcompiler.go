@@ -434,6 +434,9 @@ func (c *objCompiler) hasVocab(name string) bool {
 }
 
 func (c *objCompiler) assertFormat(draftVersion int) bool {
+	if c.c.neverFormat {
+		return false
+	}
 	if c.c.assertFormat || draftVersion < 2019 {
 		return true
 	}

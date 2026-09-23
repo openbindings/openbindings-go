@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -116,7 +117,7 @@ func TestSharedJSONBodyTriggerScopingSynthesis(t *testing.T) {
 				flatInput = map[string]any{"payload": map[string]any{"value": "whole"}}
 				wantBody = map[string]any{"value": "whole"}
 			}
-			transformed, transformErr := (openAPIJSONataEvaluator{}).Evaluate(context.Background(), binding.InputTransform.Inline, flatInput)
+			transformed, transformErr := (openAPIJSONataEvaluator{}).Evaluate(context.Background(), string(binding.InputTransform.(openbindings.InlineTransform)), flatInput)
 			if transformErr != nil {
 				t.Fatalf("evaluate input transform: %v", transformErr)
 			}

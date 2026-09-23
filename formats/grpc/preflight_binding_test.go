@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -48,7 +49,7 @@ func preflightBindingArgs(target string, content bool, selector string, bindCtx 
 	if content {
 		source.Content = jsonvalue.TextContent(preflightBindingProto)
 	}
-	return &invoke.BindingInvocationArgs{Source: source, Selector: selector, Context: bindCtx}
+	return &invoke.BindingInvocationArgs{Source: source, Selector: openbindings.Present(selector), Context: bindCtx}
 }
 
 func preflightBindingCtx(t *testing.T) context.Context {

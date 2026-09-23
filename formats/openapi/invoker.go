@@ -328,15 +328,9 @@ func bridgeHooks(args *invoke.BindingInvocationArgs, bindingSpec string) *openap
 }
 
 func coreHookSite(args *invoke.BindingInvocationArgs, bindingSpec, target string) invoke.InvokeSite {
-	var site invoke.InvokeSite
-	if args.Site != nil {
-		site = *args.Site
-	} else {
+	site := args.HookSite(target)
+	if args.Site == nil {
 		site.BindingSpec = bindingSpec
-		site.Selector = args.Selector
-	}
-	if site.Target == "" {
-		site.Target = target
 	}
 	return site
 }

@@ -27,7 +27,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		BindingSpec: bindingSpec,
 	}
 	if sourceLocation != "" {
-		sourceEntry.Location = openbindings.NonZero(sourceLocation)
+		sourceEntry.Location = openbindings.Present(sourceLocation)
 	}
 
 	iface := openbindings.Interface{
@@ -43,7 +43,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Name = openbindings.NonZero(disc.ServerInfo.Name)
 		iface.Version = openbindings.NonZero(disc.ServerInfo.Version)
 		if disc.ServerInfo.Title != "" {
-			iface.Description = openbindings.NonZero(disc.ServerInfo.Title)
+			iface.Description = openbindings.Present(disc.ServerInfo.Title)
 		}
 	}
 
@@ -85,7 +85,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  openbindings.NonZero(refPrefixTools + tool.Name),
+			Selector:  openbindings.Present(refPrefixTools + tool.Name),
 		}
 	}
 
@@ -113,7 +113,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  openbindings.NonZero(refPrefixResources + resource.URI),
+			Selector:  openbindings.Present(refPrefixResources + resource.URI),
 		}
 	}
 
@@ -141,7 +141,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  openbindings.NonZero(refPrefixResourceTemplates + tmpl.URITemplate),
+			Selector:  openbindings.Present(refPrefixResourceTemplates + tmpl.URITemplate),
 		}
 	}
 
@@ -170,7 +170,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  openbindings.NonZero(refPrefixPrompts + prompt.Name),
+			Selector:  openbindings.Present(refPrefixPrompts + prompt.Name),
 		}
 	}
 

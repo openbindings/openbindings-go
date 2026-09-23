@@ -1,9 +1,11 @@
-package openbindings
+package schemavalidate
 
 import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
 
 func TestExactLargeCountQualification(t *testing.T) {
@@ -18,7 +20,7 @@ func TestExactLargeCountQualification(t *testing.T) {
 	} {
 		t.Run(test.keyword, func(t *testing.T) {
 			schema := map[string]any{test.keyword: json.Number("18446744073709551616")}
-			err := ValidateAgainstSchema(test.value, schema)
+			err := Validate(test.value, schema)
 			if (err == nil) != test.valid {
 				t.Fatalf("valid=%v; want %v; error=%v", err == nil, test.valid, err)
 			}
@@ -71,7 +73,7 @@ func TestExactLargeCountBranchesAndDialects(t *testing.T) {
 									root["definitions"] = map[string]any{"target": schema}
 									root["$ref"] = "#/definitions/target"
 								}
-								compiler := exactCountCompiler()
+								compiler := schemacompiler.New()
 								if err := compiler.AddResource("urn:test:counts", root); err != nil {
 									t.Fatal(err)
 								}
@@ -106,7 +108,7 @@ func TestExactCountFailedBranchDoesNotLeakCoverage(t *testing.T) {
 		data  []any
 		valid bool
 	}{{[]any{1}, true}, {[]any{1, 2}, false}} {
-		if err := ValidateAgainstSchema(test.data, schema); (err == nil) != test.valid {
+		if err := Validate(test.data, schema); (err == nil) != test.valid {
 			t.Fatalf("%v: %v", test.data, err)
 		}
 	}

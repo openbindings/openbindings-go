@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	jsonataevaluator "github.com/openbindings/openbindings-go/invoke/jsonata"
 	"github.com/openbindings/openbindings-go/jsonvalue"
@@ -351,7 +352,7 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	nativeRuntime := newInvokerRuntime(InvokerOptions{HTTPClient: server.Client()})
 	nativeClient, err := nativeRuntime.loadNativeClient(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: jsonvalue.TextContent(spec)},
-		Selector: "#/paths/~1upload/post",
+		Selector: openbindings.Present("#/paths/~1upload/post"),
 	})
 	if err != nil {
 		t.Fatalf("load native analysis: %v", err)

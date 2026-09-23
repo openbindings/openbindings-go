@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 
@@ -81,7 +82,7 @@ func shortCtx(t *testing.T) context.Context {
 func invocationArgs(url, selector string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
 	return &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: url},
-		Selector: selector,
+		Selector: openbindings.Present(selector),
 		Context:  bindCtx,
 	}
 }

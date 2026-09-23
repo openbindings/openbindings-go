@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
@@ -77,7 +78,7 @@ func TestBindingInvokerRequiresAnExactFamilyToken(t *testing.T) {
 
 	args := &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{Content: jsonvalue.TextContent("not an OpenAPI artifact")},
-		Selector: "#/paths/~1x/get",
+		Selector: openbindings.Present("#/paths/~1x/get"),
 	}
 	_, invocationErr := driveSingle(t, NewInvoker().InvokeBinding(context.Background(), args), nil)
 	assertExactTokenError(t, invocationErr)
@@ -106,7 +107,7 @@ func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {
 			)
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)},
-				Selector: "#/paths/~1x/get",
+				Selector: openbindings.Present("#/paths/~1x/get"),
 			})
 			_, invocationErr := driveSingle(t, call, nil)
 			if invocationErr == nil || invocationErr.Code != invoke.ErrCodeSourceLoadFailed {
@@ -122,7 +123,7 @@ func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {
 
 			preflightDetails, preflightErr := NewInvoker().PreflightBinding(context.Background(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)},
-				Selector: "#/paths/~1x/get",
+				Selector: openbindings.Present("#/paths/~1x/get"),
 			})
 			var preflightInvocationErr *invoke.InvocationError
 			if preflightDetails != nil || !errors.As(preflightErr, &preflightInvocationErr) || preflightInvocationErr.Code != invoke.ErrCodeSourceLoadFailed {
@@ -170,7 +171,7 @@ func TestDuplicateEffectiveParameterIdentityRefusesTheOperation(t *testing.T) {
 			)
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)},
-				Selector: "#/paths/~1x/get",
+				Selector: openbindings.Present("#/paths/~1x/get"),
 			})
 			_, invocationErr := driveSingle(t, call, nil)
 			if invocationErr == nil || invocationErr.Code != invoke.ErrCodeRefused {

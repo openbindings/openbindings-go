@@ -33,7 +33,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 		BindingSpec: src.BindingSpec,
 	}
 	if src.Location != "" {
-		sourceEntry.Location = openbindings.NonZero(src.Location)
+		sourceEntry.Location = openbindings.Present(src.Location)
 	}
 
 	iface := openbindings.Interface{
@@ -49,13 +49,13 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 	}
 
 	if in.Name != "" {
-		iface.Name = openbindings.NonZero(in.Name)
+		iface.Name = openbindings.Present(in.Name)
 	}
 	if in.Version != "" {
-		iface.Version = openbindings.NonZero(in.Version)
+		iface.Version = openbindings.Present(in.Version)
 	}
 	if in.Description != "" {
-		iface.Description = openbindings.NonZero(in.Description)
+		iface.Description = openbindings.Present(in.Description)
 	}
 
 	usedKeys := map[string]bool{}
@@ -98,7 +98,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  openbindings.NonZero(selector),
+			Selector:  openbindings.Present(selector),
 		}
 	}
 

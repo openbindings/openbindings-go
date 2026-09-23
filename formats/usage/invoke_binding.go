@@ -90,20 +90,20 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 
 	// The selector is the format's own grammar: a space-separated command path
-	// into the artifact ("context set"; absent = the root command). A
-	// whitespace-bearing selector is NOT the root spelling: it flows into
-	// findCommand, whose USAGE-D-03 grammar refuses empty segments.
+	// into the artifact ("context set"). An absent selector addresses the root
+	// command; a present one, the empty string included, flows into
+	// findCommand, whose USAGE-D-03 grammar refuses "" and empty segments.
 	var cmd *Command
 	var inherited []Flag
 	var cmdPath []string
-	if args.Selector == "" {
+	if args.Selector == nil {
 		rc := rootCommand(spec)
 		if rc == nil {
 			rc = &Command{Flags: spec.Flags(), Args: spec.Args()}
 		}
 		cmd = rc
 	} else {
-		found, ferr := findCommand(spec, args.Selector)
+		found, ferr := findCommand(spec, *args.Selector)
 		if ferr != nil {
 			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound})
 			return
@@ -130,7 +130,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 
 	// Complete the site: Target is GUARANTEED on this lane (the kdl's
 	// bin/name — consumers' site guards depend on it).
-	site := siteFor(args, binName)
+	site := args.HookSite(binName)
 
 	// Route every input field through the seam (specification +
 	// configuration: routing is a wire question the usage artifact cannot
@@ -223,23 +223,6 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 
 	emitOutput(inv, output)
-}
-
-// siteFor completes the core-stamped site with the format-known Target
-// (the artifact's binary name). A nil args.Site (direct format-package
-// call) gets a minimal site whose Builtin* dispatch stays loud.
-func siteFor(args *invoke.BindingInvocationArgs, binName string) invoke.InvokeSite {
-	var site invoke.InvokeSite
-	if args.Site != nil {
-		site = *args.Site
-	} else {
-		site.BindingSpec = args.Source.BindingSpec
-		site.Selector = args.Selector
-	}
-	if site.Target == "" {
-		site.Target = binName
-	}
-	return site
 }
 
 // builtinClassify is the exec builtin: success iff exit 0 (the
@@ -802,13 +785,16 @@ func (e *Invoker) executeProcess(ctx context.Context, binary string, args []stri
 	}, nil
 }
 
-func buildDirectArgsFromSelector(selector string, input any) ([]string, error) {
+func buildDirectArgsFromSelector(selector *string, input any) ([]string, error) {
 	// USAGE-D-03: a selector is a space-separated command path — single spaces,
-	// no quoting mechanism.
-	args := strings.Split(selector, " ")
-	for _, tok := range args {
-		if tok == "" {
-			return nil, fmt.Errorf("selector %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", selector)
+	// no quoting mechanism. An absent selector addresses the root command.
+	var args []string
+	if selector != nil {
+		args = strings.Split(*selector, " ")
+		for _, tok := range args {
+			if tok == "" {
+				return nil, fmt.Errorf("selector %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", *selector)
+			}
 		}
 	}
 

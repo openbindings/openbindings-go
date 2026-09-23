@@ -48,9 +48,10 @@ type Finding struct {
 	Rule string
 	// Status is EvidenceViolated or EvidenceInconclusive.
 	Status RuleEvidenceStatus
-	// Path locates the finding in the document, such as
-	// `bindings["createTask"].operation`. It is empty when the finding
-	// concerns the document as a whole.
+	// Path locates the finding in the document as an RFC 6901 JSON Pointer,
+	// such as "/bindings/createTask/operation". A finding about a missing
+	// member is located at the object that lacks it. The empty pointer is
+	// the whole document.
 	Path string
 	// Message states what was established, or why it could not be decided.
 	Message string
@@ -61,7 +62,9 @@ type Finding struct {
 // affects a ValidationReport's evidence or conclusion.
 type Diagnostic struct {
 	// Rule is the rule that asks for the diagnostic, such as "OBI-T-02".
-	Rule    string
+	Rule string
+	// Path locates the diagnostic as an RFC 6901 JSON Pointer, as
+	// Finding.Path does.
 	Path    string
 	Message string
 }
@@ -185,15 +188,15 @@ func (c *ruleChecks) diagnose(rule, path, message string) {
 	c.diagnostics = append(c.diagnostics, Diagnostic{Rule: rule, Path: path, Message: message})
 }
 
-// inconclusiveRemaining leaves every document rule except the named one
-// inconclusive for one reason, when validation cannot proceed past it.
-func (c *ruleChecks) inconclusiveRemaining(except string, reason string) {
-	decided := map[string]bool{except: true}
-	for _, finding := range c.findings {
-		decided[finding.Rule] = true
+// inconclusiveExcept leaves every document rule but the decided ones
+// inconclusive for one reason, when validation cannot proceed past them.
+func (c *ruleChecks) inconclusiveExcept(reason string, decided ...string) {
+	skip := map[string]bool{}
+	for _, rule := range decided {
+		skip[rule] = true
 	}
 	for _, rule := range documentRules {
-		if !decided[rule] {
+		if !skip[rule] {
 			c.inconclusive(rule, "", reason)
 		}
 	}

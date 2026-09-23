@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 
 	"github.com/coder/websocket"
@@ -33,7 +34,7 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec(srv.URL))},
-		Selector:             "#/operations/sendOpenMessage",
+		Selector:             openbindings.Present("#/operations/sendOpenMessage"),
 		MaxDeliveryUnitBytes: 1024,
 	})
 	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {
@@ -70,7 +71,7 @@ func TestDeliveryUnitBound_WSLargeMessagePassesAtDefault(t *testing.T) {
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   wsSource(srv, nil),
-		Selector: "#/operations/subscribe",
+		Selector: openbindings.Present("#/operations/subscribe"),
 	})
 	outs, err := drainOutputs(t, call)
 	if err != nil {
@@ -103,7 +104,7 @@ func TestDeliveryUnitBound_WSTinyBoundRefusesLoudly(t *testing.T) {
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:               wsSource(srv, nil),
-		Selector:             "#/operations/subscribe",
+		Selector:             openbindings.Present("#/operations/subscribe"),
 		MaxDeliveryUnitBytes: 1024,
 	})
 	outs, err := drainOutputs(t, call)

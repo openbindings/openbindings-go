@@ -176,7 +176,7 @@ func invokeUsageWithTrailer(t *testing.T, invoker driver, args *invoke.BindingIn
 func TestIntegration_JSONOutput(t *testing.T) {
 	out, ierr := invokeUsage(t, jsonHooked(), &invoke.BindingInvocationArgs{
 		Source:   testSource(),
-		Selector: "json",
+		Selector: openbindings.Present("json"),
 	}, map[string]any{"pairs": []any{"name=alice", "role=admin"}})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
@@ -198,7 +198,7 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
 		Source:   testSource(),
-		Selector: "fail",
+		Selector: openbindings.Present("fail"),
 	}, map[string]any{"message": []any{"something went wrong"}})
 
 	// A non-ok exit is a protocol-independent unsuccessful completion.
@@ -220,7 +220,7 @@ func TestIntegration_MixedOutput(t *testing.T) {
 	invoker := NewInvoker()
 	out, _, ierr := invokeUsageWithTrailer(t, invoker, &invoke.BindingInvocationArgs{
 		Source:   testSource(),
-		Selector: "mixed",
+		Selector: openbindings.Present("mixed"),
 	}, nil)
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s", ierr.Error())
@@ -234,7 +234,7 @@ func TestIntegration_EchoCommand(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
 		Source:   testSource(),
-		Selector: "echo",
+		Selector: openbindings.Present("echo"),
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Error())
@@ -386,21 +386,30 @@ cmd "configuration" {
 }
 
 func TestIntegration_RootCommand(t *testing.T) {
-	// A unit with an empty command targets the root invocation.
+	// An absent selector addresses the root command (USAGE-D-03).
 	rootKDL := `bin "` + testBinary + `"
 flag "-v --verbose" help="Verbose output"
 arg "<words>..." help="Words to echo"
 `
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(rootKDL)},
-		Selector: "",
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(rootKDL)},
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Error())
 	}
 	if out != "hello world" {
 		t.Errorf("output = %#v, want %q", out, "hello world")
+	}
+
+	// A present empty selector is not the root spelling: USAGE-D-03 makes it
+	// non-conformant, so it identifies no command.
+	out, ierr = invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(rootKDL)},
+		Selector: openbindings.Present(""),
+	}, map[string]any{"words": []any{"hello"}})
+	if out != nil || ierr == nil || ierr.Code != invoke.ErrCodeSelectorNotFound {
+		t.Fatalf("an empty selector must not run the root command: output %v, error %v", out, ierr)
 	}
 }
 
@@ -409,7 +418,7 @@ func TestIntegration_InvalidSelector(t *testing.T) {
 	for _, selector := range []string{"nonexistent", "no such command", "json bogus"} {
 		out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
 			Source:   testSource(),
-			Selector: selector,
+			Selector: openbindings.Present(selector),
 		}, nil)
 		if out != nil {
 			t.Fatalf("selector %q: expected no output, got %v", selector, out)
@@ -430,7 +439,7 @@ func TestIntegration_NoInputOperationRunsBare(t *testing.T) {
 	ctx := context.Background()
 	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   testSource(),
-		Selector: "mixed",
+		Selector: openbindings.Present("mixed"),
 		Binding:  &openbindings.BindingEntry{Operation: "mixed", Source: "s", Selector: openbindings.Present("mixed")},
 		// InputSchema nil and no input transform: nothing crosses.
 	})
@@ -454,12 +463,12 @@ func TestIntegration_NoInputOperationCarriesASuppliedValue(t *testing.T) {
 	ctx := context.Background()
 	call := jsonHooked().InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   testSource(),
-		Selector: "json",
+		Selector: openbindings.Present("json"),
 		Binding: &openbindings.BindingEntry{
 			Operation:      "json",
 			Source:         "s",
 			Selector:       openbindings.Present("json"),
-			InputTransform: &openbindings.TransformOrRef{Inline: "$"},
+			InputTransform: openbindings.InlineTransform("$"),
 		},
 	})
 	if err := call.Write(ctx, map[string]any{"pairs": []any{"name=alice"}}); err != nil {
@@ -489,7 +498,7 @@ func TestIntegration_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec},
-		Selector: "10",
+		Selector: openbindings.Present("10"),
 		Context:  map[string]any{"metadata": map[string]any{"binary": "sleep"}},
 	})
 	_ = call.Close()
@@ -542,7 +551,7 @@ func TestIntegration_NoInputOperationThroughOperationLayer(t *testing.T) {
 				Selector:  openbindings.Present("json"),
 				// The transform injects the pair the command echoes back,
 				// which is only observable if a value crosses the boundary.
-				InputTransform: &openbindings.TransformOrRef{Inline: `{"pairs": ["name=alice"]}`},
+				InputTransform: openbindings.InlineTransform(`{"pairs": ["name=alice"]}`),
 			},
 		},
 	}

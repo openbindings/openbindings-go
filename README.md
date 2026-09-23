@@ -30,7 +30,9 @@ failing them. A document with bindings is therefore conformance-undetermined
 here until something that implements its binding specifications adds that
 evidence. `Interface.Validate()` does the same for a document already in
 memory, where OBI-D-01 is inconclusive because a host object no longer
-carries the exact input bytes. Both return a `*ValidationError` beside the
+carries the exact input bytes. The rules judge the JSON a document is, never
+its typed decoding, so a document the typed model cannot carry is still judged
+in full. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).

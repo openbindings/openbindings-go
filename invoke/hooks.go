@@ -44,8 +44,9 @@ type InvokeSite struct {
 	InvokedAs   string
 	BindingKey  string
 	BindingSpec string
-	Selector    string
-	Target      string
+	// Selector is the binding's selector, nil when it has none.
+	Selector *string
+	Target   string
 
 	builtinDecode   OutputDecoder
 	builtinClassify ResultClassifier
@@ -565,4 +566,22 @@ func NonDiscriminatingOutput(schema openbindings.JSONSchema) bool {
 		}
 	}
 	return false
+}
+
+// HookSite returns the consultation site for a binding invocation: the site
+// the operation invoker stamped, or, for a direct call to a binding invoker,
+// a site naming the binding specification and the selector. target completes
+// the site's Target, which only the format knows, when it has none.
+func (a *BindingInvocationArgs) HookSite(target string) InvokeSite {
+	var site InvokeSite
+	if a.Site != nil {
+		site = *a.Site
+	} else {
+		site.BindingSpec = a.Source.BindingSpec
+		site.Selector = cloneSelector(a.Selector)
+	}
+	if site.Target == "" {
+		site.Target = target
+	}
+	return site
 }

@@ -26,8 +26,8 @@ func ExampleInterface_basic() {
 		log.Fatal(err)
 	}
 
-	fmt.Println(*iface.Name)
-	fmt.Println(*iface.Operations["getUser"].Description)
+	fmt.Println(openbindings.Value(iface.Name))
+	fmt.Println(openbindings.Value(iface.Operations["getUser"].Description))
 	// Output:
 	// Example API
 	// Get a user by ID
@@ -136,7 +136,7 @@ func ExampleOperation() {
 		},
 	}
 
-	fmt.Println(*op.Description)
+	fmt.Println(openbindings.Value(op.Description))
 	fmt.Println(op.Input.(map[string]any)["type"])
 	// Output:
 	// Create a new user
@@ -183,11 +183,9 @@ func ExampleTransform() {
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"processPayment.stripe": {
-				Operation: "processPayment",
-				Source:    "stripe",
-				InputTransform: &openbindings.TransformOrRef{
-					Reference: &openbindings.TransformReference{Ref: "#/transforms/toStripeInput"},
-				},
+				Operation:      "processPayment",
+				Source:         "stripe",
+				InputTransform: &openbindings.TransformReference{Ref: "#/transforms/toStripeInput"},
 			},
 		},
 	}
@@ -204,11 +202,10 @@ func ExampleTransform() {
 
 func ExampleTransformOrRef_inline() {
 	// An inline transform is a bare JSONata expression string.
-	tor := openbindings.TransformOrRef{Inline: "{ total: price * quantity }"}
+	tor := openbindings.InlineTransform("{ total: price * quantity }")
 
-	fmt.Println("IsRef:", tor.IsRef())
-	fmt.Println("Expression:", tor.Inline)
+	expression, _ := tor.Resolve(nil)
+	fmt.Println("Expression:", expression)
 	// Output:
-	// IsRef: false
 	// Expression: { total: price * quantity }
 }

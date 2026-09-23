@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -11,7 +12,7 @@ func TestSubscriptionExclusionPrecedesDeliveryUnitHandling(t *testing.T) {
 	for _, limit := range []int64{0, 1024, 64 << 10} {
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 			Source:               pinnedInvocationSource(t, "https://api.example.test/graphql"),
-			Selector:             "subscription/updates",
+			Selector:             openbindings.Present("subscription/updates"),
 			MaxDeliveryUnitBytes: limit,
 			Context: map[string]any{"configuration": map[string]any{
 				"document": "subscription { updates }",

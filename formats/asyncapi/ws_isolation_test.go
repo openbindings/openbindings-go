@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 
 	"github.com/coder/websocket"
@@ -58,7 +59,7 @@ func TestWSPool_WriteCancelDoesNotTearDownSiblings(t *testing.T) {
 	// The sibling subscription (listener A) that must survive.
 	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   source,
-		Selector: "#/operations/subscribe",
+		Selector: openbindings.Present("#/operations/subscribe"),
 	})
 	out := sub.Outputs()
 	defer out.Stop()

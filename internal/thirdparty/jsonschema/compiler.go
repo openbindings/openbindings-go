@@ -14,6 +14,7 @@ type Compiler struct {
 	decoders      map[string]*Decoder
 	mediaTypes    map[string]*MediaType
 	assertFormat  bool
+	neverFormat   bool
 	assertContent bool
 }
 
@@ -52,6 +53,13 @@ func (c *Compiler) DefaultDraft(d *Draft) {
 // for draft/2020-12: disabled unless metaschema says `format-assertion` vocabulary is required.
 func (c *Compiler) AssertFormat() {
 	c.assertFormat = true
+}
+
+// NeverAssertFormat makes `format` an annotation in every draft, including
+// the drafts before 2019-09 whose default is to assert it. It overrides
+// AssertFormat and any metaschema vocabulary.
+func (c *Compiler) NeverAssertFormat() {
+	c.neverFormat = true
 }
 
 // AssertContent enables content assertions.
@@ -129,6 +137,29 @@ func (c *Compiler) AddResource(url string, doc any) error {
 	if !c.roots.loader.add(uf.url, doc) {
 		return &ResourceExistsError{string(uf.url)}
 	}
+	return nil
+}
+
+// AddContainer adds a document that is not itself a schema but contains
+// schemas, which gets used later in reference resolution like a resource
+// added with AddResource. schemaLocations are JSON Pointers to the schemas
+// the container holds.
+//
+// Its root contributes no resources, anchors, or keywords, and is not
+// validated against a metaschema. A location becomes a schema only when it is
+// compiled or referenced, and is then processed as a subschema of the schema
+// location enclosing it, which is processed first so that resources declared
+// along the way set its base.
+func (c *Compiler) AddContainer(url string, doc any, schemaLocations ...string) error {
+	if err := c.AddResource(url, doc); err != nil {
+		return err
+	}
+	uf, _ := absolute(url)
+	locations := make([]jsonPointer, len(schemaLocations))
+	for i, location := range schemaLocations {
+		locations[i] = jsonPointer(location)
+	}
+	c.roots.containers[uf.url] = locations
 	return nil
 }
 
@@ -219,6 +250,11 @@ func (c *Compiler) compileValue(v any, sch *Schema, r *root, q *queue) error {
 	sch.DraftVersion = res.dialect.draft.version
 
 	base := urlPtr{sch.up.url, res.ptr}
+	if _, ok := c.roots.containers[sch.up.url]; ok && res.ptr == "" {
+		// The root of a container is not a schema, so a schema outside
+		// every resource the container embeds is its own resource.
+		base = sch.up
+	}
 	sch.resource = c.enqueue(q, base)
 
 	// if resource, enqueue dynamic anchors for compilation

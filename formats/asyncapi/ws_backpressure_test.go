@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 
 	"github.com/coder/websocket"
@@ -82,7 +83,7 @@ func TestWSReceiveBackpressure_FrameCountOverflowFailsSubscription(t *testing.T)
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   wsSource(srv, nil),
-		Selector: "#/operations/subscribe",
+		Selector: openbindings.Present("#/operations/subscribe"),
 	})
 
 	// Let the flood land in the subscription's buffer before this test
@@ -150,7 +151,7 @@ func TestWSReceiveBackpressure_ByteBudgetOverflowFailsSubscription(t *testing.T)
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   wsSource(srv, nil),
-		Selector: "#/operations/subscribe",
+		Selector: openbindings.Present("#/operations/subscribe"),
 	})
 
 	select {
@@ -204,8 +205,8 @@ func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
 	defer binv.Close()
 	source := wsSource(srv, nil)
 
-	callA := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Selector: "#/operations/subscribe"})
-	callB := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Selector: "#/operations/subscribe"})
+	callA := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Selector: openbindings.Present("#/operations/subscribe")})
+	callB := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Selector: openbindings.Present("#/operations/subscribe")})
 	outB := callB.Outputs()
 
 	// Both subscribers must actually be registered on the ONE shared
@@ -283,7 +284,7 @@ func TestWSReceiveBackpressure_NormalDrainNeverTrips(t *testing.T) {
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   wsSource(srv, nil),
-		Selector: "#/operations/subscribe",
+		Selector: openbindings.Present("#/operations/subscribe"),
 	})
 	vals, err := drainOutputs(t, call)
 	if err != nil {

@@ -259,7 +259,7 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 		acceptsInput = &value
 	}
 	return asyncapiclient.PrepareOptions{
-		Source: asyncapiclient.Source{Location: args.Source.Location, Content: content}, Ref: args.Selector,
+		Source: asyncapiclient.Source{Location: args.Source.Location, Content: content}, Ref: openbindings.Value(args.Selector),
 		Profile: profile, Context: args.Context, HTTPClient: client, Hooks: bridgeHooks(args),
 		MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes, AcceptsInput: acceptsInput,
 	}, nil
@@ -277,7 +277,7 @@ func bridgeHooks(args *invoke.BindingInvocationArgs) *asyncapiclient.Hooks {
 		return nil
 	}
 	return &asyncapiclient.Hooks{Decode: func(site asyncapiclient.HookSite, raw asyncapiclient.RawResult) (any, bool, error) {
-		coreSite := coreHookSite(args, site.Target)
+		coreSite := args.HookSite(site.Target)
 		coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
 		// Let the SDK consult both hook tiers, but leave fallback decoding to
 		// the native engine: it has the resolved message declaration and the
@@ -298,20 +298,6 @@ func bridgeHooks(args *invoke.BindingInvocationArgs) *asyncapiclient.Hooks {
 		}
 		return value, !declined, nil
 	}}
-}
-
-func coreHookSite(args *invoke.BindingInvocationArgs, target string) invoke.InvokeSite {
-	var site invoke.InvokeSite
-	if args.Site != nil {
-		site = *args.Site
-	} else {
-		site.BindingSpec = args.Source.BindingSpec
-		site.Selector = args.Selector
-	}
-	if site.Target == "" {
-		site.Target = target
-	}
-	return site
 }
 
 func toCoreMetadata(metadata asyncapiclient.Metadata) invoke.Metadata {

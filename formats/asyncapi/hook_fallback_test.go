@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -163,7 +164,7 @@ func TestP04LiveDeclaredFallback(t *testing.T) {
 				}
 				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
-				call := engine.InvokeBinding(ctx, &invoke.BindingInvocationArgs{Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}, Selector: "#/operations/exchange", Context: map[string]any{"configuration": map[string]any{"websocketMessageType": "text"}}})
+				call := engine.InvokeBinding(ctx, &invoke.BindingInvocationArgs{Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}, Selector: openbindings.Present("#/operations/exchange"), Context: map[string]any{"configuration": map[string]any{"websocketMessageType": "text"}}})
 				defer call.Cancel()
 				var input any = map[string]any{"request": true}
 				if tc.contentType == "text/plain" {

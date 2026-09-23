@@ -12,6 +12,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/httpdiscovery"
 	locationutil "github.com/openbindings/openbindings-go/internal/location"
+	"github.com/openbindings/openbindings-go/internal/obishape"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -212,7 +213,7 @@ func tryFetchOBI(ctx context.Context, client *http.Client, target string) (*open
 		return nil, err
 	}
 
-	if !openbindings.IsOBInterface(raw) {
+	if !obishape.LooksLikeOBI(raw) {
 		return nil, nil
 	}
 

@@ -219,10 +219,10 @@ func analyzeProviderProjection(
 		projected := openbindings.BindingEntry{
 			Operation: binding.Operation,
 			Source:    DefaultSourceName,
-			Selector:  openbindings.NonZero(binding.Selector),
+			Selector:  openbindings.Present(binding.Selector),
 		}
 		if binding.Input != nil {
-			projected.InputTransform = &openbindings.TransformOrRef{Inline: providerInputTransform(binding.Input)}
+			projected.InputTransform = openbindings.InlineTransform(providerInputTransform(binding.Input))
 		}
 		iface.Bindings[key] = projected
 	}

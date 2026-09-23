@@ -16,6 +16,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	locationutil "github.com/openbindings/openbindings-go/internal/location"
 	"github.com/openbindings/openbindings-go/invoke"
 )
@@ -111,7 +112,7 @@ type handle = invoke.BindingHandle[any, any]
 // Invoker never calls it: every production invocation is delegated to the
 // standalone asyncapi-client engine in invoker.go.
 func legacyRunBinding(ctx context.Context, client *http.Client, pool *wsPool, args *invoke.BindingInvocationArgs, h handle, doc *document) {
-	opID, err := parseSelector(args.Selector)
+	opID, err := parseSelector(openbindings.Value(args.Selector))
 	if err != nil {
 		h.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
 		return
@@ -912,7 +913,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 
 	status := resp.StatusCode
 	raw := invoke.RawResult{Status: &status, Body: respBody, Meta: headerMetadata(resp.Header)}
-	output, derr := args.Hooks.DecodeOutput(siteFor(args, target.ServerURL), raw,
+	output, derr := args.Hooks.DecodeOutput(args.HookSite(target.ServerURL), raw,
 		builtinDecodeFor(replyDecode))
 	if derr != nil {
 		h.FireError(invoke.AsInvocationError(derr))
@@ -995,7 +996,7 @@ func runSSESubscribe(ctx context.Context, client *http.Client, target resolvedTa
 	// One transport, one invocation: transport close COMPLETES the
 	// subscription — reconnection (`retry`, `Last-Event-ID`) is excluded
 	// from revision 1 (§8), so no reconnect is ever attempted here.
-	streamSSE(ctx, resp, decodeContentType(doc, governingMessages(doc, asyncOp, ch)), args, siteFor(args, target.ServerURL), h)
+	streamSSE(ctx, resp, decodeContentType(doc, governingMessages(doc, asyncOp, ch)), args, args.HookSite(target.ServerURL), h)
 }
 
 // streamSSE reads an established text/event-stream response per the WHATWG
@@ -1264,7 +1265,7 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, ad
 			}
 			return
 		}
-		out, derr := decodeWSFrame(args, siteFor(args, target.ServerURL), decodeCT, res.Frame)
+		out, derr := decodeWSFrame(args, args.HookSite(target.ServerURL), decodeCT, res.Frame)
 		if derr != nil {
 			// A decode error mid-stream is terminal; already-emitted
 			// outputs stand (drain-before-terminal).
@@ -1748,20 +1749,4 @@ func decodeTrailer(hooks *invoke.InvokeHooks, builtinDecode string) invoke.Metad
 func isJSONContentType(contentType string) bool {
 	mt := normalizeMediaType(contentType)
 	return mt == "application/json" || strings.HasSuffix(mt, "+json")
-}
-
-// siteFor completes the core-stamped site with the format-known Target
-// (the resolved server URL).
-func siteFor(args *invoke.BindingInvocationArgs, serverURL string) invoke.InvokeSite {
-	var site invoke.InvokeSite
-	if args.Site != nil {
-		site = *args.Site
-	} else {
-		site.BindingSpec = args.Source.BindingSpec
-		site.Selector = args.Selector
-	}
-	if site.Target == "" {
-		site.Target = serverURL
-	}
-	return site
 }

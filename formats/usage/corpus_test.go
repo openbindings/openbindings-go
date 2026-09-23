@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func bindingSpecCorpusDir(t *testing.T) string {
@@ -164,7 +166,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 				if _, err := findCommand(spec, *b.Selector); err != nil {
 					return err
 				}
-			} else if _, err := buildDirectArgsFromSelector(*b.Selector, nil); err != nil {
+			} else if _, err := buildDirectArgsFromSelector(openbindings.Present(*b.Selector), nil); err != nil {
 				return err
 			}
 		}

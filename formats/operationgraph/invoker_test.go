@@ -21,7 +21,7 @@ import (
 func TestInvokeBinding_SourceLoadErrorsThroughHandle(t *testing.T) {
 	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: filepath.Join(t.TempDir(), "missing.json")},
-		Selector: "#/graphs/g",
+		Selector: openbindings.Present("#/graphs/g"),
 	})
 	if inv == nil {
 		t.Fatal("expected a handle")
@@ -60,7 +60,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 	ctx := context.Background()
 	inv := NewInvokerWithClient(invoke.NewOperationInvoker(), custom).InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "http://example.test/graph.json"},
-		Selector: "#/graphs/g",
+		Selector: openbindings.Present("#/graphs/g"),
 	})
 	if err := inv.Write(ctx, map[string]any{"n": 1}); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 
 	call := opInvoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:    invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(graphDoc)},
-		Selector:  "#/graphs/loop",
+		Selector:  openbindings.Present("#/graphs/loop"),
 		Interface: iface,
 	})
 	if err := call.Write(ctx, map[string]any{"go": true}); err != nil {

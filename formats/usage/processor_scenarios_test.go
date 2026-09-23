@@ -131,7 +131,12 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 			bindCtx["apiKey"] = generic
 		}
 	}
-	selector, _ := scenario.Given.Binding["selector"].(string)
+	// The scenario's binding states the selector's presence as well as its
+	// value: an absent selector addresses the root command (USAGE-D-03).
+	var selector *string
+	if value, ok := scenario.Given.Binding["selector"].(string); ok {
+		selector = &value
+	}
 	joined := len(scenario.ID) >= len("USAGE-FI-") && scenario.ID[:len("USAGE-FI-")] == "USAGE-FI-"
 	var call invoke.Invocation[any, any]
 	if joined {
@@ -201,14 +206,14 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	return processorscenarios.Observation{Disposition: "refusal", Phase: phase, Data: data}
 }
 
-func usageOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
+func usageOperationForSelector(t *testing.T, iface *openbindings.Interface, selector *string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if openbindings.Value(binding.Selector) == selector {
+		if (binding.Selector == nil) == (selector == nil) && (selector == nil || *binding.Selector == *selector) {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized Usage interface has no binding for %q", selector)
+	t.Fatalf("synthesized Usage interface has no binding for selector %v", selector)
 	return ""
 }
 

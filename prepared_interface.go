@@ -2,11 +2,11 @@ package openbindings
 
 import (
 	"fmt"
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
-	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -33,7 +33,8 @@ type PreparedDependencyDescriptor struct {
 // PreparedBindingDescriptor is the SDK-derived identity of one concrete OBI
 // binding. It contains no runtime-supplied metadata. Selector is nil when the
 // binding has no selector member, which its binding specification gives a
-// meaning distinct from any present value (§5.3).
+// meaning distinct from any present value (§5.3). Compare descriptors with
+// Equal: Selector is a pointer, so == compares its identity.
 type PreparedBindingDescriptor struct {
 	Key           string
 	OperationKey  string
@@ -43,8 +44,22 @@ type PreparedBindingDescriptor struct {
 	HasTransforms bool
 }
 
+// Equal reports whether two descriptors describe the same binding, with
+// selectors compared by presence and value.
+func (d PreparedBindingDescriptor) Equal(other PreparedBindingDescriptor) bool {
+	return d.Key == other.Key &&
+		d.OperationKey == other.OperationKey &&
+		d.SourceKey == other.SourceKey &&
+		d.BindingSpec == other.BindingSpec &&
+		(d.Selector == nil) == (other.Selector == nil) &&
+		(d.Selector == nil || *d.Selector == *other.Selector) &&
+		d.HasTransforms == other.HasTransforms
+}
+
 type preparedInterfaceState struct {
 	snapshot     Interface
+	encoded      []byte // the snapshot's encoding, from which copies are decoded
+	view         any    // the snapshot's generic view, the root schemas compile against
 	snapshotID   string
 	operations   map[string]PreparedOperationDescriptor
 	identifiers  map[string]string
@@ -52,6 +67,7 @@ type preparedInterfaceState struct {
 	bindings     map[string]PreparedBindingDescriptor
 
 	mu         sync.Mutex
+	schemas    *documentSchemas
 	validators map[string]*CompiledSchema
 }
 
@@ -64,23 +80,35 @@ type PreparedInterface struct {
 
 var nextSnapshotID atomic.Uint64
 
-// PrepareInterface gates, snapshots, and indexes an OBI. It refuses a document
-// on any violation of the document rules Interface.Validate decides, and
-// never freezes or retains the caller's maps.
+// PrepareInterface gates, snapshots, and indexes an OBI. It judges the
+// document the interface encodes exactly as Interface.Validate does, refusing
+// it with a *VersionRefusalError or a *ValidationError, and snapshots that
+// same encoding, so it never freezes or retains the caller's maps. An
+// interface that cannot be encoded, or whose encoding the document model
+// cannot carry, is refused with that error.
 func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 	if iface == nil {
 		return nil, fmt.Errorf("openbindings: interface is required")
+	}
+	if refusal := versionRefusalOf(iface.OpenBindings); refusal != nil {
+		return nil, refusal
 	}
 	encoded, err := jsonvalue.Marshal(iface)
 	if err != nil {
 		return nil, fmt.Errorf("openbindings: encode interface: %w", err)
 	}
-	var snapshot Interface
-	if err := jsonvalue.Unmarshal(encoded, &snapshot); err != nil {
-		return nil, fmt.Errorf("openbindings: snapshot interface: %w", err)
+	var view any
+	if err := jsonvalue.Unmarshal(encoded, &view); err != nil {
+		return nil, fmt.Errorf("openbindings: decode encoded interface: %w", err)
 	}
-	if err := snapshot.validateWithDocument(nil); err != nil {
+	var c ruleChecks
+	checkDocument(&c, view)
+	if err := c.violationError(); err != nil {
 		return nil, err
+	}
+	var snapshot Interface
+	if err := json.Unmarshal(encoded, &snapshot); err != nil {
+		return nil, fmt.Errorf("openbindings: the document model cannot carry this interface: %w", err)
 	}
 
 	bindingKeysByOperation := make(map[string][]string)
@@ -138,6 +166,8 @@ func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 
 	return &PreparedInterface{state: &preparedInterfaceState{
 		snapshot:     snapshot,
+		encoded:      encoded,
+		view:         view,
 		snapshotID:   fmt.Sprintf("snapshot:%d", nextSnapshotID.Add(1)),
 		operations:   operations,
 		identifiers:  identifiers,
@@ -147,73 +177,6 @@ func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 	}}, nil
 }
 
-func clonePreparedInterface(source Interface) Interface {
-	clone := source
-	clone.Name = clonePointer(source.Name)
-	clone.Version = clonePointer(source.Version)
-	clone.Description = clonePointer(source.Description)
-	clone.LosslessFields = clonePreparedLossless(source.LosslessFields)
-	clone.Schemas = clonePreparedMap(source.Schemas)
-	for key, schema := range source.Schemas {
-		clone.Schemas[key] = clonePreparedJSON(schema)
-	}
-	clone.Operations = clonePreparedMap(source.Operations)
-	for key, operation := range source.Operations {
-		copyOperation := operation
-		copyOperation.Description = clonePointer(operation.Description)
-		copyOperation.Deprecated = clonePointer(operation.Deprecated)
-		copyOperation.Tags = clonePreparedStrings(operation.Tags)
-		copyOperation.Aliases = clonePreparedStrings(operation.Aliases)
-		copyOperation.Input = clonePreparedJSON(operation.Input)
-		copyOperation.Output = clonePreparedJSON(operation.Output)
-		copyOperation.LosslessFields = clonePreparedLossless(operation.LosslessFields)
-		copyOperation.Idempotent = clonePointer(operation.Idempotent)
-		copyOperation.Examples = clonePreparedMap(operation.Examples)
-		for exampleKey, example := range operation.Examples {
-			copyExample := example
-			copyExample.Description = clonePointer(example.Description)
-			copyExample.Input = clonePreparedRaw(example.Input)
-			copyExample.Output = clonePreparedRaw(example.Output)
-			copyExample.LosslessFields = clonePreparedLossless(example.LosslessFields)
-			copyOperation.Examples[exampleKey] = copyExample
-		}
-		clone.Operations[key] = copyOperation
-	}
-	clone.Dependencies = clonePreparedMap(source.Dependencies)
-	for key, dependency := range source.Dependencies {
-		copyDependency := dependency
-		copyDependency.BindingSpecs = clonePreparedStrings(dependency.BindingSpecs)
-		copyDependency.LosslessFields = clonePreparedLossless(dependency.LosslessFields)
-		clone.Dependencies[key] = copyDependency
-	}
-	clone.Sources = clonePreparedMap(source.Sources)
-	for key, value := range source.Sources {
-		copySource := value
-		copySource.Location = clonePointer(value.Location)
-		copySource.Description = clonePointer(value.Description)
-		copySource.Content = clonePreparedRaw(value.Content)
-		copySource.LosslessFields = clonePreparedLossless(value.LosslessFields)
-		clone.Sources[key] = copySource
-	}
-	clone.Bindings = clonePreparedMap(source.Bindings)
-	for key, binding := range source.Bindings {
-		copyBinding := binding
-		copyBinding.Selector = clonePointer(binding.Selector)
-		copyBinding.Preference = clonePointer(binding.Preference)
-		copyBinding.Description = clonePointer(binding.Description)
-		copyBinding.Deprecated = clonePointer(binding.Deprecated)
-		copyBinding.InputTransform = clonePreparedTransform(binding.InputTransform)
-		copyBinding.OutputTransform = clonePreparedTransform(binding.OutputTransform)
-		copyBinding.LosslessFields = clonePreparedLossless(binding.LosslessFields)
-		clone.Bindings[key] = copyBinding
-	}
-	clone.Transforms = clonePreparedMap(source.Transforms)
-	for key, transform := range source.Transforms {
-		clone.Transforms[key] = transform
-	}
-	return clone
-}
-
 func clonePointer[T any](source *T) *T {
 	if source == nil {
 		return nil
@@ -221,155 +184,6 @@ func clonePointer[T any](source *T) *T {
 	value := *source
 	return &value
 }
-
-// clonePreparedMap copies a map's presence: nil stays nil (absent) and an
-// empty map stays an empty map (present).
-func clonePreparedMap[K comparable, V any](source map[K]V) map[K]V {
-	if source == nil {
-		return nil
-	}
-	return make(map[K]V, len(source))
-}
-
-func clonePreparedRaw(source json.RawMessage) json.RawMessage {
-	if source == nil {
-		return nil
-	}
-	return append(json.RawMessage{}, source...)
-}
-
-func clonePreparedTransform(source *TransformOrRef) *TransformOrRef {
-	if source == nil {
-		return nil
-	}
-	clone := *source
-	if source.Reference != nil {
-		reference := *source.Reference
-		reference.LosslessFields = clonePreparedLossless(source.Reference.LosslessFields)
-		clone.Reference = &reference
-	}
-	return &clone
-}
-
-func clonePreparedLossless(source LosslessFields) LosslessFields {
-	return LosslessFields{
-		Extensions: clonePreparedRawMap(source.Extensions),
-		Unknown:    clonePreparedRawMap(source.Unknown),
-	}
-}
-
-func clonePreparedRawMap(source map[string]json.RawMessage) map[string]json.RawMessage {
-	if source == nil {
-		return nil
-	}
-	clone := make(map[string]json.RawMessage, len(source))
-	for key, value := range source {
-		clone[key] = append(json.RawMessage(nil), value...)
-	}
-	return clone
-}
-
-func clonePreparedStrings(source []string) []string {
-	if source == nil {
-		return nil
-	}
-	clone := make([]string, len(source))
-	copy(clone, source)
-	return clone
-}
-
-func clonePreparedJSON(value any) any {
-	switch value := value.(type) {
-	case map[string]any:
-		clone := make(map[string]any, len(value))
-		for key, member := range value {
-			clone[key] = clonePreparedJSON(member)
-		}
-		return clone
-	case []any:
-		clone := make([]any, len(value))
-		for index, member := range value {
-			clone[index] = clonePreparedJSON(member)
-		}
-		return clone
-	case []string:
-		return clonePreparedStrings(value)
-	case json.RawMessage:
-		return append(json.RawMessage(nil), value...)
-	}
-	if _, ok := value.(json.Marshaler); ok {
-		return clonePreparedEncodedJSON(value)
-	}
-	if _, ok := value.(json.Number); ok {
-		return value // immutable exact token; not a request for Float64 conversion
-	}
-
-	// JSON-bearing OBI fields are intentionally `any`. Accept named map/slice
-	// types and pointers without retaining caller-owned storage. This reflect
-	// lane is cold for documents decoded by encoding/json (the fast cases
-	// above) but closes the aliasing hole for manually constructed typed OBIs.
-	raw := reflect.ValueOf(value)
-	if !raw.IsValid() {
-		return nil
-	}
-	switch raw.Kind() {
-	case reflect.Interface, reflect.Pointer:
-		if raw.IsNil() {
-			return nil
-		}
-		return clonePreparedJSON(raw.Elem().Interface())
-	case reflect.Map:
-		if raw.IsNil() {
-			return nil
-		}
-		if raw.Type().Key().Kind() == reflect.String {
-			clone := make(map[string]any, raw.Len())
-			iterator := raw.MapRange()
-			for iterator.Next() {
-				clone[iterator.Key().String()] = clonePreparedJSON(iterator.Value().Interface())
-			}
-			return clone
-		}
-	case reflect.Slice, reflect.Array:
-		if raw.Kind() == reflect.Slice && raw.IsNil() {
-			return nil
-		}
-		if raw.Type().Elem().Kind() == reflect.Uint8 {
-			return clonePreparedEncodedJSON(value)
-		}
-		clone := make([]any, raw.Len())
-		for index := range clone {
-			clone[index] = clonePreparedJSON(raw.Index(index).Interface())
-		}
-		return clone
-	case reflect.Bool, reflect.String,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return value
-	}
-
-	// A custom JSON scalar/struct is uncommon, but preparation encoded it by
-	// its JSON meaning. Decode just this subtree so the snapshot
-	// retains neither its pointers nor a custom mutable implementation object.
-	return clonePreparedEncodedJSON(value)
-}
-
-func clonePreparedEncodedJSON(value any) any {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return value // unreachable for a value that encoded when the document was prepared
-	}
-	var clone any
-	if err := jsonvalue.Unmarshal(encoded, &clone); err != nil {
-		return value // likewise defensive; never authority for valid preparation
-	}
-	return clone
-}
-
-// Prepared returns the receiver. It is the Go idempotent preparation path: a
-// prepared value never snapshots or validates itself again.
-func (p *PreparedInterface) Prepared() *PreparedInterface { return p }
 
 // SnapshotID is a process-local handle identity: it distinguishes one
 // prepared snapshot from another within this process so runtime records
@@ -384,14 +198,18 @@ func (p *PreparedInterface) SnapshotID() string {
 	return p.state.snapshotID
 }
 
-// InterfaceSnapshot returns a private deep copy of the validated OBI snapshot.
-// Retained runtime artifacts call this once during deterministic closure and
-// keep that copy; invocation hot paths never clone the document.
+// InterfaceSnapshot returns a private deep copy of the validated OBI snapshot,
+// decoded afresh from the snapshot's encoding. Retained runtime artifacts call
+// this once during deterministic closure and keep that copy; invocation hot
+// paths never clone the document.
 func (p *PreparedInterface) InterfaceSnapshot() *Interface {
 	if p == nil || p.state == nil {
 		return nil
 	}
-	snapshot := clonePreparedInterface(p.state.snapshot)
+	var snapshot Interface
+	if err := json.Unmarshal(p.state.encoded, &snapshot); err != nil {
+		return nil // unreachable: preparation decoded these same bytes
+	}
 	return &snapshot
 }
 
@@ -499,9 +317,13 @@ func (p *PreparedInterface) SchemaValidator(operationIdentifier, position string
 	if validator := p.state.validators[cacheKey]; validator != nil {
 		return validator, true, nil
 	}
-	validator, err = CompileOperationSchema(&p.state.snapshot, key, position)
+	if p.state.schemas == nil {
+		schemas := collectDocumentSchemas(p.state.view)
+		p.state.schemas = &schemas
+	}
+	validator, err = compileDocumentSchema(p.state.view, *p.state.schemas, "operations", key, position)
 	if err != nil {
-		return nil, false, err
+		return nil, false, &SchemaGraphUnavailableError{Cause: err}
 	}
 	p.state.validators[cacheKey] = validator
 	return validator, true, nil

@@ -390,7 +390,7 @@ func bufconnArgs(selector string, bindCtx map[string]any) *invoke.BindingInvocat
 	copied["configuration"] = configurationCopy
 	return &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: bufconnLocation},
-		Selector: selector,
+		Selector: openbindings.Present(selector),
 		Context:  copied,
 	}
 }
@@ -872,7 +872,7 @@ func TestIntegration_MissingLocation(t *testing.T) {
 
 	inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 	})
 
 	_, terr := drainInvocation(t, inv)
@@ -937,7 +937,7 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "i1"}); err != nil {
 		t.Fatalf("write: %v", err)
@@ -958,7 +958,7 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	defer cancel()
 	inv2 := autoTLS.InvokeBinding(ctl, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "i1"})
 	_, err = invoke.Single(ctl, inv2.Outputs())

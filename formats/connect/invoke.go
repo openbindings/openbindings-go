@@ -45,7 +45,7 @@ type methodInfo struct {
 // request URL.
 func parseSelector(selector string) (string, string, error) {
 	if selector == "" {
-		return "", "", fmt.Errorf("empty Connect selector")
+		return "", "", fmt.Errorf("no Connect selector: one is required, as <fully-qualified-service>/<method> (openbindings.connect@1 CONN-D-03)")
 	}
 	idx := strings.Index(selector, "/")
 	if idx < 0 || idx != strings.LastIndex(selector, "/") || idx == 0 || idx == len(selector)-1 {

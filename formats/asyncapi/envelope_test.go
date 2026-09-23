@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -154,7 +155,7 @@ func TestInvokerCarriesHeadersOverHTTP(t *testing.T) {
 	defer binv.Close()
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(artifact)},
-		Selector: "#/operations/submit",
+		Selector: openbindings.Present("#/operations/submit"),
 	})
 	if err := call.Write(context.Background(), map[string]any{
 		"payload": map[string]any{"id": 4},

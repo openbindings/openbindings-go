@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 	"google.golang.org/grpc"
@@ -108,7 +109,7 @@ func TestConformance_D02_NonConformantLocationRefusedPreDial(t *testing.T) {
 	for _, location := range []string{"https://api.example.com:443", "api.example.com:443/v1"} {
 		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
 			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
-			Selector: "testpkg.ItemService/GetItem",
+			Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 		})
 		_, terr := drainInvocation(t, inv)
 		if terr == nil || terr.Code != invoke.ErrCodeSourceConfigError {
@@ -192,7 +193,7 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP())),
 		},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 		Context:  map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "fds"}); err != nil {
@@ -307,7 +308,7 @@ message PingMsg { string msg = 1; }
 			// The location is a valid form but unreachable: the refusal must
 			// fire from offline resolution, never a dial.
 			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: jsonvalue.TextContent(proto)},
-			Selector: selector,
+			Selector: openbindings.Present(selector),
 		})
 		_, terr := drainInvocation(t, inv)
 		if terr == nil || terr.Code != invoke.ErrCodeSelectorNotFound {
@@ -398,7 +399,7 @@ func TestConformance_P02_TransportOverrideBeatsExplicitScheme(t *testing.T) {
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 		Context:  map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "p"}); err != nil {
@@ -414,7 +415,7 @@ func TestConformance_P02_TransportOverrideBeatsExplicitScheme(t *testing.T) {
 	defer cancel()
 	inv2 := invoker.InvokeBinding(ctl, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "p"})
 	if _, err := invoke.Single(ctl, inv2.Outputs()); err == nil {
@@ -434,7 +435,7 @@ func TestConformance_P02_MalformedTransportConfigRefused(t *testing.T) {
 	for _, transport := range cases {
 		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
 			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:50051"},
-			Selector: "testpkg.ItemService/GetItem",
+			Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 			Context:  map[string]any{"configuration": map[string]any{"transport": transport}},
 		})
 		_, terr := drainInvocation(t, inv)
@@ -458,7 +459,7 @@ func TestConformance_TargetPointReplacesLocation(t *testing.T) {
 		// plaintext server; the configured target explicitly elects plaintext. Success
 		// proves the replacement.
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://203.0.113.9:443"},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 		Context:  map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:50051"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "t"}); err != nil {
@@ -688,7 +689,7 @@ service S { rpc Do(Req) returns (Resp); }
 
 	inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: jsonvalue.TextContent(proto)},
-		Selector: "p2.S/Do",
+		Selector: openbindings.Present("p2.S/Do"),
 	})
 	_, terr := drainInvocation(t, inv)
 	if terr == nil || terr.Code != invoke.ErrCodeSourceLoadFailed {
@@ -727,7 +728,7 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP(), dirty)),
 		},
-		Selector: "testpkg.ItemService/GetItem",
+		Selector: openbindings.Present("testpkg.ItemService/GetItem"),
 		Context:  map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "inert"}); err != nil {

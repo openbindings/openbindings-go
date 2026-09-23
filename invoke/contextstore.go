@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/schemavalidate"
 )
 
 // ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatN
 			if !ok {
 				return false
 			}
-			if openbindings.ValidateAgainstSchema(selected, schema) != nil {
+			if schemavalidate.Validate(selected, schema) != nil {
 				return false
 			}
 		}

@@ -120,11 +120,11 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 		iface.Operations[opKey] = obiOperation
 		bindingKey := opKey + "." + DefaultSourceName
 		binding := openbindings.BindingEntry{
-			Operation: opKey, Source: DefaultSourceName, Selector: openbindings.NonZero(operation.Ref),
+			Operation: opKey, Source: DefaultSourceName, Selector: openbindings.Present(operation.Ref),
 			Deprecated: openbindings.NonZero(operation.Deprecated),
 		}
 		if inputTransform != "" {
-			binding.InputTransform = &openbindings.TransformOrRef{Inline: inputTransform}
+			binding.InputTransform = openbindings.InlineTransform(inputTransform)
 		}
 		iface.Bindings[bindingKey] = binding
 		coverage = append(coverage, synthesize.SynthesisCoverageEntry{

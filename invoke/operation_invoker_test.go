@@ -114,7 +114,7 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 		return v, true, nil
 	}
 
-	switch args.Selector {
+	switch openbindings.Value(args.Selector) {
 	case "ping":
 		_ = h.CloseInput()
 		if m.opts.nativeFailure {
@@ -363,7 +363,7 @@ func opTestInterface() *openbindings.Interface {
 			"getUser.bad":  {Operation: "getUser", Source: "mock", Selector: openbindings.Present("badUser"), Preference: openbindings.Present[int64](1)},
 			"echo.transformed": {
 				Operation: "echo", Source: "mock", Selector: openbindings.Present("echoInput"),
-				InputTransform: &openbindings.TransformOrRef{Inline: "idToUserId"},
+				InputTransform: openbindings.InlineTransform("idToUserId"),
 			},
 			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Selector: openbindings.Present("watchOrders"), Preference: openbindings.Present[int64](99)},
 			"watchOrders.challenge": {
@@ -600,7 +600,7 @@ func TestOpT07ValidatesBeforeTransform(t *testing.T) {
 func TestOpInputTransformFailureIsTerminal(t *testing.T) {
 	iface := opTestInterface()
 	b := iface.Bindings["echo.transformed"]
-	b.InputTransform = &openbindings.TransformOrRef{Inline: "boom"}
+	b.InputTransform = openbindings.InlineTransform("boom")
 	iface.Bindings["echo.transformed"] = b
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
 	call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("echo"))
@@ -647,7 +647,7 @@ func TestOpT08PerItemForStreaming(t *testing.T) { // SS
 func TestOpT08ValidatesAfterTransform(t *testing.T) {
 	iface := opTestInterface()
 	b := iface.Bindings["watchTyped.main"]
-	b.OutputTransform = &openbindings.TransformOrRef{Inline: "breakShape"}
+	b.OutputTransform = openbindings.InlineTransform("breakShape")
 	iface.Bindings["watchTyped.main"] = b
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
 	call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("watchTyped"))

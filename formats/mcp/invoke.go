@@ -19,6 +19,7 @@ import (
 	locationutil "github.com/openbindings/openbindings-go/internal/location"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
+	"github.com/openbindings/openbindings-go/schemavalidate"
 	"github.com/yosida95/uritemplate/v3"
 )
 
@@ -50,7 +51,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		})
 		return
 	}
-	entityType, name, err := parseSelector(args.Selector)
+	entityType, name, err := parseSelector(openbindings.Value(args.Selector))
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{
 			Code: invoke.ErrCodeInvalidSelector,
@@ -258,7 +259,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 
 	// --- Dispatch. ---
-	site := siteFor(args, location)
+	site := args.HookSite(location)
 	rawResult := &rawResultCapture{}
 	operationCtx := context.WithValue(callCtx, rawResultCaptureKey{}, rawResult)
 	var derr *invoke.InvocationError
@@ -493,7 +494,7 @@ func emitToolResult(
 				Code: invoke.ErrCodeResponseError,
 			}, false
 		}
-		if err := openbindings.ValidateAgainstSchema(value, applicationOutputSchema); err != nil {
+		if err := schemavalidate.Validate(value, applicationOutputSchema); err != nil {
 			return &invoke.InvocationError{
 				Code: invoke.ErrCodeResponseError,
 			}, false
@@ -729,7 +730,7 @@ func promptArguments(v any) (map[string]string, *invoke.InvocationError) {
 func parseSelector(selector string) (entityType string, name string, err error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
-		return "", "", fmt.Errorf("empty MCP selector")
+		return "", "", fmt.Errorf("no MCP selector: one is required (MCP-D-03)")
 	}
 
 	for _, prefix := range []string{refPrefixTools, refPrefixResourceTemplates, refPrefixResources, refPrefixPrompts} {
@@ -911,21 +912,6 @@ func completeMCPResult(capture *rawResultCapture, typed any) any {
 	// The invocation boundary captures this typed result once, using its codec
 	// semantics when necessary. No intermediate JSON text is needed here.
 	return typed
-}
-
-// siteFor builds the hook-consultation site for an MCP binding.
-func siteFor(args *invoke.BindingInvocationArgs, target string) invoke.InvokeSite {
-	var site invoke.InvokeSite
-	if args.Site != nil {
-		site = *args.Site
-	} else {
-		site.BindingSpec = args.Source.BindingSpec
-		site.Selector = args.Selector
-	}
-	if site.Target == "" {
-		site.Target = target
-	}
-	return site
 }
 
 // toolResultValue converts a CallToolResult into the output value and its

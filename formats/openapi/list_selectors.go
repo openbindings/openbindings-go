@@ -64,7 +64,7 @@ func (c *Synthesizer) inspectSwagger20Source(ctx context.Context, source *openbi
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
+		target.Operation = &openbindings.Operation{Description: openbindings.Present(description)}
 	}
 	return target
 }

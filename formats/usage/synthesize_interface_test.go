@@ -342,10 +342,11 @@ arg "[file]..." help="Files to search"
 		t.Errorf("expected 'pattern' in required, got %v", req)
 	}
 
-	// The root operation binds via its unit; the unit's command is empty.
+	// The root operation binds with no selector, which addresses the root
+	// command (USAGE-D-03).
 	binding := iface.Bindings["grep."+DefaultSourceName]
 	if binding.Selector != nil {
-		t.Errorf("root binding selector = %q, want \"\" (the root command)", openbindings.Value(binding.Selector))
+		t.Errorf("root binding selector = %q, want it absent (the root command)", *binding.Selector)
 	}
 }
 

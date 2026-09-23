@@ -389,7 +389,12 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		}
 		source.Content = raw
 	}
-	selector, _ := scenario.Given.Binding["selector"].(string)
+	// The scenario's binding states the selector's presence as well as its
+	// value.
+	var selector *string
+	if value, ok := scenario.Given.Binding["selector"].(string); ok {
+		selector = &value
+	}
 	args := &invoke.BindingInvocationArgs{
 		Source:   source,
 		Selector: selector,

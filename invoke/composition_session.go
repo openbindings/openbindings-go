@@ -44,14 +44,15 @@ type CompositionFailure struct {
 
 // InspectedRealization is a serializable eligible route identity.
 type InspectedRealization struct {
-	ProviderKey              string           `json:"providerKey"`
-	ProviderOperationKey     string           `json:"providerOperationKey"`
-	CorrespondenceIdentifier string           `json:"correspondenceIdentifier"`
-	BindingKey               string           `json:"bindingKey"`
-	SourceKey                string           `json:"sourceKey"`
-	BindingSpec              string           `json:"bindingSpec"`
-	Selector                 string           `json:"selector"`
-	Evidence                 ContractEvidence `json:"evidence"`
+	ProviderKey              string `json:"providerKey"`
+	ProviderOperationKey     string `json:"providerOperationKey"`
+	CorrespondenceIdentifier string `json:"correspondenceIdentifier"`
+	BindingKey               string `json:"bindingKey"`
+	SourceKey                string `json:"sourceKey"`
+	BindingSpec              string `json:"bindingSpec"`
+	// Selector is the binding's selector, nil when it has none.
+	Selector *string          `json:"selector,omitempty"`
+	Evidence ContractEvidence `json:"evidence"`
 }
 
 // InspectedProvider is a provider policy candidate and its realizations.

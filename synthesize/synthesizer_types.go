@@ -67,6 +67,12 @@ func SynthesisSkeleton(in *SynthesizeInput) (openbindings.Interface, error) {
 // all single-source synthesizers and validates the emitted OBI. Artifact
 // acquisition and the embed directive remain family work because only the
 // governing binding specification knows what bytes constitute the source.
+//
+// The emitted document states no empty optional collection: an empty
+// schemas, dependencies, bindings, or transforms map, or an operation's empty
+// tags, aliases, or examples, says nothing its absence does not, so it is
+// omitted. A dependency's bindingSpecs is kept even when empty, because an
+// empty allow-list accepts no binding family, which absence does not mean.
 func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defaultSourceName, bindingSpec string) error {
 	if iface == nil || in == nil || len(in.Sources) != 1 {
 		return fmt.Errorf("finalize synthesis requires one source and one interface")
@@ -79,13 +85,13 @@ func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defau
 		iface.OpenBindings = in.OpenBindingsVersion
 	}
 	if in.Name != "" {
-		iface.Name = openbindings.NonZero(in.Name)
+		iface.Name = openbindings.Present(in.Name)
 	}
 	if in.Version != "" {
-		iface.Version = openbindings.NonZero(in.Version)
+		iface.Version = openbindings.Present(in.Version)
 	}
 	if in.Description != "" {
-		iface.Description = openbindings.NonZero(in.Description)
+		iface.Description = openbindings.Present(in.Description)
 	}
 
 	entry, ok := iface.Sources[defaultSourceName]
@@ -94,10 +100,10 @@ func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defau
 	}
 	entry.BindingSpec = bindingSpec
 	if src.OutputLocation != "" {
-		entry.Location = openbindings.NonZero(src.OutputLocation)
+		entry.Location = openbindings.Present(src.OutputLocation)
 	}
 	if src.Description != "" {
-		entry.Description = openbindings.NonZero(src.Description)
+		entry.Description = openbindings.Present(src.Description)
 	}
 	outputName := defaultSourceName
 	if src.Name != "" {
@@ -113,10 +119,38 @@ func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defau
 			}
 		}
 	}
+	omitEmptyCollections(iface)
 	if _, err := iface.Validate(); err != nil {
 		return fmt.Errorf("synthesized interface: %w", err)
 	}
 	return nil
+}
+
+func omitEmptyCollections(iface *openbindings.Interface) {
+	if len(iface.Schemas) == 0 {
+		iface.Schemas = nil
+	}
+	if len(iface.Dependencies) == 0 {
+		iface.Dependencies = nil
+	}
+	if len(iface.Bindings) == 0 {
+		iface.Bindings = nil
+	}
+	if len(iface.Transforms) == 0 {
+		iface.Transforms = nil
+	}
+	for key, operation := range iface.Operations {
+		if len(operation.Tags) == 0 {
+			operation.Tags = nil
+		}
+		if len(operation.Aliases) == 0 {
+			operation.Aliases = nil
+		}
+		if len(operation.Examples) == 0 {
+			operation.Examples = nil
+		}
+		iface.Operations[key] = operation
+	}
 }
 
 // SynthesizerWarning describes a non-fatal, usable but lossy projection made
@@ -270,7 +304,11 @@ type InspectionLimitation struct {
 // BindableTarget describes a target within a source that can be framed as an
 // OpenBindings operation.
 type BindableTarget struct {
-	// Selector is the selector string to use in a binding entry.
+	// Selector is the target's selector. Revision 0.1 of the source-inspector
+	// contract requires a string, so a target that its binding specification
+	// identifies by an omitted selector, such as a Usage root command, has the
+	// empty string here. A binding entry framed from a target omits its
+	// selector in that case: set it with openbindings.NonZero(target.Selector).
 	Selector string `json:"selector"`
 	// OperationKey is an optional suggested operation key for this target.
 	OperationKey string `json:"operationKey,omitempty"`

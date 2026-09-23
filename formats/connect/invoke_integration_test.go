@@ -68,7 +68,7 @@ func unaryArgs(location string, content any, selector string) *invoke.BindingInv
 			Location:    location,
 			Content:     raw,
 		},
-		Selector: selector,
+		Selector: openbindings.Present(selector),
 	}
 }
 
@@ -322,7 +322,7 @@ message PingMsg { string msg = 1; }
 	// no-content-at-all message.
 	h := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(proto)},
-		Selector: "tiny.Tiny/Ping",
+		Selector: openbindings.Present("tiny.Tiny/Ping"),
 	})
 	ierr := mustTerminalError(t, ctx, h, invoke.ErrCodeSourceConfigError)
 	if ierr.HasData() {
@@ -334,7 +334,7 @@ message PingMsg { string msg = 1; }
 	// at configuration).
 	h2 := invokeWith(t, ctx, invoker, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(proto)},
-		Selector: "tiny.Tiny/Ping",
+		Selector: openbindings.Present("tiny.Tiny/Ping"),
 		Context:  map[string]any{"configuration": map[string]any{"target": "http://127.0.0.1:1"}},
 	}, map[string]any{"msg": "hi"})
 

@@ -302,7 +302,7 @@ func checkMetadataKey(k string) error {
 // Matching downstream is byte-exact; no case folding.
 func parseSelector(selector string) (string, string, error) {
 	if selector == "" {
-		return "", "", fmt.Errorf("empty gRPC selector")
+		return "", "", fmt.Errorf("no gRPC selector: one is required, as <fully-qualified-service>/<method> (openbindings.grpc@1 GRPC-D-03)")
 	}
 	idx := strings.Index(selector, "/")
 	if idx < 0 || idx != strings.LastIndex(selector, "/") || idx == 0 || idx == len(selector)-1 {

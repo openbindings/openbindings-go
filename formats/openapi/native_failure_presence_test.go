@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -42,7 +43,7 @@ func TestNativeFailureDataPresenceAcrossEditions(t *testing.T) {
 				}
 				document := fmt.Sprintf(`{%s,"info":{"title":"Presence","version":"1"},"paths":{"/value":{"get":{"responses":{"400":%s}}}}}`, prefix, response)
 				call := NewInvokerWithClient(&http.Client{Transport: failurePresenceTransport(tc.body)}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-					Source: invoke.InvocationSource{BindingSpec: "openbindings.openapi-" + edition[:3] + "@1", Content: json.RawMessage(document)}, Selector: "#/paths/~1value/get",
+					Source: invoke.InvocationSource{BindingSpec: "openbindings.openapi-" + edition[:3] + "@1", Content: json.RawMessage(document)}, Selector: openbindings.Present("#/paths/~1value/get"),
 				})
 				call.Close()
 				_, err := call.Outputs().Read(context.Background())

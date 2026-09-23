@@ -33,7 +33,7 @@ func BenchmarkHTTPValueMigration(b *testing.B) {
 	operation.Output = map[string]any{"type": "object", "properties": map[string]any{"photoData": map[string]any{"type": "string"}}}
 	iface.Operations["getPicture"] = operation
 	for key, binding := range iface.Bindings {
-		binding.OutputTransform = &openbindings.TransformOrRef{Inline: `{"photoData":$}`}
+		binding.OutputTransform = openbindings.InlineTransform(`{"photoData":$}`)
 		iface.Bindings[key] = binding
 	}
 	op := invoke.NewOperationInvoker(NewInvokerWithClient(server.Client()))

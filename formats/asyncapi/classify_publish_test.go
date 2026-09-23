@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -30,7 +31,7 @@ func TestUnaryPublish3xxIsFailure(t *testing.T) {
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   httpSource(srv),
-		Selector: "#/operations/sendOpenMessage",
+		Selector: openbindings.Present("#/operations/sendOpenMessage"),
 	})
 	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {
 		t.Fatal(err)

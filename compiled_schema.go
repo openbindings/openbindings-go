@@ -1,20 +1,21 @@
 package openbindings
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
 )
 
-// CompiledSchema names the SDK's compiled schema artifact without requiring
-// consumers to import or mutate a private backend graph. Call Validate for an
-// instance verdict: nil means valid, SchemaValidationError means invalid, and
-// any other error means a verdict could not be reached.
+// CompiledSchema is a compiled operation schema, ready to validate values
+// against without recompiling.
 type CompiledSchema struct{ backend *jsonschema.Schema }
 
+// Validate validates a value. A nil error means the value validates, a
+// *SchemaValidationError is an established mismatch, and a
+// *SchemaGraphUnavailableError means no verdict could be reached.
 func (s *CompiledSchema) Validate(value any) error {
 	if s == nil || s.backend == nil {
-		return fmt.Errorf("openbindings: compiled schema is unavailable")
+		return &SchemaGraphUnavailableError{Cause: errors.New("the schema is not compiled")}
 	}
-	return projectSchemaValidationError(s.backend.Validate(value))
+	return schemaValidationError(s.backend.Validate(value))
 }

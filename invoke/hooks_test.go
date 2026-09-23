@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func intp(v int) *int { return &v }
@@ -14,7 +16,7 @@ func testSite() InvokeSite {
 		Operation:   "com.example.op",
 		InvokedAs:   "op",
 		BindingSpec: "usage@2.13.1",
-		Selector:    "check",
+		Selector:    openbindings.Present("check"),
 	}
 }
 

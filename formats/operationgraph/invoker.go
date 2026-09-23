@@ -157,7 +157,13 @@ func (e *Invoker) drive(ctx context.Context, args *invoke.BindingInvocationArgs,
 
 	// The selector is a REQUIRED JSON Pointer fragment addressing the graph
 	// definition within the (otherwise unconstrained) host document.
-	target, err := resolveSelector(doc, args.Selector)
+	if args.Selector == nil {
+		// No whole-document meaning is defined for an absent selector; a graph
+		// at the document root is addressed as "#".
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
+		return
+	}
+	target, err := resolveSelector(doc, *args.Selector)
 	if err != nil {
 		code := invoke.ErrCodeSelectorNotFound
 		var re *selectorError

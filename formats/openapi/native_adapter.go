@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -31,7 +32,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	if err := acceptedNativeEdition(args.Source.BindingSpec, client.Edition()); err != nil {
 		return err
 	}
-	if _, err := client.Operation(openapiclient.OperationRef(args.Selector)); err != nil {
+	if _, err := client.Operation(openapiclient.OperationRef(openbindings.Value(args.Selector))); err != nil {
 		return nativeSelectionInvocationError(args, err)
 	}
 	options, err := e.nativeCallOptions(args, client)
@@ -42,7 +43,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	if err != nil {
 		return err
 	}
-	credentialNames, err := nativeCredentialNames(ctx, client, args.Selector, configured, options)
+	credentialNames, err := nativeCredentialNames(ctx, client, openbindings.Value(args.Selector), configured, options)
 	if err != nil {
 		return nativeSelectionInvocationError(args, err)
 	}
@@ -50,7 +51,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	if err != nil {
 		return err
 	}
-	requirements, err := client.Preflight(ctx, openapiclient.OperationRef(args.Selector), configured, options)
+	requirements, err := client.Preflight(ctx, openapiclient.OperationRef(openbindings.Value(args.Selector)), configured, options)
 	if err != nil {
 		return nativeSelectionInvocationError(args, err)
 	}
@@ -59,7 +60,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	} else if details != nil {
 		return invoke.NewContextRequiredError(details)
 	}
-	operation, err := client.AnalyzeOperation(openapiclient.OperationRef(args.Selector))
+	operation, err := client.AnalyzeOperation(openapiclient.OperationRef(openbindings.Value(args.Selector)))
 	if err != nil {
 		return nativeSelectionInvocationError(args, err)
 	}
@@ -88,7 +89,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 			return err
 		}
 	}
-	result, err := client.Stream(bridgeCtx, openapiclient.OperationRef(args.Selector), input, options)
+	result, err := client.Stream(bridgeCtx, openapiclient.OperationRef(openbindings.Value(args.Selector)), input, options)
 	if err != nil {
 		if bridgeCtx.Err() != nil {
 			return nil
@@ -167,7 +168,7 @@ func (e *invokerRuntime) preflightNativeBinding(ctx context.Context, args *invok
 	if err := acceptedNativeEdition(args.Source.BindingSpec, client.Edition()); err != nil {
 		return nil, err
 	}
-	if _, err := client.Operation(openapiclient.OperationRef(args.Selector)); err != nil {
+	if _, err := client.Operation(openapiclient.OperationRef(openbindings.Value(args.Selector))); err != nil {
 		return nil, nativeSelectionInvocationError(args, err)
 	}
 	options, err := e.nativeCallOptions(args, client)
@@ -178,7 +179,7 @@ func (e *invokerRuntime) preflightNativeBinding(ctx context.Context, args *invok
 	if err != nil {
 		return nil, err
 	}
-	names, err := nativeCredentialNames(ctx, client, args.Selector, configured, options)
+	names, err := nativeCredentialNames(ctx, client, openbindings.Value(args.Selector), configured, options)
 	if err != nil {
 		return nil, nativeSelectionInvocationError(args, err)
 	}
@@ -186,7 +187,7 @@ func (e *invokerRuntime) preflightNativeBinding(ctx context.Context, args *invok
 	if err != nil {
 		return nil, err
 	}
-	requirements, err := client.Preflight(ctx, openapiclient.OperationRef(args.Selector), configured, options)
+	requirements, err := client.Preflight(ctx, openapiclient.OperationRef(openbindings.Value(args.Selector)), configured, options)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -334,7 +335,7 @@ func checkAcceptedOpenAPIVersionForBindingSpecValue(edition, bindingSpec string)
 
 func (e *invokerRuntime) nativeCallOptions(args *invoke.BindingInvocationArgs, client *openapiclient.Client) (openapiclient.CallOptions, error) {
 	configuration := invoke.ContextConfiguration(args.Context)
-	server, err := nativeServerSelection(configuration, client, openapiclient.OperationRef(args.Selector))
+	server, err := nativeServerSelection(configuration, client, openapiclient.OperationRef(openbindings.Value(args.Selector)))
 	if err != nil {
 		return openapiclient.CallOptions{}, err
 	}
@@ -946,10 +947,10 @@ func nativeSelectorIsDeclared(args *invoke.BindingInvocationArgs) bool {
 		return false
 	}
 	const prefix = "#/paths/"
-	if !strings.HasPrefix(args.Selector, prefix) {
+	if !strings.HasPrefix(openbindings.Value(args.Selector), prefix) {
 		return false
 	}
-	parts := strings.Split(strings.TrimPrefix(args.Selector, prefix), "/")
+	parts := strings.Split(strings.TrimPrefix(openbindings.Value(args.Selector), prefix), "/")
 	if len(parts) < 2 {
 		return false
 	}

@@ -55,7 +55,7 @@ func TestOwnedPictureTransformRecoveryAndUpload(t *testing.T) {
 				iface.Operations["getPicture"] = operation
 				for key, binding := range iface.Bindings {
 					if binding.Operation == "getPicture" {
-						binding.OutputTransform = &openbindings.TransformOrRef{Inline: `{"nested":{"photoData":$}}`}
+						binding.OutputTransform = openbindings.InlineTransform(`{"nested":{"photoData":$}}`)
 						iface.Bindings[key] = binding
 					}
 				}

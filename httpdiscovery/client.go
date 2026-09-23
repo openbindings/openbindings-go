@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/internal/obishape"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
@@ -138,10 +139,10 @@ func Discover(ctx context.Context, origin string, opts ...Option) (*openbindings
 	if err := jsonvalue.Unmarshal(body, &raw); err != nil {
 		return nil, false, fmt.Errorf("http discovery: response is not JSON: %w", err)
 	}
-	if !openbindings.IsOBInterface(raw) {
+	if !obishape.LooksLikeOBI(raw) {
 		return nil, false, fmt.Errorf("http discovery: response is not an OBI document")
 	}
-	version := raw["openbindings"].(string) // IsOBInterface checked this type.
+	version := raw["openbindings"].(string) // LooksLikeOBI checked this type.
 	if supported, err := openbindings.IsSupportedVersion(version); err == nil && !supported {
 		return nil, false, &VersionRefusalError{Version: version}
 	}

@@ -1,8 +1,54 @@
 diff --git a/compiler.go b/compiler.go
-index 4da7361..77a38e0 100644
+index 4da7361..0943577 100644
 --- a/compiler.go
 +++ b/compiler.go
-@@ -175,7 +175,8 @@ func (c *Compiler) MustCompile(loc string) *Schema {
+@@ -14,6 +14,7 @@ type Compiler struct {
+ 	decoders      map[string]*Decoder
+ 	mediaTypes    map[string]*MediaType
+ 	assertFormat  bool
++	neverFormat   bool
+ 	assertContent bool
+ }
+ 
+@@ -54,6 +55,13 @@ func (c *Compiler) AssertFormat() {
+ 	c.assertFormat = true
+ }
+ 
++// NeverAssertFormat makes `format` an annotation in every draft, including
++// the drafts before 2019-09 whose default is to assert it. It overrides
++// AssertFormat and any metaschema vocabulary.
++func (c *Compiler) NeverAssertFormat() {
++	c.neverFormat = true
++}
++
+ // AssertContent enables content assertions.
+ //
+ // Content assertions include keywords:
+@@ -132,6 +140,23 @@ func (c *Compiler) AddResource(url string, doc any) error {
+ 	return nil
+ }
+ 
++// AddContainer adds a document that is not itself a schema but contains
++// schemas, which gets used later in reference resolution like a resource
++// added with AddResource.
++//
++// Its root contributes no resources, anchors, or keywords, and is not
++// validated against a metaschema. A location in it becomes a schema only
++// when it is compiled or referenced, and is then processed exactly as a
++// subschema of a resource.
++func (c *Compiler) AddContainer(url string, doc any) error {
++	if err := c.AddResource(url, doc); err != nil {
++		return err
++	}
++	uf, _ := absolute(url)
++	c.roots.containers[uf.url] = struct{}{}
++	return nil
++}
++
+ // UseLoader overrides the default [URLLoader] used
+ // to load schema resources.
+ func (c *Compiler) UseLoader(loader URLLoader) {
+@@ -175,7 +200,8 @@ func (c *Compiler) MustCompile(loc string) *Schema {
  }
  
  // Compile compiles json-schema at given loc.
@@ -12,6 +58,18 @@ index 4da7361..77a38e0 100644
  	uf, err := absolute(loc)
  	if err != nil {
  		return nil, err
+@@ -218,6 +244,11 @@ func (c *Compiler) compileValue(v any, sch *Schema, r *root, q *queue) error {
+ 	sch.DraftVersion = res.dialect.draft.version
+ 
+ 	base := urlPtr{sch.up.url, res.ptr}
++	if _, ok := c.roots.containers[sch.up.url]; ok && res.ptr == "" {
++		// The root of a container is not a schema, so a schema outside
++		// every resource the container embeds is its own resource.
++		base = sch.up
++	}
+ 	sch.resource = c.enqueue(q, base)
+ 
+ 	// if resource, enqueue dynamic anchors for compilation
 diff --git b/numeric_work.go b/numeric_work.go
 new file mode 100644
 index 0000000..ebc671f
@@ -57,10 +115,20 @@ index 0000000..ebc671f
 +	return re.MatchString(value)
 +}
 diff --git a/objcompiler.go b/objcompiler.go
-index d47efa8..741f59c 100644
+index d47efa8..b6b2a9a 100644
 --- a/objcompiler.go
 +++ b/objcompiler.go
-@@ -489,6 +489,7 @@ func (c *objCompiler) numVal(pname string) *big.Rat {
+@@ -434,6 +434,9 @@ func (c *objCompiler) hasVocab(name string) bool {
+ }
+ 
+ func (c *objCompiler) assertFormat(draftVersion int) bool {
++	if c.c.neverFormat {
++		return false
++	}
+ 	if c.c.assertFormat || draftVersion < 2019 {
+ 		return true
+ 	}
+@@ -489,6 +492,7 @@ func (c *objCompiler) numVal(pname string) *big.Rat {
  	}
  	switch v.(type) {
  	case json.Number, float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
@@ -68,6 +136,43 @@ index d47efa8..741f59c 100644
  		if n, ok := new(big.Rat).SetString(fmt.Sprint(v)); ok {
  			return n
  		}
+diff --git a/roots.go b/roots.go
+index a8d0ef0..b83736f 100644
+--- a/roots.go
++++ b/roots.go
+@@ -12,6 +12,7 @@ type roots struct {
+ 	regexpEngine RegexpEngine
+ 	vocabularies map[string]*Vocabulary
+ 	assertVocabs bool
++	containers   map[url]struct{}
+ }
+ 
+ func newRoots() *roots {
+@@ -24,6 +25,7 @@ func newRoots() *roots {
+ 		},
+ 		regexpEngine: goRegexpCompile,
+ 		vocabularies: map[string]*Vocabulary{},
++		containers:   map[url]struct{}{},
+ 	}
+ }
+ 
+@@ -45,6 +47,16 @@ func (rr *roots) addRoot(u url, doc any) (*root, error) {
+ 		resources:           map[jsonPointer]*resource{},
+ 		subschemasProcessed: map[jsonPointer]struct{}{},
+ 	}
++	if _, ok := rr.containers[u]; ok {
++		// The root of a container is not a schema: only its root resource,
++		// the base of every location in it, is known until a location is
++		// compiled or referenced.
++		res := newResource("", u)
++		res.dialect = dialect{rr.defaultDraft, nil}
++		r.resources[""] = res
++		rr.roots[u] = r
++		return r, nil
++	}
+ 	if err := rr.collectResources(r, doc, u, "", dialect{rr.defaultDraft, nil}); err != nil {
+ 		return nil, err
+ 	}
 diff --git a/util.go b/util.go
 index 548dc86..05aa6d0 100644
 --- a/util.go
@@ -98,10 +203,18 @@ index 548dc86..05aa6d0 100644
  		_, _ = h.Write(num.Num().Bytes())
  		_, _ = h.Write(num.Denom().Bytes())
 diff --git a/validator.go b/validator.go
-index 4fa5e76..2988a4d 100644
+index 4fa5e76..46fce0c 100644
 --- a/validator.go
 +++ b/validator.go
-@@ -12,7 +12,8 @@ import (
+@@ -6,13 +6,15 @@ import (
+ 	"math/big"
+ 	"slices"
+ 	"strconv"
+-	"unicode/utf8"
++
++	"github.com/openbindings/openbindings-go/internal/jstring"
+ 
+ 	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema/kind"
  	"golang.org/x/text/message"
  )
  
@@ -111,7 +224,7 @@ index 4fa5e76..2988a4d 100644
  	return sch.validate(v, nil, nil, nil, false, nil)
  }
  
-@@ -252,7 +253,7 @@ func (vd *validator) objValidate(obj map[string]any) {
+@@ -252,7 +254,7 @@ func (vd *validator) objValidate(obj map[string]any) {
  
  		// patternProperties --
  		for regex, sch := range s.PatternProperties {
@@ -120,7 +233,16 @@ index 4fa5e76..2988a4d 100644
  				evaluated = true
  				vd.addErr(vd.validateVal(sch, pvalue, pname))
  			}
-@@ -454,7 +455,7 @@ func (vd *validator) strValidate(str string) {
+@@ -435,7 +437,7 @@ func (vd *validator) strValidate(str string) {
+ 
+ 	strLen := -1
+ 	if s.MinLength != nil || s.MaxLength != nil {
+-		strLen = utf8.RuneCount([]byte(str))
++		strLen = jstring.Length(str)
+ 	}
+ 
+ 	// minLength --
+@@ -454,7 +456,7 @@ func (vd *validator) strValidate(str string) {
  
  	// pattern --
  	if s.Pattern != nil {
@@ -129,7 +251,7 @@ index 4fa5e76..2988a4d 100644
  			vd.addError(&kind.Pattern{Got: str, Want: s.Pattern.String()})
  		}
  	}
-@@ -518,6 +519,7 @@ func (vd *validator) numValidate(v any) {
+@@ -518,6 +520,7 @@ func (vd *validator) numValidate(v any) {
  	var numVal *big.Rat
  	num := func() *big.Rat {
  		if numVal == nil {

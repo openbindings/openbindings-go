@@ -1,10 +1,9 @@
 package invoke
 
-import openbindings "github.com/openbindings/openbindings-go"
-
-// sourceLocation projects an OBI source's optional location onto the
-// binding-invoker contract's source, where an absent location is an empty
-// string, omitted on the wire.
+// sourceLocation projects an OBI source's optional location onto
+// InvocationSource, where an absent location is the empty string. A
+// conformant document never has a present empty location (OBI-D-02), so the
+// projection loses nothing for a document that passed preparation.
 func sourceLocation(location *string) string {
 	if location == nil {
 		return ""
@@ -12,26 +11,12 @@ func sourceLocation(location *string) string {
 	return *location
 }
 
-// contractSelector projects a binding's optional selector onto the
-// binding-invoker contract. Revision 0.1 of that contract requires a selector
-// string, so it cannot carry the absent-selector case the core model keeps
-// distinct (§5.3): an absent selector is sent as "", the same spelling as a
-// present empty selector. A contract revision that makes selector optional
-// removes this projection.
-func contractSelector(selector *string) string {
+// cloneSelector copies a selector's presence and value, so a record handed to
+// a caller never aliases the prepared snapshot.
+func cloneSelector(selector *string) *string {
 	if selector == nil {
-		return ""
+		return nil
 	}
-	return *selector
-}
-
-// samePreparedBinding reports whether two prepared binding descriptors
-// describe the same binding: equal fields, with selectors compared by
-// presence and value rather than by pointer.
-func samePreparedBinding(a, b openbindings.PreparedBindingDescriptor) bool {
-	if (a.Selector == nil) != (b.Selector == nil) || (a.Selector != nil && *a.Selector != *b.Selector) {
-		return false
-	}
-	a.Selector, b.Selector = nil, nil
-	return a == b
+	value := *selector
+	return &value
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -27,7 +28,7 @@ func TestScalarHookDelegationPreservesNativeDecoder(t *testing.T) {
 					dispatches++
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/plain"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 				})})
-				args := &invoke.BindingInvocationArgs{Source: invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI32, Content: jsonvalue.TextContent(artifact)}, Selector: "#/paths/~1scalar/get"}
+				args := &invoke.BindingInvocationArgs{Source: invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI32, Content: jsonvalue.TextContent(artifact)}, Selector: openbindings.Present("#/paths/~1scalar/get")}
 				operation := invoke.NewOperationInvoker(adapter)
 				switch mode {
 				case "empty":

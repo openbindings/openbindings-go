@@ -224,9 +224,17 @@ func TestValidateDocument_ReferencesInsideASchemaResourceAreItsOwn(t *testing.T)
 		{"relative $ref beside the $id", `{"$id":"https://example.com/s/task.json","$ref":"person.json"}`, EvidenceSatisfied},
 		{"relative $ref below the $id", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$ref":"person.json"}}}`, EvidenceSatisfied},
 		{"relative $ref at an OBI position", `{"properties":{"owner":{"$ref":"person.json"}}}`, EvidenceViolated},
-		{"malformed $ref inside a resource", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$ref":"per son.json"}}}`, EvidenceViolated},
-		{"malformed nested $id", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$id":"per son.json"}}}`, EvidenceViolated},
+		// Inside a resource, references and nested $ids resolve per JSON Schema,
+		// exactly as for an externally fetched schema: they are not
+		// OBI-defined references, so OBI-D-05 judges neither form nor
+		// well-formedness there (§7).
+		{"malformed $ref inside a resource", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$ref":"per son.json"}}}`, EvidenceSatisfied},
+		{"malformed nested $id", `{"$id":"https://example.com/s/task.json","properties":{"owner":{"$id":"per son.json"}}}`, EvidenceSatisfied},
+		{"dynamic pair inside a resource", `{"$id":"https://example.com/s/tree.json","$dynamicAnchor":"n","items":{"$dynamicRef":"#n"}}`, EvidenceSatisfied},
 		{"malformed $id at an OBI position", `{"$id":"https://example.com/s/ta sk.json"}`, EvidenceViolated},
+		{"unparseable $id at an OBI position", `{"$id":"https://[::1"}`, EvidenceViolated},
+		{"relative $id at an OBI position", `{"$id":"task.json"}`, EvidenceViolated},
+		{"invalid pointer escape at an OBI position", `{"$ref":"#/$defs/~2","$defs":{"~2":{}}}`, EvidenceViolated},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -309,5 +317,89 @@ func TestPrepareInterface_GatesOnTheDocumentSchema(t *testing.T) {
 	}
 	if _, err := PrepareInterface(iface); err == nil {
 		t.Fatal("PrepareInterface must refuse what Validate establishes as a violation")
+	}
+}
+
+// Every rule is decided on the bytes, whether or not the document model can
+// carry them: a document typed decoding refuses is still judged in full.
+func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
+	iface, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0",
+		"operations":{"a":{"input":null,"description":null}},
+		"sources":{"s":{"bindingSpec":"x@1","location":"./local.json"}},
+		"bindings":{"b":{"operation":"missing","source":"s"}}}`))
+	if iface != nil {
+		t.Fatal("the model cannot carry a null input; no Interface is returned")
+	}
+	for rule, want := range map[string]RuleEvidenceStatus{
+		"OBI-D-02": EvidenceViolated,
+		"OBI-D-05": EvidenceViolated,
+		"OBI-D-08": EvidenceViolated,
+		"OBI-D-12": EvidenceSatisfied,
+		"OBI-D-17": EvidenceViolated,
+		"OBI-D-19": EvidenceSatisfied,
+	} {
+		if got := report.Evidence[rule]; got != want {
+			t.Errorf("%s = %s, want %s", rule, got, want)
+		}
+	}
+}
+
+// A member of the wrong JSON type is OBI-D-02's violation; the rules that
+// needed its contents are inconclusive at its position, and every other
+// position is still judged.
+func TestValidateDocument_WrongTypedMembersLeaveTheirRulesInconclusive(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":5,
+		"transforms":{"t":"$"},"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":"#/transforms/missing"}}}}`)
+	if report.Evidence["OBI-D-02"] != EvidenceViolated {
+		t.Fatalf("OBI-D-02 = %s", report.Evidence["OBI-D-02"])
+	}
+	found := map[string]RuleEvidenceStatus{}
+	for _, finding := range report.Findings {
+		found[finding.Rule+" "+finding.Path] = finding.Status
+	}
+	for key, want := range map[string]RuleEvidenceStatus{
+		"OBI-D-03 /operations":                     EvidenceInconclusive,
+		"OBI-D-08 /bindings/b/operation":           EvidenceInconclusive,
+		"OBI-D-09 /bindings/b/source":              EvidenceViolated,
+		"OBI-D-10 /bindings/b/inputTransform/$ref": EvidenceViolated,
+	} {
+		if got := found[key]; got != want {
+			t.Errorf("%s = %q, want %s; findings %+v", key, got, want, report.Findings)
+		}
+	}
+}
+
+// OBI-T-02 covers every OBI-defined object, the $ref object form of a binding
+// transform included.
+func TestValidateDocument_DiagnosesUnknownMembersOfTransformReferences(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{}},"transforms":{"t":"$"},
+		"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+		"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":"#/transforms/t","bogus":1,"x-kept":2}}}}`)
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Path == "/bindings/b/inputTransform" && strings.Contains(diagnostic.Message, "bogus") && !strings.Contains(diagnostic.Message, "x-kept") {
+			return
+		}
+	}
+	t.Fatalf("no OBI-T-02 diagnostic for the reference object; diagnostics %+v", report.Diagnostics)
+}
+
+// OBI-D-11 follows an absolute reference with a fragment into a resource the
+// document embeds.
+func TestValidateDocument_ExamplesThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0",
+		"schemas":{"T":{"$id":"https://example.com/t","$defs":{"S":{"type":"string"}}}},
+		"operations":{"a":{"input":{"$ref":"https://example.com/t#/$defs/S"},"examples":{"one":{"input":42}}}}}`)
+	if report.Evidence["OBI-D-11"] != EvidenceViolated {
+		t.Fatalf("OBI-D-11 = %s, want violated; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+	}
+}
+
+// A document schema failure on a map key is located at the key.
+func TestValidateDocument_KeyFindingsAreLocatedAtTheKey(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a/b~c":{}}}`)
+	for _, finding := range report.Findings {
+		if finding.Rule == "OBI-D-02" && finding.Path != "/operations/a~1b~0c" {
+			t.Fatalf("OBI-D-02 finding at %q, want the key's pointer", finding.Path)
+		}
 	}
 }

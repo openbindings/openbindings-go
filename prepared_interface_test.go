@@ -43,7 +43,7 @@ func TestPreparedInterfaceContentSnapshotAndIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareInterface: %v", err)
 	}
-	if prepared.SnapshotID() == "" || prepared.Prepared() != prepared {
+	if prepared.SnapshotID() == "" {
 		t.Fatal("expected local correlation and idempotent prepared receiver")
 	}
 	operation, ok := prepared.Operation("send")
