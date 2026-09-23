@@ -56,8 +56,8 @@ each of these observable behaviors:
 | apply OBI-T-17 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
 | source-less scaffold | `SynthesisSkeleton(...)` | `synthesisSkeleton(...)` |
 | shared authoring directives + validation | `FinalizeSynthesis(...)` | `finalizeSynthesis(...)` |
-| exact named dependency lookup | `LookupDependency(...)` | `lookupDependency(...)` |
-| immutable semantic OBI snapshot | `PrepareInterface(...)` | `prepareInterface(...)` |
+| exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
+| immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |
 | generated dependency identity | `DependencySignatures.X` | `DependencySignatures.x` |
 | prepared provider catalog | `PrepareProvider(...)` | `prepareProvider(...)` |
 | application-scoped composition | `NewCompositionSession(...)` | `new CompositionSession(...)` |

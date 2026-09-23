@@ -427,8 +427,7 @@
   optional `Dependencies` map of `DependencyEntry` values. Each entry names an
   exact canonical local operation key and may constrain acceptable exact,
   opaque binding specifications with an unordered non-empty `BindingSpecs`
-  any-of list. `LookupDependency` resolves an exact dependency key and its
-  operation without alias fallback. Lossless JSON, strict unknown-field
+  any-of list. Lossless JSON, strict unknown-field
   validation, the derived schema, and the complete OBI-D-19 Core corpus cover
   the new shape. A dependency is a consumption declaration, not a provider
   address, binding, liveness/readiness claim, or routing policy.
@@ -839,7 +838,9 @@
   package never used it. `SchemaObjectForm` served schema comparison. The
   version-line predicates `IsHigherMajorOrPre1MinorThanMaxTested` and
   `IsLowerThanMinSupported` are private: `IsSupportedVersion` is the
-  OBI-T-04 acceptance predicate. `invoke`, the `sdk` facade, and the README's
+  OBI-T-04 acceptance predicate. `LookupDependency` and
+  `ResolvedDependency` are gone: a dependency is two map lookups,
+  `iface.Dependencies[key]` and then `iface.Operations[dependency.Operation]`. `invoke`, the `sdk` facade, and the README's
   dependency-composition example still use `PrepareInterface` and are
   reconnected separately.
 

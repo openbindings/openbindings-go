@@ -182,16 +182,16 @@ for name, op := range iface.Operations {
 }
 ```
 
-Named dependencies resolve by exact dependency key and exact canonical local
-operation key; dependency keys and local references do not use operation alias
-resolution:
+A dependency names the local operation it consumes by exact key (OBI-D-19);
+dependency keys and their operation references do not use alias resolution:
 
 ```go
-dependency, ok := openbindings.LookupDependency(iface, "customerDelivery")
+dependency, ok := iface.Dependencies["customerDelivery"]
 if !ok {
-    log.Fatal(openbindings.ErrDependencyNotFound)
+    log.Fatal("no dependency named customerDelivery")
 }
-fmt.Println(dependency.OperationKey, dependency.Dependency.BindingSpecs)
+operation := iface.Operations[dependency.Operation]
+fmt.Println(dependency.Operation, dependency.BindingSpecs, openbindings.Value(operation.Description))
 ```
 
 ### Resolve and invoke operations
