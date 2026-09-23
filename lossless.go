@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 
@@ -69,6 +68,7 @@ const (
 	memberRequired                     // a string: required, refuses null
 	memberRaw                          // json.RawMessage: any value, null included
 	memberStrings                      // []string or map[string]string: no null elements
+	memberObjects                      // a map of OBI-defined objects
 	memberInteger                      // *int64: an exact preference-range integer
 	memberTransform                    // TransformOrRef
 )
@@ -85,12 +85,13 @@ type memberTable struct {
 }
 
 var (
-	memberTables      sync.Map // reflect.Type -> *memberTable
-	rawMessageType    = reflect.TypeFor[json.RawMessage]()
-	int64PointerType  = reflect.TypeFor[*int64]()
-	transformType     = reflect.TypeFor[TransformOrRef]()
-	errNotJSONObject  = errors.New("not a JSON object")
-	errNullJSONObject = errors.New("null is not an object")
+	memberTables        sync.Map // reflect.Type -> *memberTable
+	rawMessageType      = reflect.TypeFor[json.RawMessage]()
+	int64PointerType    = reflect.TypeFor[*int64]()
+	transformType       = reflect.TypeFor[TransformOrRef]()
+	verifiedDecoderType = reflect.TypeFor[verifiedDecoder]()
+	errNotJSONObject    = errors.New("not a JSON object")
+	errNullJSONObject   = errors.New("null is not an object")
 )
 
 // membersOf returns the typed members of an OBI-defined object type's
@@ -125,17 +126,40 @@ func classifyMember(t reflect.Type) memberClass {
 		return memberTransform
 	case (t.Kind() == reflect.Slice || t.Kind() == reflect.Map) && t.Elem().Kind() == reflect.String:
 		return memberStrings
+	case t.Kind() == reflect.Map && reflect.PointerTo(t.Elem()).Implements(verifiedDecoderType):
+		return memberObjects
 	default:
 		return memberValue
 	}
 }
 
-// decodeObject decodes the OBI-defined object b into target, replacing its
-// contents. what names the object in errors.
+// verifiedDecoder is an OBI-defined object type, which decodes itself from
+// input verifyExactJSON has accepted.
+type verifiedDecoder interface {
+	decodeVerified(b []byte) error
+}
+
+// decodeExact is every OBI-defined object's UnmarshalJSON: it verifies its
+// input once, then decodes it and every object nested in it.
+func decodeExact(b []byte, what string, target verifiedDecoder) error {
+	if err := verifyExactJSON(b); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return target.decodeVerified(b)
+}
+
+// decodeObject decodes the OBI-defined object b, which verifyExactJSON has
+// accepted, into target, replacing its contents. what names the object in
+// errors. The model retains no part of b: members it carries as raw JSON are
+// copied.
 func decodeObject(b []byte, what string, target losslessObject) error {
-	members, err := exactMembers(b)
+	entries, err := splitObject(b)
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
+	}
+	members := make(map[string]json.RawMessage, len(entries))
+	for _, entry := range entries {
+		members[entry.name] = entry.value
 	}
 	value := reflect.ValueOf(target).Elem()
 	value.SetZero()
@@ -160,12 +184,12 @@ func decodeObject(b []byte, what string, target losslessObject) error {
 			if extensions == nil {
 				extensions = map[string]json.RawMessage{}
 			}
-			extensions[name] = raw
+			extensions[name] = bytes.Clone(raw)
 		default:
 			if unknown == nil {
 				unknown = map[string]json.RawMessage{}
 			}
-			unknown[name] = raw
+			unknown[name] = bytes.Clone(raw)
 		}
 	}
 	target.setLossless(extensions, unknown)
@@ -174,7 +198,7 @@ func decodeObject(b []byte, what string, target losslessObject) error {
 
 func decodeMember(raw json.RawMessage, class memberClass, field reflect.Value) error {
 	if class == memberRaw {
-		field.Set(reflect.ValueOf(raw))
+		field.Set(reflect.ValueOf(json.RawMessage(bytes.Clone(raw))))
 		return nil
 	}
 	if isJSONNull(raw) {
@@ -194,6 +218,21 @@ func decodeMember(raw json.RawMessage, class memberClass, field reflect.Value) e
 			return err
 		}
 		field.Set(reflect.ValueOf(&transform).Elem())
+		return nil
+	case memberObjects:
+		entries, err := splitObject(raw)
+		if err != nil {
+			return err
+		}
+		objects := reflect.MakeMapWithSize(field.Type(), len(entries))
+		for _, entry := range entries {
+			object := reflect.New(field.Type().Elem())
+			if err := object.Interface().(verifiedDecoder).decodeVerified(entry.value); err != nil {
+				return fmt.Errorf("entry %q: %w", entry.name, err)
+			}
+			objects.SetMapIndex(reflect.ValueOf(entry.name), object.Elem())
+		}
+		field.Set(objects)
 		return nil
 	case memberStrings:
 		if err := rejectNullElements(raw); err != nil {
@@ -241,112 +280,6 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 		}
 	}
 	return json.Marshal(members)
-}
-
-// exactMembers splits a JSON object into its members by exact name, refusing
-// input the model's Go values cannot carry exactly.
-func exactMembers(b []byte) (map[string]json.RawMessage, error) {
-	if !utf8.Valid(b) {
-		return nil, errors.New("not valid UTF-8")
-	}
-	if err := rejectDuplicateObjectKeys(b); err != nil {
-		return nil, err
-	}
-	entries, err := splitObject(b)
-	if err != nil {
-		return nil, err
-	}
-	members := make(map[string]json.RawMessage, len(entries))
-	for _, entry := range entries {
-		members[entry.name] = entry.value
-	}
-	return members, nil
-}
-
-type objectEntry struct {
-	name  string
-	value json.RawMessage
-}
-
-// splitObject splits a JSON object into its entries in document order, with a
-// copy of each value's bytes.
-func splitObject(b []byte) ([]objectEntry, error) {
-	if !json.Valid(b) {
-		return nil, errors.New("not valid JSON")
-	}
-	i := skipJSONSpace(b, 0)
-	if b[i] != '{' {
-		if isJSONNull(b) {
-			return nil, errNullJSONObject
-		}
-		return nil, errNotJSONObject
-	}
-	var entries []objectEntry
-	i = skipJSONSpace(b, i+1)
-	for b[i] != '}' {
-		nameEnd := jsonValueEnd(b, i)
-		var name string
-		if err := json.Unmarshal(b[i:nameEnd], &name); err != nil {
-			return nil, err
-		}
-		start := skipJSONSpace(b, skipJSONSpace(b, nameEnd)+1) // past the colon
-		end := jsonValueEnd(b, start)
-		entries = append(entries, objectEntry{
-			name:  name,
-			value: append(json.RawMessage(nil), b[start:end]...),
-		})
-		i = skipJSONSpace(b, end)
-		if b[i] == ',' {
-			i = skipJSONSpace(b, i+1)
-		}
-	}
-	return entries, nil
-}
-
-func skipJSONSpace(b []byte, i int) int {
-	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
-		i++
-	}
-	return i
-}
-
-// jsonValueEnd returns the index just past the JSON value starting at b[i],
-// for b known to be valid JSON.
-func jsonValueEnd(b []byte, i int) int {
-	switch b[i] {
-	case '"':
-		for i++; b[i] != '"'; i++ {
-			if b[i] == '\\' {
-				i++
-			}
-		}
-		return i + 1
-	case '{', '[':
-		depth := 0
-		for ; i < len(b); i++ {
-			switch b[i] {
-			case '"':
-				i = jsonValueEnd(b, i) - 1
-			case '{', '[':
-				depth++
-			case '}', ']':
-				depth--
-				if depth == 0 {
-					return i + 1
-				}
-			}
-		}
-		return i
-	default:
-		for i < len(b) && !strings.ContainsRune(",}] \t\n\r", rune(b[i])) {
-			i++
-		}
-		return i
-	}
-}
-
-func isJSONNull(b []byte) bool {
-	return bytes.Equal(bytes.TrimSpace(b), []byte("null"))
 }
 
 // rejectNullElements refuses a null element in an array or object of

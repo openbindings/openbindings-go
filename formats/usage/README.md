@@ -27,9 +27,11 @@ import (
     openbindings "github.com/openbindings/openbindings-go"
     usage "github.com/openbindings/openbindings-go/formats/usage"
     "github.com/openbindings/openbindings-go/jsonvalue"
+    "github.com/openbindings/openbindings-go/invoke"
+    "github.com/openbindings/openbindings-go/synthesize"
 )
 
-invoker := openbindings.NewOperationInvoker(usage.NewInvoker())
+invoker := invoke.NewOperationInvoker(usage.NewInvoker())
 ```
 
 The invoker and synthesizer claim `openbindings.usage@1` exactly. That binding
@@ -40,16 +42,16 @@ specification pins the incorporated usage interpreter to v3.5.6; an artifact's
 
 ```go
 invoker := usage.NewInvoker()
-call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{
+call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+    Source: invoke.InvocationSource{
         BindingSpec: usage.BindingSpec,
         Location:    "file:///abs/path/mycli.usage.kdl", // or authorized exec:mycli, or inline Content
     },
-    Selector: "config set", // the format's own grammar: a command path; empty = root
+    Selector: openbindings.Present("config set"), // a command path (USAGE-D-03); omit Selector for the root command
 })
 _ = call.Write(ctx, map[string]any{"key": "theme", "value": "dark"})
 _ = call.Close()
-out, err := openbindings.Single(ctx, call.Outputs())
+out, err := invoke.Single(ctx, call.Outputs())
 ```
 
 ### The assumptions (and the hooks that override them)
@@ -62,7 +64,7 @@ The built-in defaults are content-independent — decided by the artifact and th
 | How does stdout decode? | text, trailing newlines stripped (command-substitution semantics) | `OutputDecoder` (e.g. strict JSON for a machine lane) |
 | Which exits are success? | exit 0 | `ResultClassifier` (the diff(1) class: `{0, 1}`) |
 
-Hooks attach at invoker level (`inv.OutputDecoder = ...`) or per invocation (`openbindings.WithOutputDecoder(...)`), decline-chaining per axis. Channel tokens are validated loudly at argv assembly — an unknown token, a second stdin field, or a slot-incompatible route (a boolean flag, a choices-constrained slot without `-`) refuses before the process spawns; a typo can never silently change behavior.
+Hooks attach at invoker level (`inv.OutputDecoder = ...`) or per invocation (`invoke.WithOutputDecoder(...)`), decline-chaining per axis. Channel tokens are validated loudly at argv assembly — an unknown token, a second stdin field, or a slot-incompatible route (a boolean flag, a choices-constrained slot without `-`) refuses before the process spawns; a typo can never silently change behavior.
 
 `HookTable` is the data-shaped form: per-CLI knowledge (`DecodeJSON` op list, `OKExits`, `Routes`) compiled into guarded hooks. Key rows by canonical operation keys — prefer codegen'd signature constants over string literals (a stale literal after a rename silently reverts that op to the floor; constants follow the rename).
 
@@ -95,8 +97,8 @@ The descriptor declares commands, flags, args, choices, and help — a CLI's *su
 
 ```go
 synthesizer := usage.NewSynthesizer()
-iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
-    Sources: []openbindings.SynthesizeSource{{
+iface, err := synthesizer.SynthesizeInterface(ctx, &synthesize.SynthesizeInput{
+    Sources: []synthesize.SynthesizeSource{{
         BindingSpec: usage.BindingSpec,
         Content:     jsonvalue.TextContent(descriptor),
     }},
@@ -281,7 +283,7 @@ avoid propagating invalid or empty command names.
 The captured stdout of one spawned command is one **delivery unit** and is
 consumer-bounded: set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or
 per invocation on `BindingInvocationArgs`); zero selects
-`openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). The artifact-fetch guard
+`invoke.DefaultMaxDeliveryUnitBytes` (10 MiB). The artifact-fetch guard
 on command-produced usage documents and the input-side field-routing cap are
 fixed internal bounds, not abstract delivery units. Process stderr and exit
 facts remain below the invocation boundary.

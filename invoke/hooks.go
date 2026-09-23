@@ -576,6 +576,7 @@ func (a *BindingInvocationArgs) HookSite(target string) InvokeSite {
 	var site InvokeSite
 	if a.Site != nil {
 		site = *a.Site
+		site.Selector = cloneSelector(a.Site.Selector)
 	} else {
 		site.BindingSpec = a.Source.BindingSpec
 		site.Selector = cloneSelector(a.Selector)

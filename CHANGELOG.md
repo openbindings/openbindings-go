@@ -42,11 +42,25 @@
   unknown members acted as schema keywords: a root `$defs` supplied embedded
   resources, and a root `"type": 5` made every operation's graph
   unavailable (OBI-T-02, §7). The root is now a container whose locations
-  become schemas only when an operation schema reaches them. A same-document
-  pointer into the interior of an embedded `$id` resource resolves the
-  references there against that resource's base. Two schemas declaring one
-  `$id` leave the graph unavailable instead of one silently winning. The
-  backend carries these as recorded patches (`patches/README.md`).
+  become schemas only when an operation schema reaches them. Every resource
+  the document embeds by `$id`, nested ones included, resolves by it, and
+  sets the base of the locations inside it, so a same-document pointer into
+  a resource's interior resolves the references there against that
+  resource. An `$id` that names no one embedded schema (two schemas declare
+  it, or it is the document's own URI or a meta-schema's) leaves only the
+  graphs that reach it unavailable. The backend carries these as recorded
+  patches (`patches/README.md`).
+- **Operation-contract validation needs the whole graph** (§5.2, OBI-T-16).
+  The backend skips subschemas it decides never apply, such as `then`
+  under `if: false`, so an external reference there did not prevent
+  success. `CompileOperationSchema`, `ValidateOperationInput`, and
+  `ValidateOperationOutput` now establish that the statically reachable
+  graph is complete first: nothing outside the document but a built-in
+  meta-schema, every reference resolvable, and every schema well-formed
+  (the 2020-12 meta-schemas, no other `$schema`, no `$vocabulary`). An
+  unreferenced definition stays outside the graph. A reference cycle that
+  never advances is unavailable, not a mismatch. They refuse an unsupported
+  version (OBI-T-04) and resolve an operation by key or alias (OBI-T-12).
 - **`format` never asserts at an operation boundary** (§5.2, OBI-T-16). The
   backend asserted it under the draft-04, draft-06, and draft-07 dialects,
   which a reference to their built-in meta-schema reaches.
@@ -55,25 +69,44 @@
   remaining rule inconclusive, OBI-D-02 and OBI-D-12 included although both
   were decided, and missed violations it could establish, such as an
   OBI-D-17 `"input": null` or an OBI-D-08 dangling operation. Every rule now
-  judges the document's JSON. A member of the wrong JSON type is OBI-D-02's
-  violation, and the rules that needed its contents are inconclusive at its
-  position; every other position is still judged. `Interface.Validate` and
-  `PrepareInterface` judge the encoding of the host object the same way.
+  judges the document's JSON, literally on the values present: a value
+  that fails a rule's predicate violates it (an operation reference that is
+  a number names no operation key), and one outside the rule's domain gives
+  it nothing to judge. `Interface.Validate` and `PrepareInterface` judge the
+  encoding of the host object the same way. A resource limit met while
+  checking a rule leaves it inconclusive, never violated (§10.5).
+- **OBI-D-05 follows RFC 3986's grammar.** A character screen plus `net/url`
+  passed `#/a[0]` and a second `#` in a fragment, and refused a
+  percent-encoded host. A URI-form reference is now checked against the
+  URI-reference grammar; an empty location is relative in form. The
+  named-transform `$ref` clause is now checked. `dependencies` subschemas,
+  which the 2020-12 meta-schema describes and the backend applies, are
+  walked like `definitions`.
+- **OBI-D-16 covers absolute references into embedded resources.** An
+  absolute `$ref` matching an embedded schema's `$id` is in the rule's
+  scope; one that does not resolve within that resource was reported
+  conformant.
+- **An oversized version is refused.** A version whose numbers exceed a
+  machine integer failed to parse and was interpreted under 0.2 rules;
+  SemVer bounds no number, so versions now compare exactly at any size. The
+  version is read and refused before OBI-D-01 judges the bytes, whenever a
+  JSON decoder can read it (§10.1).
 - **OBI-D-11 follows a fragment into an embedded resource.** An example
   behind `https://example.com/t#/$defs/S`, into a schema the document embeds
-  by that `$id`, was left unchecked; it is now validated.
+  by that `$id`, was left unchecked; it is now validated, as is one behind a
+  plain-name anchor.
 - **OBI-T-02 diagnoses the transform `$ref` object.** Its unknown members
   are now reported like those of every other OBI-defined object.
 - **A document schema finding about a map key is located at the key**, not
-  at the whole document.
+  at the whole document. The backend reused the location's storage, so the
+  location it reported for such a key was overwritten by later members.
 - **A present empty `selector` no longer runs a Usage root command.** An
   absent selector addresses the root command and USAGE-D-03 refuses `""`,
   but invocation received both as `""` and ran the root.
 - **Synthesized documents state no empty optional collection.** The exact
   model made synthesizers emit the empty `bindings` and `dependencies` maps
   their skeletons start with; `synthesize.FinalizeSynthesis` now omits empty
-  optional collections, keeping an empty dependency `bindingSpecs`, which
-  accepts no binding family.
+  optional collections. A dependency's `bindingSpecs` is left as authored.
 
 - **`canonicaljson` refuses numbers it cannot carry exactly.** A JSON number
   whose exact value is not representable in IEEE 754 binary64 (for example
@@ -155,7 +188,7 @@
   exact name, and a case variant is an unknown member. A document the model
   cannot carry exactly fails decoding instead of being altered: invalid
   UTF-8, a duplicate member name, JSON null where null is not a value
-  (members, map entries, and array elements), a missing required string
+  (members, map entries other than `schemas`, and array elements), a missing required string
   member, or a preference that is not an integer number in range (`"7"` is
   not). A typed field alone states its member: an `Unknown` or `Extensions`
   entry of the same name is never encoded. `ValidateDocument` still judges
@@ -165,12 +198,16 @@
   `invoke.BindingInvocationArgs.Selector`, `InvokeSite.Selector`, and the
   realization records' `Selector` are `*string`, nil when the binding has no
   selector, and each format invoker applies its binding specification's
-  rule for both cases. The binding-invoker (0.1) contract requires a
-  selector string, so a transport carrying these arguments over it sends an
-  absent selector as `""`. The interface-synthesizer (0.2) coverage and
-  source-inspector (0.1) target records require one too;
+  rule for both cases. The JSON encoding of `BindingInvocationArgs` is the
+  binding-invoker (0.1) contract's input, which requires a selector string,
+  so it writes an absent selector as `""`. The interface-synthesizer (0.2)
+  coverage and source-inspector (0.1) target records require one too;
   `synthesize.ContractSelector` is that projection. `BindingInvocationArgs`
   gains `HookSite`, the consultation site the format invokers each built.
+  `PreparedDependencyDescriptor.BindingSpecsPresent` is gone: a present
+  `bindingSpecs` holds at least one identifier (§5.6), so nil is absence.
+  `httpdiscovery.VersionRefusalError` is gone: discovery reports a refused
+  version with the core's `*openbindings.VersionRefusalError`.
 
 - **Finding and diagnostic paths are JSON Pointers** (breaking, pre-1.0).
   `Finding.Path` and `Diagnostic.Path` are RFC 6901 pointers into the
@@ -193,11 +230,18 @@
   `CompileOperationSchema` now return a plain error when there is nothing to
   validate against (no such operation, or no schema at that position),
   distinct from `*SchemaGraphUnavailableError`. `SchemaValidationError`
-  exposes its `Problems` and `Cause`.
-- **Root exports without a Core role are gone** (breaking, pre-1.0).
+  exposes its `Problems`, each a `SchemaProblem` with the JSON Pointer path
+  into the value and the message, and its `Cause`.
+- **Some root exports without a Core role are gone** (breaking, pre-1.0).
   `FormatValidationErrors` had no callers; `IsOBInterface`, a shape probe
-  for fetched responses, is now private to retrieval and discovery; and
-  `PreparedInterface.Prepared` returned its receiver.
+  for fetched responses, is now `acquire.LooksLikeOBI`, beside the
+  retrieval it serves;
+  `PreparedInterface.Prepared` returned its receiver;
+  `synthesize.RepresentedCoverageEntries` had no callers and wrote an
+  absent selector as an empty `sourceRef`, which the interface-synthesizer
+  contract refuses; and
+  `IsUnsupportedPrerelease`, one step of the OBI-T-04 refusal, is private,
+  `IsSupportedVersion` being the refusal's oracle.
 
 - **Non-Core helpers moved out of the Go root package.** Binding
   implementation support types and exact-match checking moved to

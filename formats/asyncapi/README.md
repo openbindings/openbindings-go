@@ -25,7 +25,7 @@ go get github.com/openbindings/openbindings-go/formats/asyncapi
 ```
 
 ```go
-opInv := openbindings.NewOperationInvoker(asyncapi.NewInvoker())
+opInv := invoke.NewOperationInvoker(asyncapi.NewInvoker())
 ```
 
 The candidate accepts exact AsyncAPI editions 2.0.0–2.6.0, 3.0.0, and 3.1.0.
@@ -48,12 +48,12 @@ application: the invocation acts as its counterparty.
 invoker := asyncapi.NewInvoker()
 defer invoker.Close()
 
-call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{
+call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+    Source: invoke.InvocationSource{
         BindingSpec: "openbindings.asyncapi@1",
         Location:    "https://api.example.com/asyncapi.yaml",
     },
-    Selector: "#/operations/receiveOrder",
+    Selector: openbindings.Present("#/operations/receiveOrder"),
     Context: map[string]any{"bearerToken": "tok_123"},
 })
 
@@ -103,8 +103,8 @@ standalone-runtime exclusions.
 
 ```go
 result, err := asyncapi.NewSynthesizer().SynthesizeInterfaceWithCoverage(ctx,
-    &openbindings.SynthesizeInput{
-        Sources: []openbindings.SynthesizeSource{{
+    &synthesize.SynthesizeInput{
+        Sources: []synthesize.SynthesizeSource{{
             BindingSpec: "openbindings.asyncapi@1",
             Location:    "https://api.example.com/asyncapi.yaml",
         }},

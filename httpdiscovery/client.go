@@ -29,14 +29,6 @@ func (e *GatedError) Error() string {
 	return fmt.Sprintf("http discovery: gated (HTTP %d)", e.StatusCode)
 }
 
-// VersionRefusalError reports a published document whose declared Core version
-// this SDK refuses to process. It is distinct from an absent interface.
-type VersionRefusalError struct{ Version string }
-
-func (e *VersionRefusalError) Error() string {
-	return fmt.Sprintf("http discovery: published interface declares unsupported version %q", e.Version)
-}
-
 // StatusError reports an HTTP response other than 200, 401, 403, or 404.
 type StatusError struct{ StatusCode int }
 
@@ -142,10 +134,9 @@ func Discover(ctx context.Context, origin string, opts ...Option) (*openbindings
 	if !obishape.LooksLikeOBI(raw) {
 		return nil, false, fmt.Errorf("http discovery: response is not an OBI document")
 	}
-	version := raw["openbindings"].(string) // LooksLikeOBI checked this type.
-	if supported, err := openbindings.IsSupportedVersion(version); err == nil && !supported {
-		return nil, false, &VersionRefusalError{Version: version}
-	}
+	// A published document declaring an unsupported version is refused with
+	// the core's *openbindings.VersionRefusalError (OBI-T-04), which the
+	// returned error wraps; it is distinct from an absent interface.
 	iface, err := openbindings.ParseDocument(body)
 	if err != nil {
 		return nil, false, fmt.Errorf("http discovery: OBI response: %w", err)

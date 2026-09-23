@@ -71,8 +71,9 @@ func SynthesisSkeleton(in *SynthesizeInput) (openbindings.Interface, error) {
 // The emitted document states no empty optional collection: an empty
 // schemas, dependencies, bindings, or transforms map, or an operation's empty
 // tags, aliases, or examples, says nothing its absence does not, so it is
-// omitted. A dependency's bindingSpecs is kept even when empty, because an
-// empty allow-list accepts no binding family, which absence does not mean.
+// omitted. A dependency's bindingSpecs is left as authored: omitting an empty
+// one would turn a non-conformant list (§5.6 requires at least one
+// identifier), which validation reports, into an unconstrained dependency.
 func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defaultSourceName, bindingSpec string) error {
 	if iface == nil || in == nil || len(in.Sources) != 1 {
 		return fmt.Errorf("finalize synthesis requires one source and one interface")

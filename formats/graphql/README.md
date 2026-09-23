@@ -16,7 +16,7 @@ go get github.com/openbindings/openbindings-go/formats/graphql
 ```
 
 ```go
-invoker := openbindings.NewOperationInvoker(graphqlbinding.NewInvoker())
+invoker := invoke.NewOperationInvoker(graphqlbinding.NewInvoker())
 ```
 
 ## Invoke
@@ -26,12 +26,12 @@ Every invocation needs the exact executable GraphQL document at
 
 ```go
 call := graphqlbinding.NewInvoker().InvokeBinding(ctx,
-    &openbindings.BindingInvocationArgs{
-        Source: openbindings.InvocationSource{
+    &invoke.BindingInvocationArgs{
+        Source: invoke.InvocationSource{
             BindingSpec: graphqlbinding.BindingSpec,
             Location:    "https://api.example.com/graphql",
         },
-        Selector: "query/viewer",
+        Selector: openbindings.Present("query/viewer"),
         InputSchema: map[string]any{"type": "object"},
         Context: map[string]any{
             "configuration": map[string]any{
@@ -44,7 +44,7 @@ call := graphqlbinding.NewInvoker().InvokeBinding(ctx,
     })
 
 _ = call.Write(ctx, map[string]any{"id": "user_1"})
-viewer, err := openbindings.Single(ctx, call.Outputs())
+viewer, err := invoke.Single(ctx, call.Outputs())
 ```
 
 The optional caller input becomes the GraphQL variables map wholesale. The

@@ -218,7 +218,7 @@ func (p *PreparedProvider) Realization(bindingKey string) (ProviderRealizationDe
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	descriptor, ok := p.descriptors[bindingKey]
-	return descriptor, ok
+	return descriptor.copy(), ok
 }
 
 // RealizationsForOperation returns binding-key ordered descriptor copies.
@@ -229,7 +229,17 @@ func (p *PreparedProvider) RealizationsForOperation(operationIdentifier string) 
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return append([]ProviderRealizationDescriptor(nil), p.byOperation[op.CanonicalKey]...)
+	descriptors := make([]ProviderRealizationDescriptor, len(p.byOperation[op.CanonicalKey]))
+	for i, descriptor := range p.byOperation[op.CanonicalKey] {
+		descriptors[i] = descriptor.copy()
+	}
+	return descriptors
+}
+
+// copy returns a descriptor that shares no storage with the catalog's.
+func (d ProviderRealizationDescriptor) copy() ProviderRealizationDescriptor {
+	d.Selector = cloneSelector(d.Selector)
+	return d
 }
 
 // CloseRealization performs deterministic closure once and no live preflight.
@@ -292,7 +302,7 @@ func (p *PreparedProvider) CloseRealization(ctx context.Context, bindingKey stri
 			BindingKey:          descriptor.BindingKey,
 			SourceKey:           descriptor.SourceKey,
 			BindingSpec:         descriptor.BindingSpec,
-			Selector:            descriptor.Selector,
+			Selector:            cloneSelector(descriptor.Selector),
 			provider:            p,
 			behavior:            behavior,
 		}

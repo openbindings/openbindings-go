@@ -3,10 +3,13 @@ package openbindings
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
 
 // documentSchemas is what an OBI document holds as schemas (§5.2, §7): the
@@ -14,28 +17,26 @@ import (
 // reference from one, and every schema resource they embed by $id. The rest
 // of the document is not a schema, whatever its members are named.
 type documentSchemas struct {
-	// locations are the JSON Pointers of the schema positions and of the
-	// same-document reference targets, sorted.
-	locations []string
 	// resources maps the absolute URI of every embedded schema resource,
 	// without fragment, to where it is.
 	resources map[string]schemaResource
-	// conflict states why the embedded resources are ambiguous: two
-	// locations declare one $id. It is empty when they are not.
-	conflict string
+	// ambiguous maps an absolute URI that some schema declares as its $id but
+	// that names no one resource to why: more than one schema declares it, or
+	// it is a URI the SDK itself resolves (the document's own, or a built-in
+	// meta-schema's). Such a URI is in no graph's reach.
+	ambiguous map[string]string
 }
 
 type schemaResource struct {
 	location string
 	schema   map[string]any
-	// outermost is true when no other embedded resource encloses this one.
-	outermost bool
 }
 
 // collectDocumentSchemas walks the schema positions of a document's generic
 // view, following same-document references from them.
 func collectDocumentSchemas(view any) documentSchemas {
 	d := documentSchemas{resources: map[string]schemaResource{}}
+	claims := map[string][]string{}
 	visited := map[string]bool{}
 	var walk func(node any, tokens []string, base *url.URL)
 	visit := func(tokens []string) {
@@ -44,7 +45,6 @@ func collectDocumentSchemas(view any) documentSchemas {
 			return
 		}
 		visited[location] = true
-		d.locations = append(d.locations, location)
 		target, base, ok := descend(view, nil, atDocument, tokens)
 		if ok {
 			walk(target, tokens, base)
@@ -58,10 +58,9 @@ func collectDocumentSchemas(view any) documentSchemas {
 		if id, declared := resourceID(object, base); declared {
 			location := jsonpointer.Format(tokens...)
 			key := id.String()
-			if existing, seen := d.resources[key]; seen && existing.location != location && d.conflict == "" {
-				d.conflict = fmt.Sprintf("the schemas at %q and %q both declare $id %q", existing.location, location, key)
-			} else if !seen {
-				d.resources[key] = schemaResource{location: location, schema: object, outermost: base == nil}
+			if !slices.Contains(claims[key], location) {
+				claims[key] = append(claims[key], location)
+				d.resources[key] = schemaResource{location: location, schema: object}
 			}
 			base = id
 		}
@@ -91,7 +90,25 @@ func collectDocumentSchemas(view any) documentSchemas {
 			}
 		}
 	}
-	sort.Strings(d.locations)
+	for id, locations := range claims {
+		sort.Strings(locations)
+		why := ""
+		switch {
+		case len(locations) > 1:
+			why = fmt.Sprintf("the schemas at %s all declare it", strings.Join(locations, ", "))
+		case id == documentURL:
+			why = "it is the URI the SDK gives the document itself"
+		case strings.HasPrefix(id, "http://json-schema.org/") || strings.HasPrefix(id, "https://json-schema.org/"):
+			why = "it is a JSON Schema meta-schema's URI, which resolves to the built-in meta-schema"
+		default:
+			continue
+		}
+		if d.ambiguous == nil {
+			d.ambiguous = map[string]string{}
+		}
+		d.ambiguous[id] = why
+		delete(d.resources, id)
+	}
 	return d
 }
 
@@ -118,11 +135,25 @@ func resourceID(object map[string]any, base *url.URL) (id *url.URL, declared boo
 }
 
 // forEachSubschema calls fn for every direct subschema of a schema object, as
-// JSON Schema 2020-12's applicator keywords define them, with the reference
-// tokens that reach it from the object.
+// JSON Schema 2020-12 defines them, with the reference tokens that reach it
+// from the object: the applicators' subschemas and the definitions in $defs.
 func forEachSubschema(object map[string]any, fn func(child any, tokens ...string)) {
+	forEachSubschemaOf(object, true, fn)
+}
+
+// forEachAppliedSubschema calls fn for every direct subschema that
+// evaluating the object applies: every subschema but a definition, which
+// applies only through a reference to it.
+func forEachAppliedSubschema(object map[string]any, fn func(child any, tokens ...string)) {
+	forEachSubschemaOf(object, false, fn)
+}
+
+func forEachSubschemaOf(object map[string]any, definitions bool, fn func(child any, tokens ...string)) {
 	for _, keyword := range sortedKeys(object) {
 		value := object[keyword]
+		if !definitions && definitionKeywords[keyword] {
+			continue
+		}
 		switch {
 		case schemaMapKeywords[keyword]:
 			entries, _ := value.(map[string]any)
@@ -139,6 +170,10 @@ func forEachSubschema(object map[string]any, fn func(child any, tokens ...string
 		}
 	}
 }
+
+// definitionKeywords hold schemas that apply only when a reference reaches
+// them (T16-S-04 of the core conformance corpus).
+var definitionKeywords = map[string]bool{"$defs": true, "definitions": true}
 
 // pathPosition is what the value reached along a reference path is: part of
 // the document's structure, a schema, a map or array of schemas, or anything
@@ -212,43 +247,98 @@ func descend(node any, base *url.URL, position pathPosition, tokens []string) (a
 	return node, base, true
 }
 
-type graphLocality int
+// schemaGraph is what a static walk of the schema graph reachable from one
+// schema of a document established. The graph is what evaluating the schema
+// applies: its applied subschemas and the targets of its references,
+// transitively; a definition in $defs belongs to it only when a reference
+// reaches it (§5.2, OBI-T-16). Each field is empty when the walk found none.
+type schemaGraph struct {
+	// external is a resource the graph reaches that the document does not
+	// embed and that is not available locally.
+	external string
+	// builtIn is a JSON Schema meta-schema the graph reaches. It is outside
+	// the document but always available: the SDK carries it.
+	builtIn string
+	// unresolved states a reference the walk could not follow: a pointer or
+	// anchor that does not resolve, or a $id two schemas declare.
+	unresolved string
+	// illFormed states a schema in the graph that §5.2's constraints exclude:
+	// a $schema other than 2020-12, or a $vocabulary.
+	illFormed string
+}
 
-const (
-	graphWithinDocument graphLocality = iota
-	graphUndecided
-	graphReachesExternal
-)
+// complete reports whether the graph is available and well-formed as far as
+// a static walk can tell: it reaches nothing outside the document, every
+// reference resolves, and every schema keeps §5.2's dialect constraints.
+func (g schemaGraph) complete() bool {
+	return g.external == "" && g.unresolved == "" && g.illFormed == ""
+}
 
-// schemaGraphLocality decides whether the schema graph statically reachable
-// from the schema at a location of the document resolves entirely within the
-// document (OBI-D-11's scope).
-//
-// It follows same-document references from the document root, and absolute
-// references into the schema resources the document embeds, fragments
-// included. An absolute reference to anything else reaches an external
-// resource. A reference this walk cannot follow (a plain-name fragment, a
-// pointer that does not resolve, a resource $id two schemas declare) leaves
-// the reach undecided rather than guessed. Reaching an external resource
-// dominates: such a graph is outside the rule whatever else it holds.
-func schemaGraphLocality(view any, tokens []string, schemas documentSchemas) graphLocality {
-	result := graphWithinDocument
-	undecided := func() {
-		if result == graphWithinDocument {
-			result = graphUndecided
-		}
+// problem states why the graph is not complete.
+func (g schemaGraph) problem() string {
+	switch {
+	case g.external != "":
+		return fmt.Sprintf("the schema graph reaches %s, which the document does not embed", g.external)
+	case g.unresolved != "":
+		return "the schema graph is not fully resolvable: " + g.unresolved
+	case g.illFormed != "":
+		return "the schema graph is not well-formed: " + g.illFormed
 	}
-	if schemas.conflict != "" {
-		undecided()
+	return ""
+}
+
+// analyzeSchemaGraph walks the schema graph reachable from the schema at a
+// location of the document. It follows same-document references from the
+// document root, and absolute references into the schema resources the
+// document embeds, with a JSON Pointer or plain-name fragment.
+func analyzeSchemaGraph(view any, tokens []string, schemas documentSchemas) schemaGraph {
+	var graph schemaGraph
+	unresolved := func(format string, args ...any) {
+		if graph.unresolved == "" {
+			graph.unresolved = fmt.Sprintf(format, args...)
+		}
 	}
 	visited := map[string]bool{}
 	var walk func(node any, base *url.URL)
+	// enter walks a schema the graph reaches as a whole, the schema it starts
+	// from or a reference's target, after checking it well-formed against the
+	// 2020-12 meta-schemas (§5.2).
+	enter := func(node any, base *url.URL) {
+		if base != nil && schemas.ambiguous[base.String()] != "" {
+			unresolved("a schema in the graph lies inside %s, which names no one embedded schema: %s", base, schemas.ambiguous[base.String()])
+			return
+		}
+		switch node.(type) {
+		case bool:
+		case map[string]any:
+			if err := compiledMetaSchema.Validate(node); err != nil && graph.illFormed == "" {
+				if problems, mismatch := schemacompiler.Outcome(err); mismatch {
+					graph.illFormed = "a schema in it does not validate against the 2020-12 meta-schemas: " + problems[0].Line()
+				} else {
+					unresolved("a schema in it could not be checked against the meta-schemas: %v", err)
+				}
+			}
+		default:
+			if graph.illFormed == "" {
+				graph.illFormed = fmt.Sprintf("a reference reaches a %s, which is not a schema", jsonTypeName(node))
+			}
+		}
+		walk(node, base)
+	}
 	follow := func(ref string, base *url.URL) {
 		if base == nil && strings.HasPrefix(ref, "#") {
-			pointer := ref[1:]
+			// URI semantics decode the fragment before it is read as a JSON
+			// Pointer (RFC 6901 §6); a percent-encoded one is OBI-D-05's
+			// violation, not an unresolvable reference.
+			parsed, err := url.Parse(ref)
+			if err != nil {
+				unresolved("%q is not a URI reference", ref)
+				return
+			}
+			pointer := parsed.Fragment
 			refTokens, ok := jsonpointer.Parse(pointer)
 			if !ok {
-				undecided()
+				unresolved("%q is not a JSON Pointer fragment", ref)
 				return
 			}
 			if visited["#"+pointer] {
@@ -257,79 +347,151 @@ func schemaGraphLocality(view any, tokens []string, schemas documentSchemas) gra
 			visited["#"+pointer] = true
 			target, targetBase, ok := descend(view, nil, atDocument, refTokens)
 			if !ok {
-				undecided()
+				unresolved("%q does not resolve within the document", ref)
 				return
 			}
-			walk(target, targetBase)
+			enter(target, targetBase)
 			return
 		}
 		parsed, err := url.Parse(ref)
 		if err != nil {
-			undecided()
+			unresolved("%q is not a URI reference", ref)
 			return
 		}
 		if base != nil {
 			parsed = base.ResolveReference(parsed)
 		}
 		if !parsed.IsAbs() {
-			undecided()
+			unresolved("%q has no base to resolve against", ref)
 			return
 		}
 		fragment := parsed.Fragment
 		parsed.Fragment, parsed.RawFragment = "", ""
-		resource, embedded := schemas.resources[parsed.String()]
+		id := parsed.String()
+		if why := schemas.ambiguous[id]; why != "" {
+			unresolved("%s names no one embedded schema: %s", id, why)
+			return
+		}
+		resource, embedded := schemas.resources[id]
 		if !embedded {
-			result = graphReachesExternal
+			switch {
+			case isBuiltInMetaSchema(id):
+				if graph.builtIn == "" {
+					graph.builtIn = id
+				}
+			case graph.external == "":
+				graph.external = id
+			}
 			return
 		}
-		key := parsed.String() + "#" + fragment
-		if visited[key] {
+		if visited[id+"#"+fragment] {
 			return
 		}
-		visited[key] = true
-		switch {
-		case fragment == "":
-			walk(resource.schema, parsed)
-		case strings.HasPrefix(fragment, "/"):
-			fragmentTokens, ok := jsonpointer.Parse(fragment)
-			if !ok {
-				undecided()
-				return
-			}
-			target, targetBase, ok := descend(resource.schema, parsed, atSchema, fragmentTokens)
-			if !ok {
-				undecided()
-				return
-			}
-			walk(target, targetBase)
-		default:
-			undecided() // a plain-name fragment names an anchor
+		visited[id+"#"+fragment] = true
+		target, targetBase, ok := resolveInResource(resource.schema, parsed, fragment)
+		if !ok {
+			unresolved("%q does not resolve within the resource %s", ref, id)
+			return
 		}
+		enter(target, targetBase)
 	}
 	walk = func(node any, base *url.URL) {
-		if result == graphReachesExternal {
-			return
-		}
 		object, ok := node.(map[string]any)
 		if !ok {
 			return
 		}
 		if id, declared := resourceID(object, base); declared {
+			if why := schemas.ambiguous[id.String()]; why != "" {
+				unresolved("%s names no one embedded schema: %s", id, why)
+			}
 			base = id
+		}
+		if dialect, present := object["$schema"]; present && dialect != draft202012URI && graph.illFormed == "" {
+			graph.illFormed = fmt.Sprintf("a schema declares $schema %v, not %s", dialect, draft202012URI)
+		}
+		if _, present := object["$vocabulary"]; present && graph.illFormed == "" {
+			graph.illFormed = "a schema declares $vocabulary"
 		}
 		for _, keyword := range []string{"$ref", "$dynamicRef"} {
 			if ref, ok := object[keyword].(string); ok {
 				follow(ref, base)
 			}
 		}
-		forEachSubschema(object, func(child any, _ ...string) {
+		forEachAppliedSubschema(object, func(child any, _ ...string) {
 			walk(child, base)
 		})
 	}
 	start, base, ok := descend(view, nil, atDocument, tokens)
 	if !ok {
-		return graphUndecided
+		unresolved("%q is not a location in the document", jsonpointer.Format(tokens...))
+		return graph
 	}
-	walk(start, base)
-	return result
+	enter(start, base)
+	return graph
+}
+
+// builtInMetaSchemas remembers which URIs name a meta-schema the schema
+// backend carries.
+var builtInMetaSchemas sync.Map // string -> bool
+
+// isBuiltInMetaSchema reports whether id names a JSON Schema meta-schema the
+// SDK carries, which resolves without obtaining anything.
+func isBuiltInMetaSchema(id string) bool {
+	if !strings.HasPrefix(id, "http://json-schema.org/") && !strings.HasPrefix(id, "https://json-schema.org/") {
+		return false
+	}
+	if known, ok := builtInMetaSchemas.Load(id); ok {
+		return known.(bool)
+	}
+	_, err := schemacompiler.New().Compile(id)
+	builtInMetaSchemas.Store(id, err == nil)
+	return err == nil
+}
+
+// resolveInResource resolves a fragment within an embedded resource whose
+// absolute URI is base: the resource itself, a JSON Pointer from it, or a
+// plain-name anchor it declares.
+func resolveInResource(resource map[string]any, base *url.URL, fragment string) (any, *url.URL, bool) {
+	switch {
+	case fragment == "":
+		return resource, base, true
+	case strings.HasPrefix(fragment, "/"):
+		tokens, ok := jsonpointer.Parse(fragment)
+		if !ok {
+			return nil, nil, false
+		}
+		return descend(resource, base, atSchema, tokens)
+	default:
+		target, ok := findAnchor(resource, fragment)
+		return target, base, ok
+	}
+}
+
+// findAnchor returns the schema in a resource that declares a plain-name
+// anchor, by $anchor or $dynamicAnchor. The search does not enter a nested
+// resource, whose anchors are its own. ok is false when no schema, or more
+// than one, declares it.
+func findAnchor(resource map[string]any, name string) (target any, ok bool) {
+	var found []any
+	var search func(node any, root bool)
+	search = func(node any, root bool) {
+		object, isObject := node.(map[string]any)
+		if !isObject {
+			return
+		}
+		if _, nested := object["$id"].(string); nested && !root {
+			return
+		}
+		if object["$anchor"] == name || object["$dynamicAnchor"] == name {
+			found = append(found, object)
+		}
+		forEachSubschema(object, func(child any, _ ...string) {
+			search(child, false)
+		})
+	}
+	search(resource, true)
+	if len(found) != 1 {
+		return nil, false
+	}
+	return found[0], true
 }

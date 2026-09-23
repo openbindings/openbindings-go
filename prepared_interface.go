@@ -21,13 +21,13 @@ type PreparedOperationDescriptor struct {
 }
 
 // PreparedDependencyDescriptor is one named consumption point resolved to its
-// exact local operation. BindingSpecsPresent distinguishes an absent allow-list
-// from an explicitly authored empty list.
+// exact local operation. BindingSpecs is nil when the dependency has no
+// bindingSpecs member, and leaves it unconstrained by binding family; a
+// present one holds at least one identifier (§5.6).
 type PreparedDependencyDescriptor struct {
-	Key                 string
-	OperationKey        string
-	BindingSpecs        []string
-	BindingSpecsPresent bool
+	Key          string
+	OperationKey string
+	BindingSpecs []string
 }
 
 // PreparedBindingDescriptor is the SDK-derived identity of one concrete OBI
@@ -143,10 +143,9 @@ func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 	for _, key := range sortedDependencyKeys(snapshot.Dependencies) {
 		dependency := snapshot.Dependencies[key]
 		dependencies[key] = PreparedDependencyDescriptor{
-			Key:                 key,
-			OperationKey:        dependency.Operation,
-			BindingSpecs:        append([]string(nil), dependency.BindingSpecs...),
-			BindingSpecsPresent: dependency.BindingSpecs != nil,
+			Key:          key,
+			OperationKey: dependency.Operation,
+			BindingSpecs: append([]string(nil), dependency.BindingSpecs...),
 		}
 	}
 
@@ -288,8 +287,9 @@ func (p *PreparedInterface) BindingKeys() []string {
 	return keys
 }
 
-// SchemaValidator compiles one operation boundary at most once. found is
-// false for an unknown operation or absent/null schema.
+// SchemaValidator compiles one operation boundary at most once, as
+// CompileOperationSchema does. found is false for an unknown operation or an
+// operation that specifies no schema at that position.
 func (p *PreparedInterface) SchemaValidator(operationIdentifier, position string) (validator *CompiledSchema, found bool, err error) {
 	if p == nil || p.state == nil {
 		return nil, false, fmt.Errorf("openbindings: prepared interface is required")
@@ -321,9 +321,9 @@ func (p *PreparedInterface) SchemaValidator(operationIdentifier, position string
 		schemas := collectDocumentSchemas(p.state.view)
 		p.state.schemas = &schemas
 	}
-	validator, err = compileDocumentSchema(p.state.view, *p.state.schemas, "operations", key, position)
+	validator, err = compileOperationContract(p.state.view, *p.state.schemas, key, position)
 	if err != nil {
-		return nil, false, &SchemaGraphUnavailableError{Cause: err}
+		return nil, false, err
 	}
 	p.state.validators[cacheKey] = validator
 	return validator, true, nil

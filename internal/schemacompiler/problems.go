@@ -32,6 +32,31 @@ func (p Problem) Line() string {
 // LocalizedString(*message.Printer) rather than String().
 var kindPrinter = message.NewPrinter(language.English)
 
+// Outcome classifies a backend validation error. mismatch is true for an
+// established mismatch between value and schema, with its problems. It is
+// false for anything that reached no verdict: an error that is not a
+// validation result, or a reference cycle that never advances, which leaves
+// the schema unevaluable.
+func Outcome(err error) (problems []Problem, mismatch bool) {
+	var ve *jsonschema.ValidationError
+	if !errors.As(err, &ve) || hasRefCycle(ve) {
+		return nil, false
+	}
+	return Problems(ve), true
+}
+
+func hasRefCycle(ve *jsonschema.ValidationError) bool {
+	if _, ok := ve.ErrorKind.(*kind.RefCycle); ok {
+		return true
+	}
+	for _, cause := range ve.Causes {
+		if hasRefCycle(cause) {
+			return true
+		}
+	}
+	return false
+}
+
 // Problems flattens a backend validation error into one problem per failed
 // constraint, sorted by location and message. An anyOf or oneOf that no
 // alternative satisfies is one problem at its own location, stating what each
@@ -63,6 +88,7 @@ func collect(ve *jsonschema.ValidationError) []Problem {
 					alternatives = append(alternatives, relativeText(ve.InstanceLocation, problem))
 				}
 			}
+			slices.Sort(alternatives)
 			return []Problem{{
 				Location: ve.InstanceLocation,
 				Message:  "satisfies none of the alternatives: " + strings.Join(alternatives, "; "),
@@ -80,6 +106,7 @@ func collect(ve *jsonschema.ValidationError) []Problem {
 		if len(messages) == 0 {
 			messages = []string{ve.ErrorKind.LocalizedString(kindPrinter)}
 		}
+		slices.Sort(messages)
 		location := append(slices.Clone(ve.InstanceLocation), k.Property)
 		return []Problem{{Location: location, Message: "invalid member name: " + strings.Join(messages, "; ")}}
 	}

@@ -22,9 +22,11 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 import (
     openbindings "github.com/openbindings/openbindings-go"
     grpcbinding "github.com/openbindings/openbindings-go/formats/grpc"
+    "github.com/openbindings/openbindings-go/invoke"
+    "github.com/openbindings/openbindings-go/synthesize"
 )
 
-opInv := openbindings.NewOperationInvoker(grpcbinding.NewInvoker())
+opInv := invoke.NewOperationInvoker(grpcbinding.NewInvoker())
 ```
 
 The invoker declares `openbindings.grpc@1`. Embedded protobuf content pins the
@@ -39,12 +41,12 @@ Typically you don't call the invoker directly -- the `OperationInvoker` routes o
 invoker := grpcbinding.NewInvoker()
 defer invoker.Close()
 
-inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{
+inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+    Source: invoke.InvocationSource{
         BindingSpec: grpcbinding.BindingSpec, // "openbindings.grpc@1"
         Location:    "grpcs://api.example.com:443",
     },
-    Selector: "mypackage.MyService/GetItem",
+    Selector: openbindings.Present("mypackage.MyService/GetItem"),
     Context: map[string]any{"headers": map[string]string{"authorization": "Bearer tok_123"}},
 })
 
@@ -54,7 +56,7 @@ if err := inv.Write(ctx, map[string]any{"id": "123"}); err != nil {
 }
 
 // Unary: assert exactly one output.
-out, err := openbindings.Single(ctx, inv.Outputs())
+out, err := invoke.Single(ctx, inv.Outputs())
 if err != nil {
     log.Fatal(err)
 }
@@ -64,9 +66,9 @@ fmt.Println(out)
 For server-streaming methods, read the output stream to `io.EOF` instead:
 
 ```go
-inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{BindingSpec: grpcbinding.BindingSpec, Location: "grpcs://api.example.com:443"},
-    Selector: "mypackage.MyService/WatchItems",
+inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+    Source: invoke.InvocationSource{BindingSpec: grpcbinding.BindingSpec, Location: "grpcs://api.example.com:443"},
+    Selector: openbindings.Present("mypackage.MyService/WatchItems"),
 })
 _ = inv.Write(ctx, map[string]any{"topic": "orders"})
 
@@ -77,7 +79,7 @@ for {
         break // clean end of stream
     }
     if err != nil {
-        log.Fatal(err) // terminal *openbindings.InvocationError
+        log.Fatal(err) // terminal *invoke.InvocationError
     }
     fmt.Println(out)
 }
@@ -96,8 +98,8 @@ a local SDK or ProtoJSON validation error carries no invented gRPC evidence.
 
 ```go
 synth := grpcbinding.NewSynthesizer()
-iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
-    Sources: []openbindings.SynthesizeSource{{
+iface, err := synth.SynthesizeInterface(ctx, &synthesize.SynthesizeInput{
+    Sources: []synthesize.SynthesizeSource{{
         BindingSpec: grpcbinding.BindingSpec, // "openbindings.grpc@1"
         Location:    "grpcs://api.example.com:443",
     }},

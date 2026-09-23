@@ -91,6 +91,12 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`. The public AP
 
 ### Changed
 
+- **An empty selector no longer runs the root command** (USAGE-D-03). The
+  root command is addressed by an absent selector; a present `""` identifies
+  no command and is refused with `ERR_SELECTOR_NOT_FOUND`. Invocation
+  receives selector presence (`BindingInvocationArgs.Selector` is a
+  `*string`), so the two cases no longer arrive as the same `""`.
+
 - **The operation is named preflight and its documented contract is the signal
   contract** (the preflight signal contract proposal, 2026-09-21):
   `Invoker.PrepareBinding` is `Invoker.PreflightBinding` and the

@@ -1,5 +1,5 @@
 diff --git a/compiler.go b/compiler.go
-index 4da7361..0943577 100644
+index 4da7361..c678e4d 100644
 --- a/compiler.go
 +++ b/compiler.go
 @@ -14,6 +14,7 @@ type Compiler struct {
@@ -24,31 +24,41 @@ index 4da7361..0943577 100644
  // AssertContent enables content assertions.
  //
  // Content assertions include keywords:
-@@ -132,6 +140,23 @@ func (c *Compiler) AddResource(url string, doc any) error {
+@@ -132,6 +140,33 @@ func (c *Compiler) AddResource(url string, doc any) error {
  	return nil
  }
  
 +// AddContainer adds a document that is not itself a schema but contains
 +// schemas, which gets used later in reference resolution like a resource
-+// added with AddResource.
++// added with AddResource. resources maps the JSON Pointer of every schema
++// resource the container embeds to its absolute URI, so that a location
++// inside one has that resource's base however it is reached.
 +//
 +// Its root contributes no resources, anchors, or keywords, and is not
-+// validated against a metaschema. A location in it becomes a schema only
-+// when it is compiled or referenced, and is then processed exactly as a
-+// subschema of a resource.
-+func (c *Compiler) AddContainer(url string, doc any) error {
-+	if err := c.AddResource(url, doc); err != nil {
++// validated against a metaschema. A location becomes a schema only when it is
++// compiled or referenced, and is then processed as a subschema of the
++// resource enclosing it.
++func (c *Compiler) AddContainer(loc string, doc any, resources map[string]string) error {
++	if err := c.AddResource(loc, doc); err != nil {
 +		return err
 +	}
-+	uf, _ := absolute(url)
-+	c.roots.containers[uf.url] = struct{}{}
++	uf, _ := absolute(loc)
++	embedded := make(map[jsonPointer]url, len(resources))
++	for location, id := range resources {
++		idf, err := absolute(id)
++		if err != nil {
++			return err
++		}
++		embedded[jsonPointer(location)] = idf.url
++	}
++	c.roots.containers[uf.url] = embedded
 +	return nil
 +}
 +
  // UseLoader overrides the default [URLLoader] used
  // to load schema resources.
  func (c *Compiler) UseLoader(loader URLLoader) {
-@@ -175,7 +200,8 @@ func (c *Compiler) MustCompile(loc string) *Schema {
+@@ -175,7 +210,8 @@ func (c *Compiler) MustCompile(loc string) *Schema {
  }
  
  // Compile compiles json-schema at given loc.
@@ -58,7 +68,7 @@ index 4da7361..0943577 100644
  	uf, err := absolute(loc)
  	if err != nil {
  		return nil, err
-@@ -218,6 +244,11 @@ func (c *Compiler) compileValue(v any, sch *Schema, r *root, q *queue) error {
+@@ -218,6 +254,11 @@ func (c *Compiler) compileValue(v any, sch *Schema, r *root, q *queue) error {
  	sch.DraftVersion = res.dialect.draft.version
  
  	base := urlPtr{sch.up.url, res.ptr}
@@ -137,14 +147,14 @@ index d47efa8..b6b2a9a 100644
  			return n
  		}
 diff --git a/roots.go b/roots.go
-index a8d0ef0..b83736f 100644
+index a8d0ef0..4ca4407 100644
 --- a/roots.go
 +++ b/roots.go
 @@ -12,6 +12,7 @@ type roots struct {
  	regexpEngine RegexpEngine
  	vocabularies map[string]*Vocabulary
  	assertVocabs bool
-+	containers   map[url]struct{}
++	containers   map[url]map[jsonPointer]url // embedded resources of each container
  }
  
  func newRoots() *roots {
@@ -152,21 +162,26 @@ index a8d0ef0..b83736f 100644
  		},
  		regexpEngine: goRegexpCompile,
  		vocabularies: map[string]*Vocabulary{},
-+		containers:   map[url]struct{}{},
++		containers:   map[url]map[jsonPointer]url{},
  	}
  }
  
-@@ -45,6 +47,16 @@ func (rr *roots) addRoot(u url, doc any) (*root, error) {
+@@ -45,6 +47,21 @@ func (rr *roots) addRoot(u url, doc any) (*root, error) {
  		resources:           map[jsonPointer]*resource{},
  		subschemasProcessed: map[jsonPointer]struct{}{},
  	}
-+	if _, ok := rr.containers[u]; ok {
-+		// The root of a container is not a schema: only its root resource,
-+		// the base of every location in it, is known until a location is
-+		// compiled or referenced.
++	if embedded, ok := rr.containers[u]; ok {
++		// The root of a container is not a schema: only its root resource and
++		// the resources it embeds, the bases of the locations in it, are known
++		// until a location is compiled or referenced.
 +		res := newResource("", u)
 +		res.dialect = dialect{rr.defaultDraft, nil}
 +		r.resources[""] = res
++		for ptr, id := range embedded {
++			res := newResource(ptr, id)
++			res.dialect = dialect{rr.defaultDraft, nil}
++			r.resources[ptr] = res
++		}
 +		rr.roots[u] = r
 +		return r, nil
 +	}
@@ -203,7 +218,7 @@ index 548dc86..05aa6d0 100644
  		_, _ = h.Write(num.Num().Bytes())
  		_, _ = h.Write(num.Denom().Bytes())
 diff --git a/validator.go b/validator.go
-index 4fa5e76..46fce0c 100644
+index 4fa5e76..d2746e6 100644
 --- a/validator.go
 +++ b/validator.go
 @@ -6,13 +6,15 @@ import (
@@ -233,6 +248,15 @@ index 4fa5e76..46fce0c 100644
  				evaluated = true
  				vd.addErr(vd.validateVal(sch, pvalue, pname))
  			}
+@@ -293,7 +295,7 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 			}
+ 			if err := sch.validate(pname, vd.regexpEngine, meta, resources, vd.assertVocabs, vd.vocabularies); err != nil {
+ 				verr := err.(*ValidationError)
+-				verr.InstanceLocation = vd.vloc
++				verr.InstanceLocation = vd.instanceLocation()
+ 				verr.SchemaURL = s.PropertyNames.Location
+ 				verr.ErrorKind = &kind.PropertyNames{Property: pname}
+ 				vd.addErr(verr)
 @@ -435,7 +437,7 @@ func (vd *validator) strValidate(str string) {
  
  	strLen := -1
@@ -251,6 +275,15 @@ index 4fa5e76..46fce0c 100644
  			vd.addError(&kind.Pattern{Got: str, Want: s.Pattern.String()})
  		}
  	}
+@@ -504,7 +506,7 @@ func (vd *validator) strValidate(str string) {
+ 		}
+ 		if err = sch.validate(*deserialized, vd.regexpEngine, meta, resources, vd.assertVocabs, vd.vocabularies); err != nil {
+ 			verr := err.(*ValidationError)
+-			verr.InstanceLocation = vd.vloc
++			verr.InstanceLocation = vd.instanceLocation()
+ 			verr.SchemaURL = s.Location
+ 			verr.ErrorKind = &kind.ContentSchema{}
+ 			vd.addErr(verr)
 @@ -518,6 +520,7 @@ func (vd *validator) numValidate(v any) {
  	var numVal *big.Rat
  	num := func() *big.Rat {

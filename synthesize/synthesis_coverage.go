@@ -3,7 +3,6 @@ package synthesize
 import (
 	"fmt"
 	"regexp"
-	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -173,34 +172,4 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 			Limitation:       limitation,
 		},
 	}, nil
-}
-
-// RepresentedCoverageEntries returns one target-level represented entry per
-// emitted binding. It is useful only for a family that has separately proved
-// that every upstream interaction unit maps one-to-one to a binding; callers
-// must not use it to label an unknown inventory exhaustive.
-func RepresentedCoverageEntries(iface *openbindings.Interface, sourceIndex int) []SynthesisCoverageEntry {
-	if iface == nil {
-		return nil
-	}
-	entries := make([]SynthesisCoverageEntry, 0, len(iface.Bindings))
-	bindingKeys := make([]string, 0, len(iface.Bindings))
-	for key := range iface.Bindings {
-		bindingKeys = append(bindingKeys, key)
-	}
-	sort.Strings(bindingKeys)
-	for _, key := range bindingKeys {
-		binding := iface.Bindings[key]
-		entries = append(entries, SynthesisCoverageEntry{
-			SourceIndex:     sourceIndex,
-			SourceKey:       binding.Source,
-			SourceRef:       ContractSelector(binding.Selector),
-			Scope:           SynthesisCoverageTarget,
-			Status:          SynthesisRepresented,
-			OperationKey:    binding.Operation,
-			BindingKey:      key,
-			BindingSelector: ContractSelector(binding.Selector),
-		})
-	}
-	return entries
 }

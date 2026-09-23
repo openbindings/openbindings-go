@@ -15,9 +15,11 @@ import (
 // This preserves arbitrary keys/values structurally, but not raw JSON bytes
 // (use canonicaljson.Marshal if you need stable bytes).
 //
-// A nil JSONSchema means the schema is unspecified (the field is absent);
-// well-formedness of a present value is a document rule (OBI-D-17), enforced
-// by Validate rather than by this type.
+// As an operation's Input or Output, a nil JSONSchema means the schema is
+// unspecified (the member is absent). As an entry of Interface.Schemas, where
+// the entry itself says the member is present, nil is a JSON null, which is
+// not a schema: OBI-D-17 reports it. Well-formedness of a present value is a
+// document rule enforced by Validate rather than by this type.
 type JSONSchema any
 
 // SchemaObjectForm returns the object form of a schema value: an object
@@ -103,7 +105,9 @@ type OperationExample struct {
 
 type operationExampleMembers OperationExample
 
-func (e *OperationExample) UnmarshalJSON(b []byte) error {
+func (e *OperationExample) UnmarshalJSON(b []byte) error { return decodeExact(b, "example", e) }
+
+func (e *OperationExample) decodeVerified(b []byte) error {
 	return decodeObject(b, "example", (*operationExampleMembers)(e))
 }
 
@@ -135,7 +139,9 @@ type Operation struct {
 
 type operationMembers Operation
 
-func (o *Operation) UnmarshalJSON(b []byte) error {
+func (o *Operation) UnmarshalJSON(b []byte) error { return decodeExact(b, "operation", o) }
+
+func (o *Operation) decodeVerified(b []byte) error {
 	return decodeObject(b, "operation", (*operationMembers)(o))
 }
 
@@ -164,7 +170,9 @@ type Source struct {
 
 type sourceMembers Source
 
-func (s *Source) UnmarshalJSON(b []byte) error {
+func (s *Source) UnmarshalJSON(b []byte) error { return decodeExact(b, "source", s) }
+
+func (s *Source) decodeVerified(b []byte) error {
 	return decodeObject(b, "source", (*sourceMembers)(s))
 }
 
@@ -179,8 +187,9 @@ type Transform = string
 
 // TransformOrRef is a binding's inputTransform or outputTransform (§5.5): an
 // InlineTransform expression, or a *TransformReference naming an entry of the
-// document's transforms map. No other type implements it, and a nil
-// TransformOrRef is an absent member.
+// document's transforms map. A nil TransformOrRef is an absent member. A
+// binding holding any other type that satisfies the interface, as one
+// embedding InlineTransform would, does not encode.
 type TransformOrRef interface {
 	// Resolve returns the JSONata expression the transform denotes: an inline
 	// expression itself, or the transforms entry a reference names. It
@@ -226,6 +235,10 @@ func (r *TransformReference) Resolve(transforms map[string]Transform) (string, b
 func (*TransformReference) transformOrRef() {}
 
 func (r *TransformReference) UnmarshalJSON(b []byte) error {
+	return decodeExact(b, "transform reference", r)
+}
+
+func (r *TransformReference) decodeVerified(b []byte) error {
 	return decodeObject(b, "transform reference", (*transformReferenceMembers)(r))
 }
 
@@ -246,7 +259,7 @@ func decodeTransform(raw json.RawMessage) (TransformOrRef, error) {
 		return InlineTransform(expression), nil
 	case len(trimmed) > 0 && trimmed[0] == '{':
 		reference := &TransformReference{}
-		if err := reference.UnmarshalJSON(trimmed); err != nil {
+		if err := reference.decodeVerified(trimmed); err != nil {
 			return nil, err
 		}
 		return reference, nil
@@ -286,14 +299,27 @@ type bindingEntryMembers BindingEntry
 // interoperable integer range of §5.3.
 const maxPreference = 9007199254740991
 
-func (be *BindingEntry) UnmarshalJSON(b []byte) error {
+func (be *BindingEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "binding", be) }
+
+func (be *BindingEntry) decodeVerified(b []byte) error {
 	return decodeObject(b, "binding", (*bindingEntryMembers)(be))
 }
 
 func (be BindingEntry) MarshalJSON() ([]byte, error) {
-	for name, transform := range map[string]TransformOrRef{"inputTransform": be.InputTransform, "outputTransform": be.OutputTransform} {
-		if reference, ok := transform.(*TransformReference); ok && reference == nil {
-			return nil, fmt.Errorf("binding: %s holds a nil *TransformReference, which is neither transform form", name)
+	for _, member := range []struct {
+		name      string
+		transform TransformOrRef
+	}{{"inputTransform", be.InputTransform}, {"outputTransform", be.OutputTransform}} {
+		switch transform := member.transform.(type) {
+		case nil, InlineTransform:
+		case *TransformReference:
+			if transform == nil {
+				return nil, fmt.Errorf("binding: %s holds a nil *TransformReference, which is neither transform form", member.name)
+			}
+		default:
+			// A type embedding InlineTransform satisfies the interface but is
+			// neither form (§5.5).
+			return nil, fmt.Errorf("binding: %s holds a %T, which is neither transform form", member.name, transform)
 		}
 	}
 	return encodeObject(bindingEntryMembers(be), be.LosslessFields)
@@ -313,7 +339,9 @@ type DependencyEntry struct {
 
 type dependencyEntryMembers DependencyEntry
 
-func (d *DependencyEntry) UnmarshalJSON(b []byte) error {
+func (d *DependencyEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "dependency", d) }
+
+func (d *DependencyEntry) decodeVerified(b []byte) error {
 	return decodeObject(b, "dependency", (*dependencyEntryMembers)(d))
 }
 
@@ -349,7 +377,9 @@ type Interface struct {
 
 type interfaceMembers Interface
 
-func (i *Interface) UnmarshalJSON(b []byte) error {
+func (i *Interface) UnmarshalJSON(b []byte) error { return decodeExact(b, "document", i) }
+
+func (i *Interface) decodeVerified(b []byte) error {
 	return decodeObject(b, "document", (*interfaceMembers)(i))
 }
 

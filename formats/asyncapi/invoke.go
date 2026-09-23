@@ -433,7 +433,6 @@ func validateCredentialDestinations(doc *document, op *asyncOperation, server *s
 // refused too. Operation keys containing `/` or `~` carry RFC 6901 escaping
 // in the pointer: ~1 → /, ~0 → ~, decoded in that order.
 func parseSelector(selector string) (string, error) {
-	selector = strings.TrimSpace(selector)
 	if selector == "" {
 		return "", fmt.Errorf("selector is required and must be a JSON Pointer #/operations/<operation-key> (ASYNC-D-03)")
 	}

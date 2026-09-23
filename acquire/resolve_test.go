@@ -120,7 +120,7 @@ func TestResolveDoesNotSynthesizeAfterGatedDiscoveryOrVersionRefusal(t *testing.
 		check  func(error) bool
 	}{
 		{name: "gated", status: http.StatusUnauthorized, check: func(err error) bool { var e *httpdiscovery.GatedError; return errors.As(err, &e) }},
-		{name: "version refusal", status: http.StatusOK, body: `{"openbindings":"0.3.0","operations":{}}`, check: func(err error) bool { var e *httpdiscovery.VersionRefusalError; return errors.As(err, &e) }},
+		{name: "version refusal", status: http.StatusOK, body: `{"openbindings":"0.3.0","operations":{}}`, check: func(err error) bool { var e *openbindings.VersionRefusalError; return errors.As(err, &e) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

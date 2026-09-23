@@ -112,11 +112,11 @@ type BindingInvocationArgs struct {
 	// Selector identifies the target within the source, nil when the binding
 	// has no selector member. The source's governing binding specification
 	// defines both cases, the absent one included (§5.3), and the invoker
-	// for that specification honors them (OBI-T-06). Revision 0.1 of the
-	// binding-invoker contract requires a selector string, so a transport
-	// that carries these arguments over that contract sends "" for an absent
-	// selector and loses the distinction there.
-	Selector *string `json:"selector,omitempty"`
+	// for that specification honors them (OBI-T-06). The JSON encoding is the
+	// binding-invoker contract's input, whose revision 0.1 requires a
+	// selector string, so it writes an absent selector as "" and loses the
+	// distinction there (see MarshalJSON).
+	Selector *string `json:"-"`
 	// Binding is the selected binding entry. Populated by the operation
 	// invoker; optional for direct calls.
 	Binding *openbindings.BindingEntry `json:"-"`
@@ -149,6 +149,19 @@ type BindingInvocationArgs struct {
 	// caller left it unset, and direct binding-layer callers set it per
 	// invocation. Formats resolve it via DeliveryUnitLimit, never directly.
 	MaxDeliveryUnitBytes int64 `json:"-"`
+}
+
+// MarshalJSON encodes the arguments as the binding-invoker contract's
+// input: source, selector, and context. Revision 0.1 of the contract requires
+// a selector string, so an absent selector is written as "", the spelling it
+// shares with a present empty selector. A contract revision that makes the
+// member optional removes this projection.
+func (a BindingInvocationArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Source   InvocationSource `json:"source"`
+		Selector string           `json:"selector"`
+		Context  map[string]any   `json:"context,omitempty"`
+	}{a.Source, openbindings.Value(a.Selector), a.Context})
 }
 
 // DefaultMaxDeliveryUnitBytes is the delivery-unit bound applied when

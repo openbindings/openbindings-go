@@ -293,3 +293,30 @@ func TestPrepareInterface_RefusesWhatValidateReports(t *testing.T) {
 		t.Fatalf("Validate must report the same document: %v", verr)
 	}
 }
+
+// A nested object type decoded on its own verifies its input as a document
+// does.
+func TestDocumentModel_NestedTypesVerifyTheirOwnInput(t *testing.T) {
+	var operation Operation
+	if err := json.Unmarshal([]byte(`{"input":{"type":"string","type":"number"}}`), &operation); err == nil {
+		t.Fatal("an operation with a duplicate member name inside its schema decoded")
+	}
+	if err := operation.UnmarshalJSON([]byte(`{"description":"a"} trailing`)); err == nil {
+		t.Fatal("an operation followed by trailing input decoded")
+	}
+}
+
+// The model keeps no part of the caller's input: raw members are copies.
+func TestDocumentModel_RetainsNoPartOfTheInput(t *testing.T) {
+	input := []byte(`{"bindingSpec":"x@1","content":{"k":"v"},"later":[1],"x-note":"n"}`)
+	var source Source
+	if err := json.Unmarshal(input, &source); err != nil {
+		t.Fatal(err)
+	}
+	for i := range input {
+		input[i] = ' '
+	}
+	if string(source.Content) != `{"k":"v"}` || string(source.Unknown["later"]) != `[1]` || string(source.Extensions["x-note"]) != `"n"` {
+		t.Fatalf("decoded members alias the input: %s %s %s", source.Content, source.Unknown["later"], source.Extensions["x-note"])
+	}
+}

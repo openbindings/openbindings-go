@@ -244,7 +244,9 @@ func operationKeys(iface *openbindings.Interface) []string {
 func bindingIdentities(iface *openbindings.Interface) []BindingIdentity {
 	out := make([]BindingIdentity, 0, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		out = append(out, BindingIdentity{OperationKey: binding.Operation, BindingSelector: scenarioSelector(binding.Selector)})
+		// The scenario format writes an omitted selector as "", as the
+		// interface-synthesizer contract's coverage entries do.
+		out = append(out, BindingIdentity{OperationKey: binding.Operation, BindingSelector: synthesize.ContractSelector(binding.Selector)})
 	}
 	sortBindings(out)
 	return out
@@ -315,11 +317,4 @@ func sortCoverage(values []CoverageEntry) {
 		}
 		return values[i].SourceRef < values[j].SourceRef
 	})
-}
-
-// scenarioSelector projects a binding's optional selector onto the synthesis
-// scenario format, whose bindingSelector records an omitted selector as "", as
-// the interface-synthesizer contract's coverage entries do.
-func scenarioSelector(selector *string) string {
-	return synthesize.ContractSelector(selector)
 }

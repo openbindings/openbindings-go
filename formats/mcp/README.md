@@ -12,7 +12,7 @@ go get github.com/openbindings/openbindings-go/formats/mcp
 ```
 
 ```go
-opInv := openbindings.NewOperationInvoker(mcpbinding.NewInvoker())
+opInv := invoke.NewOperationInvoker(mcpbinding.NewInvoker())
 ```
 
 The candidate binds only `tools/<name>` targets whose listing declares an
@@ -23,17 +23,17 @@ invocation emits conforming `structuredContent` alone.
 invoker := mcpbinding.NewInvoker()
 defer invoker.Close()
 
-call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{
+call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+    Source: invoke.InvocationSource{
         BindingSpec: "openbindings.mcp@1",
         Location:    "https://mcp.example.com/mcp",
     },
-    Selector: "tools/get_weather",
+    Selector: openbindings.Present("tools/get_weather"),
     Context: map[string]any{"bearerToken": "tok_123"},
 })
 
 _ = call.Write(ctx, map[string]any{"city": "Seattle"})
-out, err := openbindings.Single(ctx, call.Outputs())
+out, err := invoke.Single(ctx, call.Outputs())
 ```
 
 MCP `content`, `_meta`, `isError`, progress notifications, JSON-RPC fields,
@@ -60,8 +60,8 @@ nil. Context supplied to preflight is not retained.
 
 ```go
 iface, err := mcpbinding.NewSynthesizer().SynthesizeInterface(ctx,
-    &openbindings.SynthesizeInput{
-        Sources: []openbindings.SynthesizeSource{{
+    &synthesize.SynthesizeInput{
+        Sources: []synthesize.SynthesizeSource{{
             BindingSpec: "openbindings.mcp@1",
             Location:    "https://mcp.example.com/mcp",
         }},

@@ -72,9 +72,11 @@ test vectors. Go `json.Number` inputs additionally refuse precision loss.
 import (
     openbindings "github.com/openbindings/openbindings-go"
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
+    "github.com/openbindings/openbindings-go/invoke"
+    "github.com/openbindings/openbindings-go/synthesize"
 )
 
-opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
+opInv := invoke.NewOperationInvoker(openapi.NewInvoker())
 ```
 
 The invoker declares four exact sibling candidates:
@@ -91,12 +93,12 @@ Typically you don't call the invoker directly — the `OperationInvoker` routes 
 ```go
 invoker := openapi.NewInvoker()
 
-inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{
+inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+    Source: invoke.InvocationSource{
         BindingSpec: openapi.BindingSpecOpenAPI31,
         Location:    "https://api.example.com/openapi.json",
     },
-    Selector: "#/paths/~1users/get",
+    Selector: openbindings.Present("#/paths/~1users/get"),
     Context: map[string]any{"bearerToken": "tok_123"},
 })
 
@@ -108,15 +110,15 @@ if err := inv.Write(ctx, map[string]any{
 }
 
 // Unary: assert exactly one output.
-out, err := openbindings.Single(ctx, inv.Outputs())
+out, err := invoke.Single(ctx, inv.Outputs())
 if err != nil {
-    log.Fatal(err) // terminal *openbindings.InvocationError
+    log.Fatal(err) // terminal *invoke.InvocationError
 }
 fmt.Println(out)
 ```
 
 An HTTP response classified as unsuccessful completes with a terminal
-`*openbindings.InvocationError`; it does not become an operation output. Its
+`*invoke.InvocationError`; it does not become an operation output. Its
 abstract record is exactly `Code` plus optional `Data`. A declared, selected,
 faithfully decoded JSON failure representation is preserved exactly as Data,
 including explicit JSON null. Native status, headers, response bytes, and
@@ -127,8 +129,8 @@ consumers below the adapter boundary.
 
 ```go
 synth := openapi.NewSynthesizer()
-iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
-    Sources: []openbindings.SynthesizeSource{{
+iface, err := synth.SynthesizeInterface(ctx, &synthesize.SynthesizeInput{
+    Sources: []synthesize.SynthesizeSource{{
         BindingSpec: openapi.BindingSpecOpenAPI31,
         Location:    "https://api.example.com/openapi.json",
     }},
@@ -367,7 +369,7 @@ specified under [Behavior → Interface synthesis](#interface-synthesis) above.
 
 The unary response body is one **delivery unit** and is consumer-bounded:
 set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or per invocation on
-`BindingInvocationArgs`); zero selects `openbindings.DefaultMaxDeliveryUnitBytes`
+`BindingInvocationArgs`); zero selects `invoke.DefaultMaxDeliveryUnitBytes`
 (10 MiB). The SSE line-scanner's internal 16 MB line guard is deliberately
 fixed — a parser guard, not a delivery-unit bound.
 

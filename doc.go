@@ -52,8 +52,9 @@
 //     strings and booleans are pointers (set them with [Present], read them
 //     with [Value] where absence and the zero value mean the same); optional
 //     collections distinguish nil (absent) from empty (present).
-//   - JSON null is carried where it is a value: example values and source
-//     content are json.RawMessage, where the bytes `null` are a present null.
+//   - JSON null is carried where the model has a place for it: example values
+//     and source content are json.RawMessage, where the bytes `null` are a
+//     present null, and a schemas entry of null is a nil JSONSchema.
 //   - Members are matched by exact name. Members the SDK does not model,
 //     case variants of modeled ones included, are kept:
 //     LosslessFields.Extensions for keys beginning with x-,
@@ -64,9 +65,11 @@
 //
 // A document the model cannot carry exactly fails decoding instead of being
 // altered: input that is not valid UTF-8, a duplicate member name in any
-// object, a JSON null at a position where null is not a value, a missing
-// required string member, or a binding preference that is not an integer
-// number in range. ValidateDocument still judges such a document in full.
+// object, a JSON null anywhere else, a missing required string member, or a
+// binding preference that is not an integer number in range. ValidateDocument
+// still judges such a document in full, except input OBI-D-01 refuses (not
+// UTF-8, or repeating a member name), where which values the document holds
+// is not established.
 //
 // A typed field alone states its member: an Unknown or Extensions entry
 // named like a typed member is never encoded, so a nil field is absent.

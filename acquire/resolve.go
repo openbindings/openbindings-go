@@ -101,7 +101,7 @@ func Resolve(ctx context.Context, target string, opts ...Option) (*Result, error
 					return &Result{Interface: iface}, nil
 				}
 				var gated *httpdiscovery.GatedError
-				var refused *httpdiscovery.VersionRefusalError
+				var refused *openbindings.VersionRefusalError
 				if errors.As(discoveryErr, &gated) || errors.As(discoveryErr, &refused) {
 					return nil, discoveryErr
 				}
@@ -213,7 +213,7 @@ func tryFetchOBI(ctx context.Context, client *http.Client, target string) (*open
 		return nil, err
 	}
 
-	if !obishape.LooksLikeOBI(raw) {
+	if !LooksLikeOBI(raw) {
 		return nil, nil
 	}
 
@@ -252,3 +252,10 @@ func shouldSkipWellKnownDiscovery(target string) bool {
 		strings.Contains(path, "/asyncapi") ||
 		strings.HasSuffix(path, httpdiscovery.WellKnownPath)
 }
+
+// LooksLikeOBI reports whether a JSON object fetched from somewhere has the
+// shape of an OBI document: an "openbindings" string and an "operations"
+// object. It tells a response that is not an OBI apart from an OBI that fails
+// validation, and validates nothing; parse and validate a document before
+// using it.
+func LooksLikeOBI(v map[string]any) bool { return obishape.LooksLikeOBI(v) }

@@ -22,6 +22,10 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`, including the
 
 ### Changed
 
+- **Selectors match byte-exactly** (MCP-D-03). Surrounding whitespace was
+  trimmed, so `" tools/echo"` resolved tool `echo`; it now identifies no
+  tool. An absent selector is refused like an empty one.
+
 - The live `CONTEXT_REQUIRED` for a credential without an expressible
   header destination (§9.4, MCP-P-07) now carries `ContextRequiredDetails`
   (the endpoint plus one `auth.apiKey` requirement) instead of a bare code,

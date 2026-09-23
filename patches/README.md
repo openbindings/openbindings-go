@@ -27,16 +27,22 @@ includes all four upstream test packages, the complete retained mandatory
 schema corpus, and the SDK's existing ECMA lookahead controls.
 
 Two options serve Core's reference and validation semantics. `AddContainer`
-registers a document whose root is not a schema, as an OBI document is not:
-its root contributes no resources, anchors or keywords and is not validated
-against a metaschema, and a location in it becomes a schema only when compiled
-or referenced. Without it, an unknown OBI root member named like a schema
-keyword (`$defs`, `type`) would supply embedded resources or make every
-operation's graph unavailable, although Core ignores unknown fields (§7,
-OBI-T-02). `NeverAssertFormat` makes `format` an annotation in every draft,
-including the drafts before 2019-09 that assert it by default and that a
-reference to their built-in metaschema reaches; Core never lets `format`
+registers a document whose root is not a schema, as an OBI document is not,
+together with where the document embeds schema resources and their URIs: its
+root contributes no resources, anchors or keywords and is not validated
+against a metaschema, a location in it becomes a schema only when compiled or
+referenced, and a location inside an embedded resource has that resource's
+base however it is reached. Without it, an unknown OBI root member named like
+a schema keyword (`$defs`, `type`) would supply embedded resources or make
+every operation's graph unavailable, although Core ignores unknown fields
+(§7, OBI-T-02). `NeverAssertFormat` makes `format` an annotation in every
+draft, including the drafts before 2019-09 that assert it by default and that
+a reference to their built-in metaschema reaches; Core never lets `format`
 reject a value (§5.2, OBI-T-16).
+
+One correction fixes an upstream defect: a `propertyNames` or `contentSchema`
+failure stored the validator's instance location without copying it, so a
+later sibling overwrote the location it reports.
 
 Traversal, references, applicators, dialect semantics and annotation ownership
 remain upstream algorithms. The SDK's existing vocabulary extension separately

@@ -17,10 +17,11 @@ import (
     openbindings "github.com/openbindings/openbindings-go"
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
     operationgraph "github.com/openbindings/openbindings-go/formats/operationgraph"
+    "github.com/openbindings/openbindings-go/invoke"
 )
 
 // Create the OperationInvoker with protocol-level invokers.
-opInv := openbindings.NewOperationInvoker(
+opInv := invoke.NewOperationInvoker(
     openapi.NewInvoker(),
 )
 

@@ -1,6 +1,7 @@
 package synthesize
 
 import (
+	"sort"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -106,7 +107,7 @@ func TestNewSynthesisResultRejectsUnbackedRepresentation(t *testing.T) {
 }
 
 func TestNewSynthesisResultDoesNotCallNonExhaustiveFull(t *testing.T) {
-	result, err := NewSynthesisResult(synthesisCoverageTestInterface(), RepresentedCoverageEntries(synthesisCoverageTestInterface(), 0), false)
+	result, err := NewSynthesisResult(synthesisCoverageTestInterface(), representedCoverageEntries(synthesisCoverageTestInterface(), 0), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestNewSynthesisResultDoesNotCallNonExhaustiveFull(t *testing.T) {
 func TestNewSynthesisResultWithLimitationValidatesExhaustivenessEvidence(t *testing.T) {
 	if _, err := NewSynthesisResultWithLimitation(
 		synthesisCoverageTestInterface(),
-		RepresentedCoverageEntries(synthesisCoverageTestInterface(), 0),
+		representedCoverageEntries(synthesisCoverageTestInterface(), 0),
 		false,
 		&SynthesisCoverageLimitation{Code: "example.bounded_listing", Message: "the live listing stopped at its declared page bound"},
 	); err != nil {
@@ -129,10 +130,38 @@ func TestNewSynthesisResultWithLimitationValidatesExhaustivenessEvidence(t *test
 	}
 	if _, err := NewSynthesisResultWithLimitation(
 		synthesisCoverageTestInterface(),
-		RepresentedCoverageEntries(synthesisCoverageTestInterface(), 0),
+		representedCoverageEntries(synthesisCoverageTestInterface(), 0),
 		false,
 		nil,
 	); err == nil {
 		t.Fatal("non-exhaustive coverage without limitation must fail")
 	}
+}
+
+// representedCoverageEntries returns one target-level represented entry per
+// binding of a test interface, whose bindings all carry selectors.
+func representedCoverageEntries(iface *openbindings.Interface, sourceIndex int) []SynthesisCoverageEntry {
+	if iface == nil {
+		return nil
+	}
+	entries := make([]SynthesisCoverageEntry, 0, len(iface.Bindings))
+	bindingKeys := make([]string, 0, len(iface.Bindings))
+	for key := range iface.Bindings {
+		bindingKeys = append(bindingKeys, key)
+	}
+	sort.Strings(bindingKeys)
+	for _, key := range bindingKeys {
+		binding := iface.Bindings[key]
+		entries = append(entries, SynthesisCoverageEntry{
+			SourceIndex:     sourceIndex,
+			SourceKey:       binding.Source,
+			SourceRef:       ContractSelector(binding.Selector),
+			Scope:           SynthesisCoverageTarget,
+			Status:          SynthesisRepresented,
+			OperationKey:    binding.Operation,
+			BindingKey:      key,
+			BindingSelector: ContractSelector(binding.Selector),
+		})
+	}
+	return entries
 }

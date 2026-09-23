@@ -142,24 +142,28 @@ func (c *Compiler) AddResource(url string, doc any) error {
 
 // AddContainer adds a document that is not itself a schema but contains
 // schemas, which gets used later in reference resolution like a resource
-// added with AddResource. schemaLocations are JSON Pointers to the schemas
-// the container holds.
+// added with AddResource. resources maps the JSON Pointer of every schema
+// resource the container embeds to its absolute URI, so that a location
+// inside one has that resource's base however it is reached.
 //
 // Its root contributes no resources, anchors, or keywords, and is not
 // validated against a metaschema. A location becomes a schema only when it is
-// compiled or referenced, and is then processed as a subschema of the schema
-// location enclosing it, which is processed first so that resources declared
-// along the way set its base.
-func (c *Compiler) AddContainer(url string, doc any, schemaLocations ...string) error {
-	if err := c.AddResource(url, doc); err != nil {
+// compiled or referenced, and is then processed as a subschema of the
+// resource enclosing it.
+func (c *Compiler) AddContainer(loc string, doc any, resources map[string]string) error {
+	if err := c.AddResource(loc, doc); err != nil {
 		return err
 	}
-	uf, _ := absolute(url)
-	locations := make([]jsonPointer, len(schemaLocations))
-	for i, location := range schemaLocations {
-		locations[i] = jsonPointer(location)
+	uf, _ := absolute(loc)
+	embedded := make(map[jsonPointer]url, len(resources))
+	for location, id := range resources {
+		idf, err := absolute(id)
+		if err != nil {
+			return err
+		}
+		embedded[jsonPointer(location)] = idf.url
 	}
-	c.roots.containers[uf.url] = locations
+	c.roots.containers[uf.url] = embedded
 	return nil
 }
 

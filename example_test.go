@@ -104,7 +104,7 @@ func ExampleInterface_Validate_unknownFields() {
 	// OBI-T-02 unknown field ignored: unknownFeild; extensions use the x- prefix
 }
 
-func ExampleInterface_lossless() {
+func ExampleInterface_exact() {
 	data := []byte(`{
 		"openbindings": "0.2.0",
 		"x-custom": "preserved",

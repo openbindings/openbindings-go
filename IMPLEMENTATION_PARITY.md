@@ -19,6 +19,30 @@ diagnostics. TypeScript applies OBI-T-17 to caller evidence through
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
+The Go core's exact document model and the validation that follows it
+(2026-09-23) are established in Go first; TypeScript alignment is pending for
+each of these observable behaviors:
+
+- **Exact documents.** An optional member is absent exactly when it is
+  absent in the document; members match by exact name; a duplicate member
+  name, invalid UTF-8, a null where the model has no place for one, and a
+  preference that is not an integer number in range fail decoding.
+- **Rules over the document's JSON.** Every document rule is judged on the
+  document's JSON, never its typed decoding, and literally on the values
+  present; a resource limit is inconclusive, never a violation.
+- **Operation-contract validation.** The OBI root is not a schema; success
+  needs the complete statically reachable graph, available and well-formed,
+  whatever branches an evaluator would skip; `format` never asserts, in any
+  dialect; a built-in meta-schema is available; an `$id` that names no one
+  embedded schema leaves only the graphs that reach it unavailable; a
+  version outside the supported set is refused; an alias names its
+  operation; a reference cycle that never advances is unavailable.
+- **Selector presence at invocation.** Invocation arguments carry an absent
+  selector as absent. Usage runs its root command for an absent selector and
+  refuses a present `""`, where TypeScript still maps `""` to the root
+  command; MCP and AsyncAPI selectors match byte-exactly.
+- **Standalone schema validation** lives outside the core package.
+
 | Concept | Go | TypeScript |
 |---|---|---|
 | binding implementation | `BindingInvoker` | `BindingInvoker` |

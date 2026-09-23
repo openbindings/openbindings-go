@@ -70,7 +70,12 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 			return
 		}
 		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
-			for _, problem := range schemacompiler.Problems(verr) {
+			problems, mismatch := schemacompiler.Outcome(verr)
+			if !mismatch {
+				c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", verr))
+				return
+			}
+			for _, problem := range problems {
 				c.violated("OBI-D-17", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
 			}
 		} else if key != "" {
@@ -85,7 +90,13 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 // generic view validates against openbindings.schema.json.
 func validateAgainstOBISchema(c *ruleChecks, view any) {
 	if verr := compiledOBISchema.Validate(view); verr != nil {
-		for _, problem := range schemacompiler.Problems(verr) {
+		problems, mismatch := schemacompiler.Outcome(verr)
+		if !mismatch {
+			// An exceeded resource limit is not evidence of violation (§10.5).
+			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
+			return
+		}
+		for _, problem := range problems {
 			c.violated("OBI-D-02", jsonpointer.Format(problem.Location...), "does not validate against the document schema: "+problem.Message)
 		}
 	}
@@ -107,12 +118,12 @@ func metaSchemaCacheKey(schema map[string]any) string {
 // The rule's scope is decided per schema position. A graph that reaches an
 // external resource puts that position's examples outside the rule, so they
 // are neither checked nor reported (§5.1 lets a tool check them as evidence,
-// never as non-conformance). A graph whose reach this validator cannot
-// establish, or a schema it cannot compile, leaves the rule inconclusive there:
-// neither is evidence that the examples conform. Operations and examples that
-// are not objects are left to the rules that judge their shape.
-func checkExamples(c *ruleChecks, view any, operations map[string]any) {
-	var schemas *documentSchemas
+// never as non-conformance). A graph that cannot be evaluated (an
+// unresolvable reference, an ill-formed schema, or a failure to compile or
+// evaluate it) leaves the rule inconclusive there: none of that is evidence
+// that the examples conform. Operations and examples that are not objects
+// hold no example values.
+func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas documentSchemas) {
 	for _, opKey := range sortedKeys(operations) {
 		operation, _ := operations[opKey].(map[string]any)
 		examples, _ := operation["examples"].(map[string]any)
@@ -129,77 +140,94 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any) {
 			if len(provided) == 0 {
 				continue
 			}
-			if schemas == nil {
-				collected := collectDocumentSchemas(view)
-				schemas = &collected
-			}
 			tokens := []string{"operations", opKey, position}
 			path := jsonpointer.Format(tokens...)
-			switch schemaGraphLocality(view, tokens, *schemas) {
-			case graphReachesExternal:
-				continue
-			case graphUndecided:
-				c.inconclusive("OBI-D-11", path, "the reach of this schema's graph could not be established, so its examples were not checked")
+			graph := analyzeSchemaGraph(view, tokens, schemas)
+			if graph.external != "" || graph.builtIn != "" {
+				// The graph reaches outside the document.
 				continue
 			}
-			compiled, err := compileDocumentSchema(view, *schemas, tokens...)
+			if !graph.complete() {
+				c.inconclusive("OBI-D-11", path, graph.problem()+", so its examples were not checked")
+				continue
+			}
+			compiled, err := compileSchemaAt(view, schemas, tokens...)
 			if err != nil {
 				c.inconclusive("OBI-D-11", path, fmt.Sprintf("the schema could not be compiled, so its examples were not checked: %v", err))
 				continue
 			}
 			for _, exampleKey := range provided {
-				value := examples[exampleKey].(map[string]any)[position]
-				if verr := compiled.Validate(value); verr != nil {
-					examplePath := jsonpointer.Format("operations", opKey, "examples", exampleKey, position)
-					for _, problem := range schemacompiler.Problems(verr) {
-						c.violated("OBI-D-11", examplePath+jsonpointer.Format(problem.Location...), "does not validate against the operation's "+position+" schema: "+problem.Message)
+				examplePath := jsonpointer.Format("operations", opKey, "examples", exampleKey, position)
+				var mismatch *SchemaValidationError
+				switch err := compiled.Validate(examples[exampleKey].(map[string]any)[position]); {
+				case err == nil:
+				case errors.As(err, &mismatch):
+					for _, problem := range mismatch.Problems {
+						c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+position+" schema: "+problem.Message)
 					}
+				default:
+					c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("the schema could not be evaluated, so this example was not checked: %v", err))
 				}
 			}
 		}
 	}
 }
 
-// CompileOperationSchema compiles an operation's input or output schema,
-// addressed by its canonical key, with the complete OBI document as the
-// resolution root of same-document references (§7, OBI-D-16, OBI-T-16).
-// Only the schemas the document holds are schemas: an unknown document member
-// never acts as a schema keyword or declares a resource, and a reference to a
-// resource the document does not embed is unavailable. format is an
-// annotation, never an assertion, whatever dialect a reached schema declares.
+// CompileOperationSchema compiles an operation's input or output schema, for
+// validating values against the operation's contract (OBI-T-16). The
+// operation is named by any of its identifiers, its key or an alias
+// (OBI-T-12). The complete OBI document is the resolution root of
+// same-document references (§7), and only the schemas the document holds are
+// schemas: an unknown document member never acts as a schema keyword or
+// declares a resource. format is an annotation, never an assertion, whatever
+// dialect a reached schema declares.
 //
-// It returns a *SchemaGraphUnavailableError when the governing graph cannot
-// be compiled completely, and another error when there is nothing to compile:
-// no interface, no such operation, or no schema at that position.
-func CompileOperationSchema(i *Interface, operationName, position string) (*CompiledSchema, error) {
+// The schema graph statically reachable from the operation's schema must be
+// complete: a graph that reaches a resource the document does not embed, has
+// a reference that does not resolve, or holds a schema that is not
+// well-formed yields a *SchemaGraphUnavailableError, even where no value
+// would exercise that part of it. A document declaring a version outside the
+// supported set is not interpreted: CompileOperationSchema returns a
+// *VersionRefusalError (OBI-T-04). Any other error means there is nothing to
+// compile: no interface, no such operation, or no schema at that position.
+func CompileOperationSchema(i *Interface, operation, position string) (*CompiledSchema, error) {
 	if i == nil {
 		return nil, errors.New("openbindings: interface is nil")
 	}
-	operation, ok := i.Operations[operationName]
+	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
+		return nil, refusal
+	}
+	key, resolved, ok := ResolveOperation(i, operation)
 	if !ok {
-		return nil, fmt.Errorf("openbindings: operation %q is not defined", operationName)
+		return nil, fmt.Errorf("openbindings: operation %q is not defined", operation)
 	}
 	var schema JSONSchema
 	switch position {
 	case "input":
-		schema = operation.Input
+		schema = resolved.Input
 	case "output":
-		schema = operation.Output
+		schema = resolved.Output
 	default:
 		return nil, fmt.Errorf("openbindings: unknown operation schema position %q", position)
 	}
 	if schema == nil {
-		return nil, fmt.Errorf("openbindings: operation %q specifies no %s schema", operationName, position)
+		return nil, fmt.Errorf("openbindings: operation %q specifies no %s schema", key, position)
 	}
 	view, err := documentView(*i)
 	if err != nil {
 		return nil, err
 	}
-	return compileOperationSchemaInView(view, operationName, position)
+	return compileOperationContract(view, collectDocumentSchemas(view), key, position)
 }
 
-func compileOperationSchemaInView(view any, operationName, position string) (*CompiledSchema, error) {
-	compiled, err := compileDocumentSchema(view, collectDocumentSchemas(view), "operations", operationName, position)
+// compileOperationContract compiles the schema at an operation's input or
+// output, given its canonical key, once its graph is established complete.
+func compileOperationContract(view any, schemas documentSchemas, key, position string) (*CompiledSchema, error) {
+	tokens := []string{"operations", key, position}
+	if graph := analyzeSchemaGraph(view, tokens, schemas); !graph.complete() {
+		return nil, &SchemaGraphUnavailableError{Cause: errors.New(graph.problem())}
+	}
+	compiled, err := compileSchemaAt(view, schemas, tokens...)
 	if err != nil {
 		return nil, &SchemaGraphUnavailableError{Cause: err}
 	}
@@ -210,29 +238,29 @@ func compileOperationSchemaInView(view any, operationName, position string) (*Co
 // reference resolves against the URI a document was fetched from (§7).
 const documentURL = "openbindings:///document"
 
-// compileDocumentSchema compiles the schema at a location of a document's
-// generic view, given as JSON Pointer reference tokens.
-func compileDocumentSchema(view any, schemas documentSchemas, tokens ...string) (*CompiledSchema, error) {
-	if schemas.conflict != "" {
-		return nil, errors.New(schemas.conflict)
-	}
+// compileSchemaAt compiles the schema at a location of a document's generic
+// view, given as JSON Pointer reference tokens.
+func compileSchemaAt(view any, schemas documentSchemas, tokens ...string) (*CompiledSchema, error) {
 	c := schemacompiler.New()
 	c.NeverAssertFormat() // §5.2, OBI-T-16
+	c.UseLoader(documentResourceLoader{ambiguous: schemas.ambiguous})
 	ids := make([]string, 0, len(schemas.resources))
 	for id := range schemas.resources {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	placed := make(map[string]string, len(ids))
 	for _, id := range ids {
-		// A resource is resolved by its $id wherever it is referenced from;
-		// the compiler finds the resources nested in it itself.
-		if resource := schemas.resources[id]; resource.outermost {
-			if err := c.AddResource(id, resource.schema); err != nil {
-				return nil, fmt.Errorf("register embedded schema resource %q: %w", id, err)
-			}
+		// Every embedded resource, nested ones included, is resolved by its
+		// $id wherever it is referenced from, and sets the base of the
+		// locations inside it.
+		resource := schemas.resources[id]
+		if err := c.AddResource(id, resource.schema); err != nil {
+			return nil, fmt.Errorf("register embedded schema resource %q: %w", id, err)
 		}
+		placed[resource.location] = id
 	}
-	if err := c.AddContainer(documentURL, view, schemas.locations...); err != nil {
+	if err := c.AddContainer(documentURL, view, placed); err != nil {
 		return nil, err
 	}
 	compiled, err := c.Compile(documentURL + "#" + jsonpointer.Format(tokens...))
@@ -240,6 +268,19 @@ func compileDocumentSchema(view any, schemas documentSchemas, tokens ...string) 
 		return nil, err
 	}
 	return &CompiledSchema{backend: compiled}, nil
+}
+
+// documentResourceLoader declines every resource outside the document, as
+// every SDK compiler does. An $id that names no one embedded schema is not
+// registered, so a reference to it arrives here too, and is reported as what
+// it is.
+type documentResourceLoader struct{ ambiguous map[string]string }
+
+func (l documentResourceLoader) Load(url string) (any, error) {
+	if why := l.ambiguous[url]; why != "" {
+		return nil, fmt.Errorf("%s names no one embedded schema: %s", url, why)
+	}
+	return nil, schemacompiler.RefuseExternal(url)
 }
 
 // ValidateOperationInput validates a value against an operation's input
@@ -267,10 +308,10 @@ func ValidateOperationOutput(value any, iface *Interface, operationName string) 
 	return compiled.Validate(value)
 }
 
-// SchemaGraphUnavailableError reports that a value verdict could not be
-// reached because the governing schema's complete statically reachable graph
-// was not available, well-formed, and evaluable. It is distinct from an
-// instance mismatch, as required by OBI-T-16.
+// SchemaGraphUnavailableError reports that no verdict was reached because the
+// governing schema's complete statically reachable graph was not available,
+// well-formed, and evaluable. It is distinct from a mismatch, as OBI-T-16
+// requires of validation against an operation's contract.
 //
 // Callers can use errors.As rather than parsing diagnostic text. Cause remains
 // available through errors.Unwrap for validator-specific diagnostics.
@@ -292,34 +333,60 @@ func (e *SchemaGraphUnavailableError) Unwrap() error {
 	return e.Cause
 }
 
-// SchemaValidationError is an established instance mismatch. Use errors.As to
-// distinguish it from an unavailable schema graph. Problems holds one line per
-// failed constraint, as "location: message" with the location a JSON Pointer
-// into the value; Cause is the validator's own error, when there is one.
+// SchemaValidationError is an established mismatch between a value and a
+// schema. Use errors.As to distinguish it from a *SchemaGraphUnavailableError,
+// where no verdict was reached; OBI-T-16 requires the two outcomes to stay
+// distinct when a value is validated against an operation's contract. Cause
+// is the validator's own error.
 type SchemaValidationError struct {
-	Problems []string
+	Problems []SchemaProblem
 	Cause    error
 }
 
-func (e *SchemaValidationError) Error() string { return strings.Join(e.Problems, "; ") }
-func (e *SchemaValidationError) Unwrap() error { return e.Cause }
+// SchemaProblem is one failed constraint of a mismatch. Path locates it in the
+// validated value as an RFC 6901 JSON Pointer; the empty pointer is the whole
+// value.
+type SchemaProblem struct {
+	Path    string
+	Message string
+}
+
+func (e *SchemaValidationError) Error() string {
+	if e == nil || len(e.Problems) == 0 {
+		return "openbindings: the value does not validate against the schema"
+	}
+	lines := make([]string, len(e.Problems))
+	for i, problem := range e.Problems {
+		if problem.Path == "" {
+			lines[i] = problem.Message
+		} else {
+			lines[i] = problem.Path + ": " + problem.Message
+		}
+	}
+	return strings.Join(lines, "; ")
+}
+
+func (e *SchemaValidationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
 
 // schemaValidationError projects a backend validation error onto the SDK's
-// outcome: a *SchemaValidationError for an established mismatch, and a
-// *SchemaGraphUnavailableError for anything else, such as a capability
-// refusal during evaluation.
+// outcomes: a *SchemaValidationError for an established mismatch, and a
+// *SchemaGraphUnavailableError for anything that reached no verdict.
 func schemaValidationError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var mismatch *jsonschema.ValidationError
-	if !errors.As(err, &mismatch) {
+	problems, mismatch := schemacompiler.Outcome(err)
+	if !mismatch {
 		return &SchemaGraphUnavailableError{Cause: err}
 	}
-	problems := schemacompiler.Problems(mismatch)
-	lines := make([]string, len(problems))
+	out := &SchemaValidationError{Problems: make([]SchemaProblem, len(problems)), Cause: err}
 	for i, problem := range problems {
-		lines[i] = problem.Line()
+		out.Problems[i] = SchemaProblem{Path: jsonpointer.Format(problem.Location...), Message: problem.Message}
 	}
-	return &SchemaValidationError{Problems: lines, Cause: err}
+	return out
 }

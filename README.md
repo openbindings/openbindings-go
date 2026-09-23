@@ -162,20 +162,23 @@ import (
     openbindings "github.com/openbindings/openbindings-go"
 )
 
-// ParseDocument is the conformant front door for untrusted or wire bytes:
-// unlike a plain json.Unmarshal it also rejects duplicate object keys
-// (OBI-D-01). HTTP discovery and acquisition use it internally.
+// ParseDocument is the front door for untrusted or wire bytes: beyond the
+// exact decoding json.Unmarshal also performs (OBI-D-01's checks included), it
+// refuses an unsupported version (OBI-T-04) and applies the document schema
+// (OBI-D-02). HTTP discovery and acquisition use it internally.
 iface, err := openbindings.ParseDocument(data)
 if err != nil {
     log.Fatal(err)
 }
-if err := iface.Validate(); err != nil {
+if _, err := iface.Validate(); err != nil {
     log.Fatal(err)
 }
 
-fmt.Println(iface.Name, iface.Version)
+// Optional members are pointers, nil when absent; Value reads one where
+// absence and the zero value mean the same.
+fmt.Println(openbindings.Value(iface.Name), openbindings.Value(iface.Version))
 for name, op := range iface.Operations {
-    fmt.Println(name, op.Description)
+    fmt.Println(name, openbindings.Value(op.Description))
 }
 ```
 
@@ -347,7 +350,7 @@ func (i *inProcessInvoker) CheckBindingSpecs(specs []string) []bindingsupport.Bi
 }
 func (i *inProcessInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
     call := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
-    handler := i.handlers[args.Selector] // the source's content names the handler
+    handler := i.handlers[openbindings.Value(args.Selector)] // the binding's selector names the handler
     go func() {
         input, err := call.ReadInput(ctx)
         if err != nil { call.FireError(invoke.AsInvocationError(err)); return }

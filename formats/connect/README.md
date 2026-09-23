@@ -27,9 +27,11 @@ import (
     openbindings "github.com/openbindings/openbindings-go"
     connectbinding "github.com/openbindings/openbindings-go/formats/connect"
     "github.com/openbindings/openbindings-go/jsonvalue"
+    "github.com/openbindings/openbindings-go/invoke"
+    "github.com/openbindings/openbindings-go/synthesize"
 )
 
-opInv := openbindings.NewOperationInvoker(connectbinding.NewInvoker())
+opInv := invoke.NewOperationInvoker(connectbinding.NewInvoker())
 ```
 
 ### Invoke a binding
@@ -37,12 +39,12 @@ opInv := openbindings.NewOperationInvoker(connectbinding.NewInvoker())
 ```go
 invoker := connectbinding.NewInvoker()
 
-inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{
+inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+    Source: invoke.InvocationSource{
         BindingSpec: connectbinding.BindingSpec,
         Location:    "https://api.example.com",
     },
-    Selector: "mypackage.MyService/GetItem",
+    Selector: openbindings.Present("mypackage.MyService/GetItem"),
     Context: map[string]any{"headers": map[string]string{"authorization": "Bearer tok_123"}},
 })
 
@@ -53,7 +55,7 @@ if err := inv.Write(ctx, map[string]any{"id": "123"}); err != nil {
 _ = inv.Close()
 
 // Unary: assert exactly one output.
-out, err := openbindings.Single[any](ctx, inv.Outputs())
+out, err := invoke.Single[any](ctx, inv.Outputs())
 if err != nil {
     log.Fatal(err)
 }
@@ -70,7 +72,7 @@ for {
         break // clean end of stream
     }
     if err != nil {
-        log.Fatal(err) // terminal *openbindings.InvocationError
+        log.Fatal(err) // terminal *invoke.InvocationError
     }
     fmt.Println(msg)
 }
@@ -80,8 +82,8 @@ for {
 
 ```go
 synth := connectbinding.NewSynthesizer()
-iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
-    Sources: []openbindings.SynthesizeSource{{
+iface, err := synth.SynthesizeInterface(ctx, &synthesize.SynthesizeInput{
+    Sources: []synthesize.SynthesizeSource{{
         BindingSpec: connectbinding.BindingSpec,
         Location:    "https://api.example.com",
         Content:     jsonvalue.TextContent(protoSource),
@@ -181,7 +183,7 @@ hook has no effect.
 Delivery units — the unary response body and each streaming envelope
 payload — are consumer-bounded: set `MaxDeliveryUnitBytes` on the
 `OperationInvoker` (or per invocation on `BindingInvocationArgs`); zero
-selects `openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). The streaming
+selects `invoke.DefaultMaxDeliveryUnitBytes` (10 MiB). The streaming
 dispatch path's below-bridge HTTP error-body read is deliberately fixed — it
 is not an abstract delivery unit. Size caps are consumer and
 implementation policy under openbindings.connect@1 §2, never spec rules.

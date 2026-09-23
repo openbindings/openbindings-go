@@ -728,7 +728,6 @@ func promptArguments(v any) (map[string]string, *invoke.InvocationError) {
 // before resources/ though the two cannot prefix-collide, "resources/" not
 // being a prefix of "resourceTemplates/".)
 func parseSelector(selector string) (entityType string, name string, err error) {
-	selector = strings.TrimSpace(selector)
 	if selector == "" {
 		return "", "", fmt.Errorf("no MCP selector: one is required (MCP-D-03)")
 	}

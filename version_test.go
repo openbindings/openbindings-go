@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -154,13 +155,13 @@ func TestIsUnsupportedPrerelease(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := IsUnsupportedPrerelease(tt.version)
+			got, err := isUnsupportedPrerelease(tt.version)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("IsUnsupportedPrerelease(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
+				t.Errorf("isUnsupportedPrerelease(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr && got != tt.want {
-				t.Errorf("IsUnsupportedPrerelease(%q) = %v, want %v", tt.version, got, tt.want)
+				t.Errorf("isUnsupportedPrerelease(%q) = %v, want %v", tt.version, got, tt.want)
 			}
 		})
 	}
@@ -206,13 +207,13 @@ func TestParseSemverStrict(t *testing.T) {
 		want    semver
 		wantErr bool
 	}{
-		{name: "valid 0.1.0", input: "0.1.0", want: semver{major: 0, minor: 1, patch: 0}},
-		{name: "valid 1.2.3", input: "1.2.3", want: semver{major: 1, minor: 2, patch: 3}},
-		{name: "valid large numbers", input: "10.20.30", want: semver{major: 10, minor: 20, patch: 30}},
+		{name: "valid 0.1.0", input: "0.1.0", want: semver{major: "0", minor: "1", patch: "0"}},
+		{name: "valid 1.2.3", input: "1.2.3", want: semver{major: "1", minor: "2", patch: "3"}},
+		{name: "valid large numbers", input: "10.20.30", want: semver{major: "10", minor: "20", patch: "30"}},
 		{name: "surrounding whitespace", input: "  1.2.3  ", wantErr: true},
-		{name: "valid with prerelease", input: "1.0.0-alpha.1", want: semver{major: 1, minor: 0, patch: 0, preRelease: []string{"alpha", "1"}}},
-		{name: "valid with build", input: "1.0.0+exp", want: semver{major: 1, minor: 0, patch: 0, build: "exp"}},
-		{name: "valid with pre + build", input: "1.0.0-beta+exp", want: semver{major: 1, minor: 0, patch: 0, preRelease: []string{"beta"}, build: "exp"}},
+		{name: "valid with prerelease", input: "1.0.0-alpha.1", want: semver{major: "1", minor: "0", patch: "0", preRelease: []string{"alpha", "1"}}},
+		{name: "valid with build", input: "1.0.0+exp", want: semver{major: "1", minor: "0", patch: "0", build: "exp"}},
+		{name: "valid with pre + build", input: "1.0.0-beta+exp", want: semver{major: "1", minor: "0", patch: "0", preRelease: []string{"beta"}, build: "exp"}},
 		{name: "empty string", input: "", wantErr: true},
 		{name: "too few parts", input: "1.2", wantErr: true},
 		{name: "too many parts", input: "1.2.3.4", wantErr: true},
@@ -252,22 +253,22 @@ func TestCompareSemver(t *testing.T) {
 		b    semver
 		want int
 	}{
-		{name: "equal versions", a: semver{major: 1, minor: 2, patch: 3}, b: semver{major: 1, minor: 2, patch: 3}, want: 0},
-		{name: "a major greater", a: semver{major: 2}, b: semver{major: 1, minor: 9, patch: 9}, want: 1},
-		{name: "a major less", a: semver{major: 1, minor: 9, patch: 9}, b: semver{major: 2}, want: -1},
-		{name: "a minor greater", a: semver{major: 1, minor: 3}, b: semver{major: 1, minor: 2, patch: 9}, want: 1},
-		{name: "a minor less", a: semver{major: 1, minor: 2, patch: 9}, b: semver{major: 1, minor: 3}, want: -1},
-		{name: "a patch greater", a: semver{major: 1, minor: 2, patch: 4}, b: semver{major: 1, minor: 2, patch: 3}, want: 1},
-		{name: "a patch less", a: semver{major: 1, minor: 2, patch: 3}, b: semver{major: 1, minor: 2, patch: 4}, want: -1},
+		{name: "equal versions", a: semver{major: "1", minor: "2", patch: "3"}, b: semver{major: "1", minor: "2", patch: "3"}, want: 0},
+		{name: "a major greater", a: semver{major: "2"}, b: semver{major: "1", minor: "9", patch: "9"}, want: 1},
+		{name: "a major less", a: semver{major: "1", minor: "9", patch: "9"}, b: semver{major: "2"}, want: -1},
+		{name: "a minor greater", a: semver{major: "1", minor: "3"}, b: semver{major: "1", minor: "2", patch: "9"}, want: 1},
+		{name: "a minor less", a: semver{major: "1", minor: "2", patch: "9"}, b: semver{major: "1", minor: "3"}, want: -1},
+		{name: "a patch greater", a: semver{major: "1", minor: "2", patch: "4"}, b: semver{major: "1", minor: "2", patch: "3"}, want: 1},
+		{name: "a patch less", a: semver{major: "1", minor: "2", patch: "3"}, b: semver{major: "1", minor: "2", patch: "4"}, want: -1},
 		{name: "zero versions", a: semver{}, b: semver{}, want: 0},
 		// SemVer 2.0.0 §11: a version with pre-release has lower precedence than the same normal version.
-		{name: "prerelease lower than no prerelease", a: semver{major: 1, preRelease: []string{"alpha"}}, b: semver{major: 1}, want: -1},
-		{name: "no prerelease higher than prerelease", a: semver{major: 1}, b: semver{major: 1, preRelease: []string{"alpha"}}, want: 1},
-		{name: "alpha < beta lex", a: semver{major: 1, preRelease: []string{"alpha"}}, b: semver{major: 1, preRelease: []string{"beta"}}, want: -1},
-		{name: "alpha < alpha.1 (shorter < longer)", a: semver{major: 1, preRelease: []string{"alpha"}}, b: semver{major: 1, preRelease: []string{"alpha", "1"}}, want: -1},
-		{name: "numeric < alphanumeric prerelease", a: semver{major: 1, preRelease: []string{"1"}}, b: semver{major: 1, preRelease: []string{"alpha"}}, want: -1},
-		{name: "numeric prerelease ordering", a: semver{major: 1, preRelease: []string{"1"}}, b: semver{major: 1, preRelease: []string{"2"}}, want: -1},
-		{name: "build metadata ignored", a: semver{major: 1, build: "exp.a"}, b: semver{major: 1, build: "exp.b"}, want: 0},
+		{name: "prerelease lower than no prerelease", a: semver{major: "1", preRelease: []string{"alpha"}}, b: semver{major: "1"}, want: -1},
+		{name: "no prerelease higher than prerelease", a: semver{major: "1"}, b: semver{major: "1", preRelease: []string{"alpha"}}, want: 1},
+		{name: "alpha < beta lex", a: semver{major: "1", preRelease: []string{"alpha"}}, b: semver{major: "1", preRelease: []string{"beta"}}, want: -1},
+		{name: "alpha < alpha.1 (shorter < longer)", a: semver{major: "1", preRelease: []string{"alpha"}}, b: semver{major: "1", preRelease: []string{"alpha", "1"}}, want: -1},
+		{name: "numeric < alphanumeric prerelease", a: semver{major: "1", preRelease: []string{"1"}}, b: semver{major: "1", preRelease: []string{"alpha"}}, want: -1},
+		{name: "numeric prerelease ordering", a: semver{major: "1", preRelease: []string{"1"}}, b: semver{major: "1", preRelease: []string{"2"}}, want: -1},
+		{name: "build metadata ignored", a: semver{major: "1", build: "exp.a"}, b: semver{major: "1", build: "exp.b"}, want: 0},
 	}
 
 	for _, tt := range tests {
@@ -277,5 +278,30 @@ func TestCompareSemver(t *testing.T) {
 				t.Errorf("compareSemver(%+v, %+v) = %v, want sign %v", tt.a, tt.b, got, tt.want)
 			}
 		})
+	}
+}
+
+// SemVer bounds no number, so a version whose numbers exceed any machine
+// integer is compared exactly, and refused or accepted like any other.
+func TestVersionNumbersAreUnbounded(t *testing.T) {
+	huge := "999999999999999999999999999999"
+	for version, want := range map[string]bool{
+		huge + ".0.0":      false,
+		"0." + huge + ".0": false,
+		"0.2." + huge:      true,
+		"0.2.0-" + huge:    false,
+	} {
+		supported, err := IsSupportedVersion(version)
+		if err != nil || supported != want {
+			t.Errorf("IsSupportedVersion(%q) = %v, %v; want %v", version, supported, err, want)
+		}
+	}
+	if _, _, err := ValidateDocument([]byte(`{"openbindings":"` + huge + `.0.0","operations":{}}`)); !errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("an oversized major must be refused (OBI-T-04), got %v", err)
+	}
+	a, _ := parseSemverStrict("1.0.0-" + huge)
+	b, _ := parseSemverStrict("1.0.0-" + huge + "0")
+	if compareSemver(a, b) >= 0 {
+		t.Fatal("numeric pre-release identifiers compare numerically at any size")
 	}
 }

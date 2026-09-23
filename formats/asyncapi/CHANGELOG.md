@@ -26,6 +26,11 @@
 
 ### Fixed
 
+- **Selectors match byte-exactly** (ASYNC-D-03). Surrounding whitespace was
+  trimmed before the selector was read as a JSON Pointer; the pointer is the
+  only conformant spelling, so a padded one now identifies no operation. An
+  absent selector is refused like an empty one.
+
 - The Go adapter preserves exact JSON payload numbers across the native client
   boundary, including integers beyond binary64 precision and large or small
   decimal exponents. This requires the matching native Go payload repair.

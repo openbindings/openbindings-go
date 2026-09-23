@@ -586,7 +586,7 @@ func (s *CompositionSession) evaluateRegistrations(
 }
 
 func bindingSpecAllowed(dependency openbindings.PreparedDependencyDescriptor, bindingSpec string) bool {
-	if !dependency.BindingSpecsPresent {
+	if dependency.BindingSpecs == nil {
 		return true
 	}
 	for _, allowed := range dependency.BindingSpecs {
@@ -605,7 +605,7 @@ func inspectRealization(candidate eligibleRealization) InspectedRealization {
 		BindingKey:               candidate.descriptor.BindingKey,
 		SourceKey:                candidate.descriptor.SourceKey,
 		BindingSpec:              candidate.descriptor.BindingSpec,
-		Selector:                 candidate.descriptor.Selector,
+		Selector:                 cloneSelector(candidate.descriptor.Selector),
 		Evidence:                 candidate.evidence,
 	}
 }

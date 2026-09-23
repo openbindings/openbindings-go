@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const testOBI = `{"openbindings":"0.2.0","operations":{"ping":{}}}`
@@ -85,7 +87,10 @@ func TestDiscoverOutcomesStayDistinct(t *testing.T) {
 			var e *StatusError
 			return errors.As(err, &e) && e.StatusCode == http.StatusInternalServerError
 		}},
-		{name: "refused version", status: http.StatusOK, body: `{"openbindings":"0.3.0","operations":{}}`, check: func(err error) bool { var e *VersionRefusalError; return errors.As(err, &e) && e.Version == "0.3.0" }},
+		{name: "refused version", status: http.StatusOK, body: `{"openbindings":"0.3.0","operations":{}}`, check: func(err error) bool {
+			var e *openbindings.VersionRefusalError
+			return errors.As(err, &e) && e.Version == "0.3.0"
+		}},
 		{name: "invalid document", status: http.StatusOK, body: `{"not":"an OBI"}`, check: func(err error) bool { return err != nil }},
 	}
 	for _, tt := range tests {

@@ -344,28 +344,38 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 	}
 }
 
-// A member of the wrong JSON type is OBI-D-02's violation; the rules that
-// needed its contents are inconclusive at its position, and every other
-// position is still judged.
-func TestValidateDocument_WrongTypedMembersLeaveTheirRulesInconclusive(t *testing.T) {
+// Each rule is judged literally on the values present: a member of the wrong
+// JSON type is OBI-D-02's violation, and also violates a rule whose predicate
+// it fails, while a rule whose domain excludes it has nothing to judge there.
+func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":5,
-		"transforms":{"t":"$"},"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":"#/transforms/missing"}}}}`)
-	if report.Evidence["OBI-D-02"] != EvidenceViolated {
-		t.Fatalf("OBI-D-02 = %s", report.Evidence["OBI-D-02"])
-	}
+		"transforms":{"t":"$","n":7},"sources":{"s":{"bindingSpec":"x@1","location":7}},
+		"bindings":{"b":{"operation":"a","source":42,"inputTransform":{"$ref":"#/transforms/missing"},"outputTransform":9},
+		"c":{"operation":"a","source":"s","inputTransform":{"$ref":"https://a.example/doc#/transforms/t"}}}}`)
 	found := map[string]RuleEvidenceStatus{}
 	for _, finding := range report.Findings {
 		found[finding.Rule+" "+finding.Path] = finding.Status
 	}
 	for key, want := range map[string]RuleEvidenceStatus{
-		"OBI-D-03 /operations":                     EvidenceInconclusive,
-		"OBI-D-08 /bindings/b/operation":           EvidenceInconclusive,
+		"OBI-D-02 /operations":                     EvidenceViolated,
+		"OBI-D-08 /bindings/b/operation":           EvidenceViolated,
 		"OBI-D-09 /bindings/b/source":              EvidenceViolated,
 		"OBI-D-10 /bindings/b/inputTransform/$ref": EvidenceViolated,
+		"OBI-D-05 /bindings/c/inputTransform/$ref": EvidenceViolated,
+		"OBI-D-05 /sources/s/location":             EvidenceViolated,
+		"OBI-D-18 /transforms/n":                   EvidenceViolated,
 	} {
 		if got := found[key]; got != want {
 			t.Errorf("%s = %q, want %s; findings %+v", key, got, want, report.Findings)
 		}
+	}
+	for _, rule := range []string{"OBI-D-03", "OBI-D-04", "OBI-D-11", "OBI-D-17"} {
+		if report.Evidence[rule] != EvidenceSatisfied {
+			t.Errorf("%s = %s: an operations member that is not an object holds nothing it judges", rule, report.Evidence[rule])
+		}
+	}
+	if _, ok := found["OBI-D-18 /bindings/b/outputTransform"]; ok {
+		t.Error("a transform that is neither an expression nor a reference is outside OBI-D-18")
 	}
 }
 
@@ -401,5 +411,145 @@ func TestValidateDocument_KeyFindingsAreLocatedAtTheKey(t *testing.T) {
 		if finding.Rule == "OBI-D-02" && finding.Path != "/operations/a~1b~0c" {
 			t.Fatalf("OBI-D-02 finding at %q, want the key's pointer", finding.Path)
 		}
+	}
+}
+
+// OBI-D-06 and OBI-D-07 govern every schema in the document, inside schema
+// resources too: a resource's internal business is reference resolution, not
+// the document's dialect.
+func TestValidateDocument_DialectRulesReachEverySchema(t *testing.T) {
+	for name, tt := range map[string]struct {
+		input string
+		rule  string
+	}{
+		"$schema at an OBI position":     {`{"$schema":"http://json-schema.org/draft-07/schema#"}`, "OBI-D-06"},
+		"$schema inside a resource":      {`{"$id":"https://example.com/s","properties":{"a":{"$schema":"http://json-schema.org/draft-07/schema#"}}}`, "OBI-D-06"},
+		"$vocabulary at an OBI position": {`{"$vocabulary":{}}`, "OBI-D-07"},
+		"$vocabulary inside a resource":  {`{"$id":"https://example.com/s","$defs":{"m":{"$vocabulary":{}}}}`, "OBI-D-07"},
+	} {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"input":`+tt.input+`}}}`)
+		if report.Evidence[tt.rule] != EvidenceViolated {
+			t.Errorf("%s: %s = %s, want violated", name, tt.rule, report.Evidence[tt.rule])
+		}
+	}
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"input":{"$schema":"https://json-schema.org/draft/2020-12/schema"}}}}`)
+	if report.Evidence["OBI-D-06"] != EvidenceSatisfied || report.Evidence["OBI-D-07"] != EvidenceSatisfied {
+		t.Fatalf("the 2020-12 dialect satisfies both rules: %v %v", report.Evidence["OBI-D-06"], report.Evidence["OBI-D-07"])
+	}
+}
+
+// Reference cycles terminate in every walk (OBI-T-11): a recursive type is
+// judged, and a pure loop with no schema in it leaves its examples undecided
+// rather than hanging.
+func TestValidateDocument_ReferenceCyclesTerminate(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0",
+		"schemas":{"Node":{"type":"object","properties":{"next":{"$ref":"#/schemas/Node"}}}},
+		"operations":{"a":{"input":{"$ref":"#/schemas/Node"},"examples":{"one":{"input":{"next":{"next":5}}}}}}}`)
+	if report.Evidence["OBI-D-11"] != EvidenceViolated {
+		t.Fatalf("OBI-D-11 = %s, want violated; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+	}
+	report = mustValidateDocument(t, `{"openbindings":"0.2.0",
+		"schemas":{"A":{"$ref":"#/schemas/B"},"B":{"$ref":"#/schemas/A"}},
+		"operations":{"a":{"input":{"$ref":"#/schemas/A"},"examples":{"one":{"input":1}}}}}`)
+	if report.Evidence["OBI-D-11"] == EvidenceSatisfied {
+		t.Fatalf("a pure reference loop established no verdict, yet OBI-D-11 = satisfied")
+	}
+}
+
+// OBI-D-11's graph is what evaluation applies: an unreferenced definition is
+// not part of it, and a plain-name anchor inside an embedded resource
+// resolves.
+func TestValidateDocument_ExampleGraphIsWhatEvaluationApplies(t *testing.T) {
+	for name, document := range map[string]string{
+		"unreferenced external definition": `{"openbindings":"0.2.0","operations":{"op":{
+			"input":{"type":"string","$defs":{"dead":{"$ref":"https://outside.example/x"}}},"examples":{"bad":{"input":7}}}}}`,
+		"anchor inside a resource": `{"openbindings":"0.2.0","operations":{"op":{
+			"input":{"$id":"https://e.test/S","$ref":"#string","$defs":{"s":{"$anchor":"string","type":"string"}}},"examples":{"bad":{"input":7}}}}}`,
+		"conflicting ids elsewhere": `{"openbindings":"0.2.0","schemas":{"A":{"$id":"https://e.test/S"},"B":{"$id":"https://e.test/S"}},
+			"operations":{"op":{"input":{"type":"string"},"examples":{"bad":{"input":7}}}}}`,
+	} {
+		report := mustValidateDocument(t, document)
+		if report.Evidence["OBI-D-11"] != EvidenceViolated {
+			t.Errorf("%s: OBI-D-11 = %s, want violated; findings %+v", name, report.Evidence["OBI-D-11"], report.Findings)
+		}
+	}
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"A":{"$id":"https://e.test/S"},"B":{"$id":"https://e.test/S"}},
+		"operations":{"op":{"input":{"$ref":"https://e.test/S"},"examples":{"one":{"input":7}}}}}`)
+	if report.Evidence["OBI-D-11"] != EvidenceInconclusive {
+		t.Fatalf("a graph reaching an ambiguous $id is undecided; OBI-D-11 = %s", report.Evidence["OBI-D-11"])
+	}
+}
+
+// OBI-D-05 holds URI-form references to RFC 3986's grammar, not a character
+// screen.
+func TestValidateDocument_ReferencesFollowTheURIGrammar(t *testing.T) {
+	for name, tt := range map[string]struct {
+		input string
+		want  RuleEvidenceStatus
+	}{
+		"bracket in a fragment":           {`{"$ref":"#/schemas/A/properties/a[0]"}`, EvidenceViolated},
+		"second # in a fragment":          {`{"$ref":"#/schemas/A#b"}`, EvidenceViolated},
+		"percent-encoded registered name": {`{"$ref":"https://%41.example/s.json"}`, EvidenceSatisfied},
+		"IPv6 literal host":               {`{"$ref":"https://[::1]/s.json"}`, EvidenceSatisfied},
+		"unterminated IPv6 literal":       {`{"$ref":"https://[::1/s.json"}`, EvidenceViolated},
+		"non-string $ref":                 {`{"$ref":42}`, EvidenceViolated},
+	} {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"A":{}},"operations":{"a":{"input":`+tt.input+`}}}`)
+		if got := report.Evidence["OBI-D-05"]; got != tt.want {
+			t.Errorf("%s: OBI-D-05 = %s, want %s; findings %+v", name, got, tt.want, report.Findings)
+		}
+	}
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","location":""}}}`)
+	if report.Evidence["OBI-D-05"] != EvidenceViolated {
+		t.Fatalf("an empty location is relative in form: OBI-D-05 = %s", report.Evidence["OBI-D-05"])
+	}
+}
+
+// OBI-D-16 covers an absolute $ref that matches an embedded schema's $id.
+func TestValidateDocument_AbsoluteReferencesIntoEmbeddedResourcesResolve(t *testing.T) {
+	document := func(ref string) string {
+		return `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://example.com/t","$defs":{"S":{"type":"string"}}}},
+			"operations":{"a":{"input":{"$ref":"` + ref + `"}}}}`
+	}
+	for ref, want := range map[string]RuleEvidenceStatus{
+		"https://example.com/t#/$defs/S":       EvidenceSatisfied,
+		"https://example.com/t#/$defs/Missing": EvidenceViolated,
+		"https://other.example/x#/nope":        EvidenceSatisfied,
+	} {
+		if got := mustValidateDocument(t, document(ref)).Evidence["OBI-D-16"]; got != want {
+			t.Errorf("%s: OBI-D-16 = %s, want %s", ref, got, want)
+		}
+	}
+}
+
+// A resource limit is not evidence of a violation (§10.5).
+func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"input":{"minLength":1e999999}}}}`)
+	if report.Evidence["OBI-D-17"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-17 = %s, want inconclusive; findings %+v", report.Evidence["OBI-D-17"], report.Findings)
+	}
+}
+
+// A document schema finding about a map key is located at the key, the same
+// way every time.
+func TestValidateDocument_KeyFindingPathsAreDeterministic(t *testing.T) {
+	for range 50 {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"bad key":{}},"sources":{},"transforms":{},"name":"n","description":"d"}`)
+		for _, finding := range report.Findings {
+			if finding.Rule == "OBI-D-02" && finding.Path != "/schemas/bad key" {
+				t.Fatalf("OBI-D-02 finding at %q", finding.Path)
+			}
+		}
+	}
+}
+
+// The version is read, and an unsupported one refused, even from input
+// OBI-D-01 refuses.
+func TestValidateDocument_RefusesVersionsBeforeJudgingBytes(t *testing.T) {
+	if _, _, err := ValidateDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`)); !errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("want a version refusal, got %v", err)
+	}
+	if _, err := ParseDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`)); !errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("ParseDocument: want a version refusal, got %v", err)
 	}
 }

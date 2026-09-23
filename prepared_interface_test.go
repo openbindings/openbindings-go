@@ -51,7 +51,7 @@ func TestPreparedInterfaceContentSnapshotAndIndexes(t *testing.T) {
 		t.Fatalf("operation descriptor = %#v, %v", operation, ok)
 	}
 	dependency, ok := prepared.Dependency("delivery")
-	if !ok || dependency.OperationKey != "deliver" || !dependency.BindingSpecsPresent {
+	if !ok || dependency.OperationKey != "deliver" || dependency.BindingSpecs == nil {
 		t.Fatalf("dependency descriptor = %#v, %v", dependency, ok)
 	}
 	binding, ok := prepared.Binding("local")

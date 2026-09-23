@@ -115,6 +115,10 @@ func (c *exactLargeCount) LocalizedString(p *message.Printer) string {
 // an unavailable schema graph rather than fetched or read.
 type externalResourceRefusal struct{}
 
-func (externalResourceRefusal) Load(url string) (any, error) {
-	return nil, fmt.Errorf("external schema resource %s is not obtained; only resources the document embeds resolve", url)
+func (externalResourceRefusal) Load(url string) (any, error) { return nil, RefuseExternal(url) }
+
+// RefuseExternal is the error with which the SDK's compilers decline a
+// schema resource outside what the caller registered.
+func RefuseExternal(url string) error {
+	return fmt.Errorf("external schema resource %s is not obtained; only resources the document embeds resolve", url)
 }

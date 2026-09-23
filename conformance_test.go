@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
@@ -439,9 +440,8 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 	// supported minor line is accepted per OBI-T-04 — note it lies ABOVE
 	// MaxTestedVersion, pinning that the gate is the acceptance predicate,
 	// not tested-range membership.
-	nextMajor := fmt.Sprintf("%d.0.0", maxTestedSemver.major+1)
-	higherPatch := fmt.Sprintf("%d.%d.%d",
-		maxTestedSemver.major, maxTestedSemver.minor, maxTestedSemver.patch+1)
+	nextMajor := successor(maxTestedSemver.major) + ".0.0"
+	higherPatch := maxTestedSemver.major + "." + maxTestedSemver.minor + "." + successor(maxTestedSemver.patch)
 
 	cases := []struct {
 		annotation string
@@ -451,9 +451,9 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 		{higherPatch, false},         // above MaxTested but accepted → administer
 		{nextMajor, true},            // refused major → skip
 	}
-	if maxTestedSemver.major == 0 {
+	if maxTestedSemver.major == "0" {
 		// While pre-1.0, the next minor is refused too.
-		nextMinor := fmt.Sprintf("0.%d.0", maxTestedSemver.minor+1)
+		nextMinor := "0." + successor(maxTestedSemver.minor) + ".0"
 		cases = append(cases, struct {
 			annotation string
 			wantSkip   bool
@@ -541,4 +541,10 @@ func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt confor
 			}
 		}
 	}
+}
+
+// successor returns the SemVer numeric identifier one greater than n.
+func successor(n string) string {
+	value, _ := new(big.Int).SetString(n, 10)
+	return value.Add(value, big.NewInt(1)).String()
 }

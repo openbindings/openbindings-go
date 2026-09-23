@@ -10,12 +10,11 @@
 package schemavalidate
 
 import (
-	"errors"
 	"fmt"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"
-	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
 )
 
 // Validate validates a value against a standalone schema, in object or
@@ -45,14 +44,13 @@ func Validate(value any, schema any) error {
 	if verr == nil {
 		return nil
 	}
-	var mismatch *jsonschema.ValidationError
-	if !errors.As(verr, &mismatch) {
+	problems, mismatch := schemacompiler.Outcome(verr)
+	if !mismatch {
 		return &openbindings.SchemaGraphUnavailableError{Cause: verr}
 	}
-	problems := schemacompiler.Problems(mismatch)
-	lines := make([]string, len(problems))
+	out := &openbindings.SchemaValidationError{Problems: make([]openbindings.SchemaProblem, len(problems)), Cause: verr}
 	for i, problem := range problems {
-		lines[i] = problem.Line()
+		out.Problems[i] = openbindings.SchemaProblem{Path: jsonpointer.Format(problem.Location...), Message: problem.Message}
 	}
-	return &openbindings.SchemaValidationError{Problems: lines, Cause: verr}
+	return out
 }

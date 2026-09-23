@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -81,7 +80,7 @@ func versionRefusal(v string) (msg string, refused bool, err error) {
 	} else if lower {
 		return fmt.Sprintf("document declares version %q, older than the oldest version this implementation supports (%s)", v, MinSupportedVersion), true, nil
 	}
-	if pre, err := IsUnsupportedPrerelease(v); err != nil {
+	if pre, err := isUnsupportedPrerelease(v); err != nil {
 		return "", false, err
 	} else if pre {
 		return fmt.Sprintf("document declares version %q, a pre-release this implementation does not support", v), true, nil
@@ -100,10 +99,10 @@ func IsHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if parsed.major > maxTestedSemver.major {
+	if compareNumeric(parsed.major, maxTestedSemver.major) > 0 {
 		return true, nil
 	}
-	if maxTestedSemver.major == 0 && parsed.major == 0 && parsed.minor > maxTestedSemver.minor {
+	if maxTestedSemver.major == "0" && parsed.major == "0" && compareNumeric(parsed.minor, maxTestedSemver.minor) > 0 {
 		return true, nil
 	}
 	return false, nil
@@ -122,17 +121,17 @@ func IsLowerThanMinSupported(v string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if parsed.major < minSupportedSemver.major {
+	if compareNumeric(parsed.major, minSupportedSemver.major) < 0 {
 		return true, nil
 	}
-	if minSupportedSemver.major == 0 && parsed.major == 0 && parsed.minor < minSupportedSemver.minor {
+	if minSupportedSemver.major == "0" && parsed.major == "0" && compareNumeric(parsed.minor, minSupportedSemver.minor) < 0 {
 		return true, nil
 	}
 	return false, nil
 }
 
-// IsUnsupportedPrerelease reports whether v carries a pre-release identifier
-// that this SDK does not declare support for. Per OBI-T-04 and §11.1, a tool
+// isUnsupportedPrerelease reports whether v carries a pre-release identifier
+// that this SDK does not declare support for. Per OBI-T-04 and §8.1, a tool
 // MUST NOT accept a prerelease unless it declares support for that specific
 // prerelease; "declares support" means the prerelease falls within this SDK's
 // supported range [MinSupportedVersion, MaxTestedVersion]. A prerelease sorts
@@ -140,7 +139,7 @@ func IsLowerThanMinSupported(v string) (bool, error) {
 // is in range. Non-prerelease versions and build metadata are never flagged.
 //
 // Returns an error if v cannot be parsed as a SemVer 2.0.0 string.
-func IsUnsupportedPrerelease(v string) (bool, error) {
+func isUnsupportedPrerelease(v string) (bool, error) {
 	parsed, err := parseSemverStrict(v)
 	if err != nil {
 		return false, err
@@ -152,13 +151,15 @@ func IsUnsupportedPrerelease(v string) (bool, error) {
 	return !inRange, nil
 }
 
-// semver represents a parsed Semantic Versioning 2.0.0 value.
+// semver represents a parsed Semantic Versioning 2.0.0 value. Its numeric
+// identifiers are kept as their digits: SemVer bounds no number, so none is
+// converted to a machine integer that could overflow.
 //
 // Build metadata is ignored for precedence comparison per SemVer 2.0.0 §10.
 type semver struct {
-	major      int
-	minor      int
-	patch      int
+	major      string
+	minor      string
+	patch      string
 	preRelease []string // empty if no pre-release; otherwise the dot-separated identifiers
 	build      string   // raw build metadata; informational only
 }
@@ -178,19 +179,7 @@ func parseSemverStrict(v string) (semver, error) {
 	if m == nil {
 		return semver{}, fmt.Errorf("invalid semver: %q", v)
 	}
-	major, err := strconv.Atoi(m[1])
-	if err != nil {
-		return semver{}, fmt.Errorf("invalid semver: %q", v)
-	}
-	minor, err := strconv.Atoi(m[2])
-	if err != nil {
-		return semver{}, fmt.Errorf("invalid semver: %q", v)
-	}
-	patch, err := strconv.Atoi(m[3])
-	if err != nil {
-		return semver{}, fmt.Errorf("invalid semver: %q", v)
-	}
-	out := semver{major: major, minor: minor, patch: patch}
+	out := semver{major: m[1], minor: m[2], patch: m[3]}
 	if m[4] != "" {
 		out.preRelease = strings.Split(m[4], ".")
 	}
@@ -207,13 +196,13 @@ func parseSemverStrict(v string) (semver, error) {
 //   - 0 if a == b (equal precedence)
 //   - positive if a > b
 func compareSemver(a, b semver) int {
-	if c := cmp.Compare(a.major, b.major); c != 0 {
+	if c := compareNumeric(a.major, b.major); c != 0 {
 		return c
 	}
-	if c := cmp.Compare(a.minor, b.minor); c != 0 {
+	if c := compareNumeric(a.minor, b.minor); c != 0 {
 		return c
 	}
-	if c := cmp.Compare(a.patch, b.patch); c != 0 {
+	if c := compareNumeric(a.patch, b.patch); c != 0 {
 		return c
 	}
 	// Equal numeric components: a version with pre-release has LOWER precedence
@@ -228,11 +217,11 @@ func compareSemver(a, b semver) int {
 	}
 	// Both have pre-release: compare identifiers left-to-right.
 	for i := 0; i < len(a.preRelease) && i < len(b.preRelease); i++ {
-		ai, aIsNum := preReleaseIdentifierAsInt(a.preRelease[i])
-		bi, bIsNum := preReleaseIdentifierAsInt(b.preRelease[i])
+		aIsNum := isNumericIdentifier(a.preRelease[i])
+		bIsNum := isNumericIdentifier(b.preRelease[i])
 		switch {
 		case aIsNum && bIsNum:
-			if c := cmp.Compare(ai, bi); c != 0 {
+			if c := compareNumeric(a.preRelease[i], b.preRelease[i]); c != 0 {
 				return c
 			}
 		case aIsNum:
@@ -250,20 +239,26 @@ func compareSemver(a, b semver) int {
 	return cmp.Compare(len(a.preRelease), len(b.preRelease))
 }
 
-// preReleaseIdentifierAsInt returns (n, true) if the identifier is a numeric identifier
-// (per SemVer 2.0.0: digits only, no leading zero unless the identifier is just "0").
-func preReleaseIdentifierAsInt(id string) (int, bool) {
+// isNumericIdentifier reports whether a SemVer identifier is numeric: digits
+// only. The grammar already forbids a leading zero in one.
+func isNumericIdentifier(id string) bool {
 	if id == "" {
-		return 0, false
+		return false
 	}
 	for _, r := range id {
 		if r < '0' || r > '9' {
-			return 0, false
+			return false
 		}
 	}
-	n, err := strconv.Atoi(id)
-	if err != nil {
-		return 0, false
+	return true
+}
+
+// compareNumeric compares two SemVer numeric identifiers of any size. Neither
+// has a leading zero, so the longer is the larger, and equal lengths compare
+// digit by digit.
+func compareNumeric(a, b string) int {
+	if c := cmp.Compare(len(a), len(b)); c != 0 {
+		return c
 	}
-	return n, true
+	return strings.Compare(a, b)
 }
