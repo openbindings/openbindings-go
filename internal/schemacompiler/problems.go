@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
-	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
-	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema/kind"
 	"github.com/openbindings/openbindings-go/jsonvalue"
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 )
@@ -169,6 +169,34 @@ func ValueProblem(v any) string {
 	default:
 		return fmt.Sprintf("a Go %T is not a JSON value; decode the value as generic JSON first", v)
 	}
+}
+
+// NumericLimit reports a number in v beyond the numeric work the backend is
+// given (jsonvalue.CheckNumericWork: at most 4096 characters, an exponent
+// within ±10000), wrapping the *jsonvalue.CapabilityError, or returns nil
+// when v holds none. The backend parses numbers into math/big values; past
+// those limits a parse fails and v6.0.3 then dereferences nil or drops the
+// keyword, so such a value or schema is not handed to it.
+func NumericLimit(v any) error {
+	switch v := v.(type) {
+	case json.Number:
+		if err := jsonvalue.CheckNumericWork(v); err != nil {
+			return fmt.Errorf("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000): %w", err)
+		}
+	case []any:
+		for i, item := range v {
+			if err := NumericLimit(item); err != nil {
+				return fmt.Errorf("/%d: %w", i, err)
+			}
+		}
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(v)) {
+			if err := NumericLimit(v[key]); err != nil {
+				return fmt.Errorf("%s: %w", jsonpointer.Format(key), err)
+			}
+		}
+	}
+	return nil
 }
 
 func finiteProblem(f float64) string {

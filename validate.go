@@ -684,7 +684,7 @@ func (d *documentCheck) checkEmbeddedReference(path, ref string) {
 	if !embedded {
 		return
 	}
-	switch _, _, resolution := resolveInResource(resource, parsed, fragment); resolution {
+	switch resolveInResource(resource, fragment) {
 	case missing:
 		d.c.violated("OBI-D-16", path, fmt.Sprintf("%q does not resolve within the schema the document embeds as %s", ref, id))
 	case ambiguousAnchor:

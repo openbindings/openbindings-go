@@ -16,6 +16,6 @@ require (
 )
 
 require (
-	github.com/dlclark/regexp2/v2 v2.7.1
 	github.com/openbindings/jsonata/go v0.0.0-20260910174534-e2a5e518e6b5
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 )

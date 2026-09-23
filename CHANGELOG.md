@@ -35,50 +35,37 @@
   unavailable (`*SchemaGraphUnavailableError`), as `http(s)` references
   already did (§7, OBI-T-16). The JSON Schema meta-schemas are built in and
   still resolve.
-- **Operation contracts compile against the schemas the document holds, and
-  nothing else.** The whole OBI was compiled as a JSON Schema, so its
-  unknown members acted as schema keywords: a root `$defs` supplied embedded
-  resources, and a root `"type": 5` made every operation's graph
-  unavailable (OBI-T-02, §7). The root is now a container whose locations
-  become schemas only when an operation schema reaches them. Every resource
-  the document embeds by `$id`, nested ones included, resolves by it, and
-  sets the base of the locations inside it, so a same-document pointer into
-  a resource's interior resolves the references there against that
-  resource. Only the document's schema positions embed resources: a `$id`
-  inside an unknown member declares none, whatever other operations
-  reference. An `$id` two schemas declare names no one resource and leaves
-  only the graphs that reach it unavailable; so does an embedded `$id` equal
-  to a meta-schema's URI, which the backend resolves to the meta-schema it
-  carries. Each compilation gives the document a URI unique to it, so no
-  `$id` collides with the document itself. The backend carries these as
-  recorded patches (`patches/README.md`).
-- **Operation-contract validation needs the whole graph** (§5.2, OBI-T-16).
-  The backend skips subschemas it decides never apply, such as `then`
-  under `if: false`, so an external reference there did not prevent
-  success. `CompileOperationSchema`, `ValidateOperationInput`, and
-  `ValidateOperationOutput` now establish that the statically reachable
-  graph is complete first: nothing outside the document but a built-in
-  meta-schema, every reference resolvable, and every schema well-formed
-  (the 2020-12 meta-schemas, no other `$schema`, no `$vocabulary`). An
-  unreferenced definition stays outside the graph; a `$dynamicRef` reaches
-  every schema declaring its anchor dynamically. A cycle of references that
-  never advances into the value is unavailable wherever it sits, not a
+- **Operation contracts compile against the document's content, not its
+  root.** The whole OBI was compiled as a JSON Schema, so its unknown members
+  acted as schema keywords: a root `$defs` supplied embedded resources, and a
+  root `"type": 5` made every operation's graph unavailable (OBI-T-02, §7).
+  The schema library is now given the document without the root members
+  that would act as keywords there: its maps and `x-` extensions, each at the
+  location it holds, so every same-document reference means what its author
+  wrote. Every resource the document embeds by `$id`, nested ones included,
+  resolves by it, one whose `$id` is a meta-schema's URI too, and sets the
+  base of the locations inside it, so a same-document pointer into a
+  resource's interior resolves the references there against that resource.
+  An `$id` two schemas declare leaves only the graphs that reach it
+  unavailable. Each compilation gives the document a URI unique to it, so no
+  `$id` collides with the document itself.
+- **Operation-contract validation needs a complete graph** (§5.2, OBI-T-16).
+  `CompileOperationSchema`, `ValidateOperationInput`, and
+  `ValidateOperationOutput` report the graph unavailable when what the
+  schema library compiles reaches a resource outside the document other
+  than a built-in meta-schema, a reference that does not resolve, a schema
+  the 2020-12 meta-schemas refuse, another `$schema`, or a `$vocabulary`. An
+  unreferenced definition stays outside the graph. A cycle of references
+  that never advances into the value is unavailable wherever it sits, not a
   mismatch or a pass. A relative `$id` at an OBI position has no base and
   leaves the graph unavailable. They refuse an unsupported version
   (OBI-T-04), refuse to interpret a document declaring no valid version
   (OBI-D-12), and resolve an operation by key or alias (OBI-T-12). A value
   outside the JSON value domain (a Go struct, a `map[string]int`) is refused
   as such, not reported as a mismatch.
-- **Operation-contract validation evaluates 2020-12 only.** The backend
-  applied `$recursiveRef` and `dependencies`, keywords of earlier drafts, to
-  2020-12 schemas, so an unknown root member could assert through
-  `$recursiveRef: "#"`. Both are unknown keywords in 2020-12 now.
 - **A name several operations carry resolves to none of them.** In a
   document violating OBI-D-04, `ResolveOperation` preferred a key match and
   otherwise picked an alias match at random (OBI-T-12).
-- **`format` never asserts at an operation boundary** (§5.2, OBI-T-16). The
-  backend asserted it under the draft-04, draft-06, and draft-07 dialects,
-  which a reference to their built-in meta-schema reaches.
 - **The document rules no longer depend on typed decoding.** When the typed
   model could not decode a document, `ValidateDocument` reported every
   remaining rule inconclusive, OBI-D-02 and OBI-D-12 included although both
@@ -116,8 +103,7 @@
 - **OBI-T-02 diagnoses the transform `$ref` object.** Its unknown members
   are now reported like those of every other OBI-defined object.
 - **A document schema finding about a map key is located at the key**, not
-  at the whole document. The backend reused the location's storage, so the
-  location it reported for such a key was overwritten by later members.
+  at the whole document.
 - **A present empty `selector` no longer runs a Usage root command.** An
   absent selector addresses the root command and USAGE-D-03 refuses `""`,
   but invocation received both as `""` and ran the root.
@@ -180,6 +166,26 @@
   SDK decode boundary.
 
 ### Changed
+
+- **The JSON Schema library is an ordinary dependency** (behavior changes in
+  rare cases). Core validated with a private, patched copy of
+  `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3; it now requires the
+  published module and uses it as documented, and the copy, its patch, and
+  the scripts that maintained them are gone. Where the library differs from
+  what the patches did, the library's behavior stands: patterns use Go's
+  `regexp`, so an ECMAScript-only pattern such as a lookahead leaves the
+  graph unavailable; the pre-2019 `dependencies` and `$recursiveRef` are
+  evaluated in 2020-12 schemas; `format` asserts inside a schema the library
+  evaluates under draft-07 or earlier, which only a reference to a built-in
+  meta-schema reaches; a `then` or `else` no `if` can select is not
+  compiled, so a reference inside it is not in the graph; counts beyond the
+  largest Go `int` are not corrected; and a document schema finding about a
+  map key can name the wrong parent map, because v6.0.3 reuses that
+  location's storage. A number beyond the numeric limits of schema
+  evaluation (4096 characters, an exponent within ±10000) in a value, a
+  schema, or the document leaves that check without a verdict instead of
+  reaching the library, where v6.0.3 dereferences nil. The
+  `github.com/dlclark/regexp2/v2` dependency is gone.
 
 - **The document model is exact** (breaking, pre-1.0). Decoding matched
   member names without regard to case, so `"OPERATION"` beside `"operation"`
@@ -874,7 +880,6 @@
   (unused; the SDK never resolves relative references, per OBI-D-05) and
   `ECMARegexpEngine` (dead; the engine lives in `internal/schemacompiler`)
   are gone, and the root module no longer depends on
-  `github.com/santhosh-tekuri/jsonschema/v6` or
   `github.com/dlclark/regexp2` v1. `WellKnownPath` moved from the root
   package to `synthesize` (same value; documented against the HTTP
   Discovery companion specification). ob re-exports `WellKnownPath` and
