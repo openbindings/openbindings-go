@@ -233,7 +233,9 @@
   without a parser, so a document with transforms is
   conformance-undetermined rather than conformant. Core no longer imports
   the JSONata syntax package. `ErrTransformNoResult` marks an expression
-  that yields no result (JSONata's undefined).
+  that yields no result (JSONata's undefined), and `ErrTransformUndecided`
+  an engine that could not decide (its own limits, not the expression): from
+  `Parse` it leaves OBI-D-18 inconclusive rather than violated.
 - **The JSON Schema library is an ordinary dependency** (behavior changes in
   rare cases). Core validated with a private, patched copy of
   `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3; it now requires the

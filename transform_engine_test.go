@@ -3,6 +3,7 @@ package openbindings
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,16 +11,21 @@ import (
 )
 
 // stubEngine stands in for the application's transform engine: it refuses
-// the expressions in refuse and parses every other. What the pinned language
-// accepts is the chosen engine's to decide, not the core's.
+// the expressions in refuse, cannot decide those in undecided, and parses
+// every other. What the pinned language accepts is the chosen engine's to
+// decide, not the core's.
 type stubEngine struct {
-	refuse map[string]bool
-	parsed *[]string
+	refuse    map[string]bool
+	undecided map[string]bool
+	parsed    *[]string
 }
 
 func (e stubEngine) Parse(expression string) error {
 	if e.parsed != nil {
 		*e.parsed = append(*e.parsed, expression)
+	}
+	if e.undecided[expression] {
+		return fmt.Errorf("the stub's size limit: %w", ErrTransformUndecided)
 	}
 	if e.refuse[expression] {
 		return errors.New("the stub refuses " + strconv.Quote(expression))
@@ -83,6 +89,15 @@ func TestValidateDocument_WithoutAnEngineTransformSyntaxIsInconclusive(t *testin
 	}
 	if count != 3 {
 		t.Fatalf("want one inconclusive OBI-D-18 finding per expression, got %d", count)
+	}
+}
+
+// An engine that cannot decide leaves OBI-D-18 inconclusive, never violated.
+func TestValidateDocument_AnUndecidedEngineIsInconclusive(t *testing.T) {
+	engine := stubEngine{undecided: map[string]bool{"(a + b": true, "items[": true}}
+	_, report, err := ValidateDocument([]byte(documentWithTransforms), ValidateOptions{Transforms: engine})
+	if err != nil || report.Evidence["OBI-D-18"] != EvidenceInconclusive {
+		t.Fatalf("err %v, OBI-D-18 %q", err, report.Evidence["OBI-D-18"])
 	}
 }
 

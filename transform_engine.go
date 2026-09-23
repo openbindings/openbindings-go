@@ -12,8 +12,9 @@ import (
 // validation accepts is the expression that runs.
 type TransformEngine interface {
 	// Parse reports whether expression is in the pinned language: nil when
-	// it parses, otherwise why not. It decides OBI-D-18, which is syntactic
-	// only.
+	// it parses, an error wrapping ErrTransformUndecided when the engine
+	// could not decide, and otherwise why it does not parse. It decides
+	// OBI-D-18, which is syntactic only.
 	Parse(expression string) error
 
 	// Evaluate runs expression against input, the evaluation context ($ in
@@ -31,6 +32,14 @@ type TransformEngine interface {
 	// result that is not a JSON value returns any other error.
 	Evaluate(ctx context.Context, expression string, input any, variables map[string]any) (any, error)
 }
+
+// ErrTransformUndecided is wrapped by the error a TransformEngine returns when
+// it could not decide: its own limits (size, depth, time) or a capability it
+// lacks stopped it, not the expression. From Parse it leaves OBI-D-18
+// inconclusive rather than violated, since a limit met is no evidence either
+// way (§10.5). From Evaluate it is still a transform-evaluation failure (§5.5
+// clause 4), which a caller can tell apart from one the expression caused.
+var ErrTransformUndecided = errors.New("openbindings: the transform engine could not decide")
 
 // ErrTransformNoResult is wrapped by the error a TransformEngine returns when
 // an expression yields no result (JSONata's undefined): a transform-evaluation

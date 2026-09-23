@@ -509,7 +509,11 @@ func (d *documentCheck) checkTransformExpression(path, expression string) {
 		d.c.inconclusive("OBI-D-18", path, "not parsed: validation was given no transform engine")
 		return
 	}
-	if err := d.transforms.Parse(expression); err != nil {
+	switch err := d.transforms.Parse(expression); {
+	case err == nil:
+	case errors.Is(err, ErrTransformUndecided):
+		d.c.inconclusive("OBI-D-18", path, fmt.Sprintf("not decided: %v", err))
+	default:
 		d.c.violated("OBI-D-18", path, fmt.Sprintf("not a syntactically valid expression of the pinned transform language: %v", err))
 	}
 }
