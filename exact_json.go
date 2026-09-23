@@ -10,6 +10,11 @@ import (
 	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 )
 
+// errNestingLimit is wrapped by the error for input nested deeper than the
+// codec reads (10000 levels). Such input is not shown to break OBI-D-01; it
+// meets a resource limit, which is no evidence of a violation (§10.5).
+var errNestingLimit = errors.New("nested deeper than the decoder reads (10000 levels)")
+
 // verifyExactJSON checks what decoding JSON into Go values would otherwise
 // lose without error: that the input is one valid UTF-8 JSON value, and that
 // no object in it repeats a member name. The codec replaces invalid UTF-8 and
@@ -22,6 +27,10 @@ func verifyExactJSON(b []byte) error {
 	if !json.Valid(b) {
 		var discard any
 		if err := json.Unmarshal(b, &discard); err != nil {
+			var syntax *json.SyntaxError
+			if errors.As(err, &syntax) && strings.Contains(syntax.Error(), "exceeded max depth") {
+				return errNestingLimit
+			}
 			return err // the codec's error locates the syntax error
 		}
 		return errors.New("not valid JSON")

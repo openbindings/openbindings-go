@@ -24,15 +24,6 @@ type Problem struct {
 	Message  string
 }
 
-// Line renders the problem as "location: message", with the location as a
-// JSON Pointer into the validated value.
-func (p Problem) Line() string {
-	if len(p.Location) == 0 {
-		return p.Message
-	}
-	return jsonpointer.Format(p.Location...) + ": " + p.Message
-}
-
 // kindPrinter renders backend error kinds, which implement
 // LocalizedString(*message.Printer) rather than String().
 var kindPrinter = message.NewPrinter(language.English)
@@ -171,32 +162,57 @@ func ValueProblem(v any) string {
 	}
 }
 
-// NumericLimit reports a number in v beyond the numeric work the backend is
-// given (jsonvalue.CheckNumericWork: at most 4096 characters, an exponent
-// within ±10000), wrapping the *jsonvalue.CapabilityError, or returns nil
-// when v holds none. The backend parses numbers into math/big values; past
-// those limits a parse fails and v6.0.3 then dereferences nil or drops the
-// keyword, so such a value or schema is not handed to it.
-func NumericLimit(v any) error {
+// NumericLimit reports the first number in v, in key order, beyond the
+// numeric work the backend is given (jsonvalue.CheckNumericWork: at most 4096
+// characters, an exponent within ±10000): its location in v as a JSON Pointer
+// ("" for v itself) and an error wrapping the *jsonvalue.CapabilityError. It
+// returns a nil error when v holds none. The backend parses numbers into
+// math/big values: toward those limits the work grows, and past what math/big
+// parses v6.0.3 dereferences nil or drops the keyword, so such a value or
+// schema is not handed to it.
+func NumericLimit(v any) (location string, err error) {
 	switch v := v.(type) {
 	case json.Number:
 		if err := jsonvalue.CheckNumericWork(v); err != nil {
-			return fmt.Errorf("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000): %w", err)
+			return "", fmt.Errorf("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000): %w", err)
 		}
 	case []any:
 		for i, item := range v {
-			if err := NumericLimit(item); err != nil {
-				return fmt.Errorf("/%d: %w", i, err)
+			if location, err := NumericLimit(item); err != nil {
+				return jsonpointer.Format(fmt.Sprint(i)) + location, err
 			}
 		}
 	case map[string]any:
 		for _, key := range slices.Sorted(maps.Keys(v)) {
-			if err := NumericLimit(v[key]); err != nil {
-				return fmt.Errorf("%s: %w", jsonpointer.Format(key), err)
+			if location, err := NumericLimit(v[key]); err != nil {
+				return jsonpointer.Format(key) + location, err
 			}
 		}
 	}
-	return nil
+	return "", nil
+}
+
+// Depth returns the nesting depth of v: 0 for a scalar, and one more than its
+// deepest member or item for an array or object.
+func Depth(v any) int {
+	deepest := 0
+	switch v := v.(type) {
+	case []any:
+		for _, item := range v {
+			deepest = max(deepest, Depth(item)+1)
+		}
+		if len(v) == 0 {
+			deepest = 1
+		}
+	case map[string]any:
+		for _, member := range v {
+			deepest = max(deepest, Depth(member)+1)
+		}
+		if len(v) == 0 {
+			deepest = 1
+		}
+	}
+	return deepest
 }
 
 func finiteProblem(f float64) string {

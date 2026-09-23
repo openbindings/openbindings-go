@@ -26,8 +26,8 @@ func (s *CompiledSchema) Validate(value any) error {
 	if problem := schemacompiler.ValueProblem(value); problem != "" {
 		return fmt.Errorf("openbindings: not a JSON value: %s", problem)
 	}
-	if err := schemacompiler.NumericLimit(value); err != nil {
-		return &SchemaGraphUnavailableError{Cause: fmt.Errorf("the value holds %w", err)}
+	if at, err := schemacompiler.NumericLimit(value); err != nil {
+		return &SchemaGraphUnavailableError{Cause: fmt.Errorf("the value holds, at %q, %w", at, err)}
 	}
 	return schemaValidationError(s.backend.Validate(value))
 }

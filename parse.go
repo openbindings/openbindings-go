@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/openbindings/openbindings-go/jsonvalue"
@@ -14,15 +15,21 @@ import (
 // The version decision comes first because the embedded schema is this
 // version's: a document declaring an unsupported version is refused, not
 // judged against rules it does not claim (§10.1). A refusal is a
-// *VersionRefusalError and schema violations are a *ValidationError, as from
-// Interface.Validate and ValidateDocument.
+// *VersionRefusalError, and violations of OBI-D-01 or the document schema are
+// a *ValidationError, as from Interface.Validate and ValidateDocument. A
+// document either check could not be applied to (input nested deeper than
+// the decoder reads, or a binding preference beyond the numeric limits of
+// schema evaluation) is not parsed, and returns another error.
 func ParseDocument(data []byte) (*Interface, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
 		if refusal := declaredVersionRefusal(declaredVersionOf(data)); refusal != nil {
 			return nil, refusal
 		}
-		return nil, fmt.Errorf("parse document: invalid JSON: %w (OBI-D-01)", err)
+		if errors.Is(err, errNestingLimit) {
+			return nil, fmt.Errorf("parse document: the input is %w, so OBI-D-01 was not checked", err)
+		}
+		return nil, &ValidationError{Findings: []Finding{{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err)}}}
 	}
 	if refusal := declaredVersionRefusal(raw); refusal != nil {
 		return nil, refusal
@@ -31,6 +38,11 @@ func ParseDocument(data []byte) (*Interface, error) {
 	validateAgainstOBISchema(&c, raw)
 	if verr := c.violationError(); verr != nil {
 		return nil, verr
+	}
+	for _, finding := range c.findings {
+		if finding.Status == EvidenceInconclusive {
+			return nil, fmt.Errorf("parse document: the document schema could not be applied at %q: %s (OBI-D-02)", finding.Path, finding.Message)
+		}
 	}
 	var iface Interface
 	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes

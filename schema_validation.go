@@ -1,13 +1,9 @@
 package openbindings
 
 import (
-	"crypto/rand"
 	_ "embed"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 
 	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
@@ -72,8 +68,8 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 		if key != "" && knownValid[key] {
 			return
 		}
-		if err := schemacompiler.NumericLimit(v); err != nil {
-			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+		if at, err := schemacompiler.NumericLimit(v); err != nil {
+			c.inconclusive("OBI-D-17", prefix+at, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
 			return
 		}
 		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
@@ -95,10 +91,22 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 
 // validateAgainstOBISchema records OBI-D-02 evidence: whether the document's
 // generic view validates against openbindings.schema.json.
+//
+// The document schema does numeric work on one member only, a binding's
+// preference (its integer range, §5.3). A preference beyond the numeric limits
+// of schema evaluation leaves the rule inconclusive rather than handing the
+// schema library that work; numbers anywhere else it only type-checks.
 func validateAgainstOBISchema(c *ruleChecks, view any) {
-	if err := schemacompiler.NumericLimit(view); err != nil {
-		c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", err))
-		return
+	root, _ := view.(map[string]any)
+	bindings, _ := root["bindings"].(map[string]any)
+	for _, key := range sortedKeys(bindings) {
+		binding, _ := bindings[key].(map[string]any)
+		if preference, present := binding["preference"]; present {
+			if _, err := schemacompiler.NumericLimit(preference); err != nil {
+				c.inconclusive("OBI-D-02", jsonpointer.Format("bindings", key, "preference"), fmt.Sprintf("could not be checked against the document schema: %v", err))
+				return
+			}
+		}
 	}
 	if verr := compiledOBISchema.Validate(view); verr != nil {
 		problems, mismatch := schemacompiler.Outcome(verr)
@@ -172,7 +180,7 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 						c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+position+" schema: "+problem.Message)
 					}
 				default:
-					c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("the schema could not be evaluated, so this example was not checked: %v", err))
+					c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
 				}
 			}
 		}
@@ -234,258 +242,6 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 		return nil, &SchemaGraphUnavailableError{Cause: err}
 	}
 	return compiled, nil
-}
-
-// operationContracts is what the schema library is given of one document to
-// evaluate its operations' schemas. A same-document fragment is a JSON
-// Pointer from the OBI document root, which is not a schema (§7), so the
-// library is given the document without the root members that would act as
-// schema keywords there: its maps (schemas, operations, and the rest) and its
-// extensions, each at the location it holds, so every reference means what
-// its author wrote. The document's scalar members are never schemas, and an
-// unknown member is ignored (OBI-T-02), so it never acts as a schema keyword
-// or declares a resource.
-type operationContracts struct {
-	schemas   documentSchemas
-	container map[string]any
-}
-
-// documentMaps are the OBI root members that hold the document's content.
-var documentMaps = map[string]bool{
-	"schemas": true, "operations": true, "dependencies": true,
-	"sources": true, "bindings": true, "transforms": true,
-}
-
-func newOperationContracts(view any, schemas documentSchemas) operationContracts {
-	root, _ := view.(map[string]any)
-	container := map[string]any{}
-	for name, value := range root {
-		if documentMaps[name] || strings.HasPrefix(name, "x-") {
-			container[name] = value
-		}
-	}
-	return operationContracts{schemas: schemas, container: container}
-}
-
-// compile compiles the schema at an operation's input or output, given its
-// canonical key. outside names a resource outside the document the graph
-// reaches: an external one, which the SDK does not obtain, so err reports the
-// graph unavailable; or a JSON Schema meta-schema, which the schema library
-// carries.
-func (o operationContracts) compile(key, position string) (compiled *CompiledSchema, outside string, err error) {
-	if err := schemacompiler.NumericLimit(o.container); err != nil {
-		return nil, "", fmt.Errorf("the document holds %w", err)
-	}
-	documentURL := newDocumentURL()
-	loader := &documentLoader{schemas: o.schemas}
-	c := schemacompiler.New()
-	c.UseLoader(loader)
-	if err := c.AddResource(documentURL, o.container); err != nil {
-		return nil, "", err
-	}
-	// The library learns that a location declares a resource when it compiles
-	// that location. Compiling each embedded resource first gives a location
-	// inside one that resource's base however a reference reaches it (§7). A
-	// resource that does not compile is not learned; a graph that reaches it
-	// reports why.
-	for _, id := range slices.Sorted(maps.Keys(o.schemas.resources)) {
-		_, _ = c.Compile(documentURL + "#" + o.schemas.resources[id].location)
-	}
-	loader.external = ""
-	schema, err := c.Compile(documentURL + "#" + jsonpointer.Format("operations", key, position))
-	if err != nil {
-		return nil, loader.external, err
-	}
-	metaSchema, problem := o.inspect(schema, documentURL)
-	if problem != "" {
-		return nil, metaSchema, errors.New(problem)
-	}
-	return &CompiledSchema{backend: schema}, metaSchema, nil
-}
-
-// inspect walks a compiled schema graph for what the schema library does not
-// judge itself. It returns a JSON Schema meta-schema the graph reaches, and
-// states why the graph cannot be evaluated as the document holds it: a
-// schema §5.2's dialect constraints exclude (a $schema other than 2020-12, or
-// a $vocabulary); a reference to a resource the document embeds under a
-// meta-schema's URI, which the library resolves to the meta-schema instead;
-// or a cycle of references and in-place applicators that never advances into
-// the value, which the library reports only where evaluation meets it, and
-// then as a failed subschema a not or an anyOf can absorb.
-func (o operationContracts) inspect(root *jsonschema.Schema, documentURL string) (metaSchema, problem string) {
-	seen := map[*jsonschema.Schema]bool{}
-	inPlace := map[*jsonschema.Schema][]*jsonschema.Schema{}
-	var visit func(s *jsonschema.Schema)
-	visit = func(s *jsonschema.Schema) {
-		if s == nil || seen[s] || problem != "" {
-			return
-		}
-		seen[s] = true
-		inPlace[s] = inPlaceSubschemas(s)
-		resource, pointer, _ := strings.Cut(s.Location, "#")
-		var node any
-		switch embedded, isEmbedded := o.schemas.resources[resource]; {
-		case resource == documentURL:
-			node, _ = jsonpointer.Resolve(o.container, pointer)
-		case o.schemas.shadowed[resource]:
-			problem = fmt.Sprintf("the schema library resolves %s to the JSON Schema meta-schema it carries, not to the schema the document embeds under that URI", resource)
-			return
-		case isEmbedded:
-			node, _ = jsonpointer.Resolve(embedded.schema, pointer)
-		default:
-			// A meta-schema: the loader obtains nothing else.
-			if metaSchema == "" {
-				metaSchema = resource
-			}
-			return
-		}
-		if object, ok := node.(map[string]any); ok {
-			if dialect, present := object["$schema"]; present && dialect != draft202012URI {
-				problem = fmt.Sprintf("the schema at %s declares $schema %s, not %s", s.Location, describeJSON(dialect), draft202012URI)
-				return
-			}
-			if _, present := object["$vocabulary"]; present {
-				problem = fmt.Sprintf("the schema at %s declares $vocabulary", s.Location)
-				return
-			}
-		}
-		for _, child := range subschemas(s) {
-			visit(child)
-		}
-	}
-	visit(root)
-	if problem == "" && hasCycle(inPlace) {
-		problem = "a cycle of references never advances into the value, so no value can be evaluated against it"
-	}
-	return metaSchema, problem
-}
-
-// inPlaceSubschemas returns the schemas a compiled schema applies to the
-// value it evaluates itself, rather than to a member or item of it.
-func inPlaceSubschemas(s *jsonschema.Schema) []*jsonschema.Schema {
-	out := []*jsonschema.Schema{s.Ref, s.RecursiveRef, s.Not, s.If, s.Then, s.Else}
-	if s.DynamicRef != nil {
-		out = append(out, s.DynamicRef.Ref)
-	}
-	out = append(out, s.AllOf...)
-	out = append(out, s.AnyOf...)
-	out = append(out, s.OneOf...)
-	for _, child := range s.DependentSchemas {
-		out = append(out, child)
-	}
-	return out
-}
-
-// hasCycle reports whether a directed graph has a cycle.
-func hasCycle(edges map[*jsonschema.Schema][]*jsonschema.Schema) bool {
-	const (
-		unvisited = iota
-		active
-		done
-	)
-	state := map[*jsonschema.Schema]int{}
-	var visit func(node *jsonschema.Schema) bool
-	visit = func(node *jsonschema.Schema) bool {
-		switch state[node] {
-		case active:
-			return true
-		case done:
-			return false
-		}
-		state[node] = active
-		for _, next := range edges[node] {
-			if next != nil && visit(next) {
-				return true
-			}
-		}
-		state[node] = done
-		return false
-	}
-	for node := range edges {
-		if visit(node) {
-			return true
-		}
-	}
-	return false
-}
-
-// subschemas returns the schemas a compiled schema applies or references.
-func subschemas(s *jsonschema.Schema) []*jsonschema.Schema {
-	out := []*jsonschema.Schema{s.Ref, s.RecursiveRef, s.Not, s.If, s.Then, s.Else,
-		s.PropertyNames, s.UnevaluatedProperties, s.Contains, s.Items2020,
-		s.UnevaluatedItems, s.ContentSchema}
-	if s.DynamicRef != nil {
-		out = append(out, s.DynamicRef.Ref)
-	}
-	out = append(out, s.AllOf...)
-	out = append(out, s.AnyOf...)
-	out = append(out, s.OneOf...)
-	out = append(out, s.PrefixItems...)
-	for _, child := range s.Properties {
-		out = append(out, child)
-	}
-	for _, child := range s.PatternProperties {
-		out = append(out, child)
-	}
-	for _, child := range s.DependentSchemas {
-		out = append(out, child)
-	}
-	for _, value := range s.Dependencies {
-		if child, ok := value.(*jsonschema.Schema); ok {
-			out = append(out, child)
-		}
-	}
-	for _, value := range []any{s.AdditionalProperties, s.AdditionalItems, s.Items} {
-		switch child := value.(type) {
-		case *jsonschema.Schema:
-			out = append(out, child)
-		case []*jsonschema.Schema:
-			out = append(out, child...)
-		}
-	}
-	return out
-}
-
-// newDocumentURL returns the base URI a compilation gives the OBI document:
-// unique to that compilation, so no URI a document declares can collide with
-// it. No reference resolves against the URI a document was fetched from (§7).
-func newDocumentURL() string {
-	var id [16]byte
-	_, _ = rand.Read(id[:])
-	return "urn:openbindings:document:" + hex.EncodeToString(id[:])
-}
-
-// withID returns a shallow copy of a resource registered by its absolute URI,
-// whose $id is that URI. A nested resource's $id may be relative to the
-// resource enclosing it, and would otherwise resolve against its own URI.
-func withID(resource map[string]any, id string) map[string]any {
-	copied := make(map[string]any, len(resource))
-	for keyword, value := range resource {
-		copied[keyword] = value
-	}
-	copied["$id"] = id
-	return copied
-}
-
-// documentLoader gives the schema library the resources the document embeds
-// by $id, wherever they are referenced from, and declines every other
-// resource, as every SDK compiler does. external is the first it declined.
-type documentLoader struct {
-	schemas  documentSchemas
-	external string
-}
-
-func (l *documentLoader) Load(url string) (any, error) {
-	if why := l.schemas.ambiguous[url]; why != "" {
-		return nil, fmt.Errorf("%s names no one embedded schema: %s", url, why)
-	}
-	if resource, embedded := l.schemas.resources[url]; embedded {
-		return withID(resource.schema, url), nil
-	}
-	if l.external == "" {
-		l.external = url
-	}
-	return nil, schemacompiler.RefuseExternal(url)
 }
 
 // ValidateOperationInput validates a value against an operation's input

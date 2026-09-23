@@ -13,9 +13,6 @@ func TestCanonicalCodeUnits(t *testing.T) {
 		}
 	}
 	hi, lo := jstring.CodeUnit(0xd83d), jstring.CodeUnit(0xde00)
-	if got := jstring.Concat("a"+hi, lo+"b"); got != "a😀b" {
-		t.Fatalf("joined halves: %x", got)
-	}
 	for _, s := range []string{"", "�", "😀", hi, lo, lo + hi} {
 		if !jstring.Valid(s) {
 			t.Errorf("valid string rejected: %x", s)

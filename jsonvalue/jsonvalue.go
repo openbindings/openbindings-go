@@ -1,8 +1,10 @@
 // Package jsonvalue supplies protocol-neutral JSON decoding for generic values.
-// It uses encoding/json, retaining json.Number instead of reducing numbers to
-// float64. Typed destinations and their custom UnmarshalJSON methods still own
-// their representations. Boundary-specific duplicate/Unicode policies are not
-// imposed here.
+// It decodes with the SDK's JSON codec, a copy of encoding/json that carries a
+// JSON escape of an isolated UTF-16 surrogate exactly (in WTF-8) where
+// encoding/json substitutes U+FFFD, and it retains json.Number instead of
+// reducing numbers to float64. Typed destinations and their custom
+// UnmarshalJSON methods still own their representations. Duplicate member
+// names are not refused here; the document model refuses them.
 package jsonvalue
 
 import (

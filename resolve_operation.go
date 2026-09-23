@@ -15,6 +15,11 @@ import "slices"
 // It returns the resolved operation's canonical key, the operation, and true on
 // a match; the zero values and false otherwise. Binding selection MUST use the
 // returned key, not the name the caller looked up by.
+//
+// It reads the model as it is and does not check the declared version: a
+// caller interpreting a document it has not validated or parsed refuses an
+// unsupported version itself (OBI-T-04), as ParseDocument, Validate, and
+// CompileOperationSchema do.
 func ResolveOperation(iface *Interface, name string) (string, Operation, bool) {
 	if iface == nil {
 		return "", Operation{}, false

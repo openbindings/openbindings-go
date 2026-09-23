@@ -57,7 +57,7 @@ func TestInterfaceValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 		t.Fatalf("expected error for higher-major version")
 	}
 	var refusal *VersionRefusalError
-	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "1.0.0", newer than the latest version this implementation supports (0.2.0) (OBI-T-04)` {
+	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "1.0.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)` {
 		t.Fatalf("expected an OBI-T-04 version refusal, got %v", err)
 	}
 }
@@ -73,12 +73,12 @@ func TestInterfaceValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
 		t.Fatalf("expected error for pre-1.0 higher-minor version")
 	}
 	var refusal *VersionRefusalError
-	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "0.99.0", newer than the latest version this implementation supports (0.2.0) (OBI-T-04)` {
+	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "0.99.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)` {
 		t.Fatalf("expected an OBI-T-04 version refusal, got %v", err)
 	}
 }
 
-func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
+func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_12(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
@@ -138,12 +138,22 @@ func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T)
 	}
 }
 
-func containsProblem(err error, want string) bool {
+// problemLines renders a *ValidationError's findings as its message does,
+// one line each, or returns nil for any other error.
+func problemLines(err error) []string {
 	ve, ok := err.(*ValidationError)
 	if !ok {
-		return false
+		return nil
 	}
-	for _, p := range ve.Problems {
+	lines := make([]string, len(ve.Findings))
+	for i, finding := range ve.Findings {
+		lines[i] = formatFinding(finding.Path, finding.Message, finding.Rule)
+	}
+	return lines
+}
+
+func containsProblem(err error, want string) bool {
+	for _, p := range problemLines(err) {
 		if p == want {
 			return true
 		}
@@ -166,10 +176,10 @@ func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
 	// One defect is one finding: the document schema's anyOf reports that
 	// neither carriage member is present, at the source that lacks them.
 	var ve *ValidationError
-	if !errors.As(err, &ve) || len(ve.Problems) != 1 {
+	if !errors.As(err, &ve) || len(ve.Findings) != 1 {
 		t.Fatalf("want exactly one problem, got %v", err)
 	}
-	problem := ve.Problems[0]
+	problem := problemLines(ve)[0]
 	if !strings.HasPrefix(problem, "/sources/empty: ") || !strings.Contains(problem, "'location'") || !strings.Contains(problem, "'content'") || !strings.HasSuffix(problem, "(OBI-D-02)") {
 		t.Fatalf("want one OBI-D-02 problem at the source naming both members, got %q", problem)
 	}
@@ -606,11 +616,7 @@ func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 // containsProblemSubstring reports whether the error is a *ValidationError with
 // at least one Problem containing substr.
 func containsProblemSubstring(err error, substr string) bool {
-	ve, ok := err.(*ValidationError)
-	if !ok {
-		return false
-	}
-	for _, p := range ve.Problems {
+	for _, p := range problemLines(err) {
 		if strings.Contains(p, substr) {
 			return true
 		}
@@ -986,7 +992,7 @@ func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
 		t.Fatal("a document below MinSupportedVersion must refuse")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "older than the oldest version this implementation supports") || !strings.Contains(msg, "OBI-T-04") {
+	if !strings.Contains(msg, "older than the release line this implementation supports (0.2.x)") || !strings.Contains(msg, "OBI-T-04") {
 		t.Errorf("refusal must cite the floor and the rule, got: %s", msg)
 	}
 }

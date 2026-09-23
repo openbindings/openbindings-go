@@ -13,7 +13,10 @@ const (
 	MaxTestedVersion    = "0.2.0"
 )
 
-// SupportedRange returns the minimum and maximum OpenBindings versions supported by this SDK.
+// SupportedRange returns MinSupportedVersion and MaxTestedVersion, the
+// versions this SDK is tested against. It accepts more: every version of
+// their release line (0.2.x while they are 0.2 versions), as
+// IsSupportedVersion reports.
 func SupportedRange() (min, max string) {
 	return MinSupportedVersion, MaxTestedVersion
 }
@@ -75,12 +78,12 @@ func versionRefusal(v string) (msg string, refused bool, err error) {
 	if higher, err := isHigherMajorOrPre1MinorThanMaxTested(v); err != nil {
 		return "", false, err
 	} else if higher {
-		return fmt.Sprintf("document declares version %q, newer than the latest version this implementation supports (%s)", v, MaxTestedVersion), true, nil
+		return fmt.Sprintf("document declares version %q, newer than the release line this implementation supports (%s)", v, releaseLine(maxTestedSemver)), true, nil
 	}
 	if lower, err := isLowerThanMinSupported(v); err != nil {
 		return "", false, err
 	} else if lower {
-		return fmt.Sprintf("document declares version %q, older than the oldest version this implementation supports (%s)", v, MinSupportedVersion), true, nil
+		return fmt.Sprintf("document declares version %q, older than the release line this implementation supports (%s)", v, releaseLine(minSupportedSemver)), true, nil
 	}
 	if pre, err := isUnsupportedPrerelease(v); err != nil {
 		return "", false, err
@@ -157,6 +160,15 @@ func isUnsupportedPrerelease(v string) (bool, error) {
 // converted to a machine integer that could overflow.
 //
 // Build metadata is ignored for precedence comparison per SemVer 2.0.0 §10.
+// releaseLine names the versions refusal treats as one release line with v:
+// its major version, or while pre-1.0 its minor version.
+func releaseLine(v semver) string {
+	if v.major == "0" {
+		return "0." + v.minor + ".x"
+	}
+	return v.major + ".x"
+}
+
 type semver struct {
 	major      string
 	minor      string

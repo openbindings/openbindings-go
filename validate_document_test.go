@@ -299,8 +299,8 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 	if !errors.As(parseErr, &parsed) || !errors.As(validateErr, &validated) {
 		t.Fatalf("want ValidationErrors, got %v and %v", parseErr, validateErr)
 	}
-	if !reflect.DeepEqual(parsed.Problems, validated.Problems) {
-		t.Fatalf("ParseDocument and ValidateDocument word the same OBI-D-02 violation differently:\n%q\n%q", parsed.Problems, validated.Problems)
+	if !reflect.DeepEqual(parsed.Findings, validated.Findings) {
+		t.Fatalf("ParseDocument and ValidateDocument word the same OBI-D-02 violation differently:\n%+v\n%+v", parsed.Findings, validated.Findings)
 	}
 }
 
@@ -606,5 +606,49 @@ func TestValidateDocument_TransformReferencesDecodeTheirFragment(t *testing.T) {
 		"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":"#/transforms/a%62"}}}}`)
 	if report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Evidence["OBI-D-05"] != EvidenceViolated {
 		t.Fatalf("OBI-D-10 = %s, OBI-D-05 = %s", report.Evidence["OBI-D-10"], report.Evidence["OBI-D-05"])
+	}
+}
+
+// ParseDocument refuses what it cannot check: a document missing a required
+// member stays refused whatever numbers it holds elsewhere, and a preference
+// beyond the numeric limits is not parsed.
+func TestParseDocument_RefusesWhatItCannotCheck(t *testing.T) {
+	if _, err := ParseDocument([]byte(`{"openbindings":"0.2.0","x-padding":1e10001}`)); !errors.As(err, new(*ValidationError)) {
+		t.Fatalf("a missing operations member is an OBI-D-02 violation, got %v", err)
+	}
+	preference := `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+		"bindings":{"b":{"operation":"a","source":"s","preference":1e10001}}}`
+	if iface, err := ParseDocument([]byte(preference)); err == nil || iface != nil {
+		t.Fatalf("an unchecked preference must not parse: %v", err)
+	}
+	if _, err := ParseDocument([]byte(`{"a":1,"a":2}`)); !errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "OBI-D-01") {
+		t.Fatalf("an OBI-D-01 violation is a *ValidationError, got %T %v", err, err)
+	}
+}
+
+// Input nested deeper than the decoder reads meets a resource limit: every
+// rule is inconclusive and none is violated (§10.5).
+func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
+	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + `}`
+	_, report, err := ValidateDocument([]byte(deep), ValidateOptions{})
+	if err != nil || report.Evidence["OBI-D-01"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+		t.Fatalf("err %v, OBI-D-01 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Conclusion)
+	}
+	if _, err := ParseDocument([]byte(deep)); err == nil || errors.As(err, new(*ValidationError)) {
+		t.Fatalf("want a refusal that is not a violation, got %v", err)
+	}
+}
+
+// A dialect constraint of §5.2 is part of well-formedness, so breaking it
+// violates OBI-D-17 beside OBI-D-06 or OBI-D-07.
+func TestValidateDocument_DialectConstraintsAreWellFormedness(t *testing.T) {
+	for input, rule := range map[string]string{
+		`{"properties":{"a":{"$schema":"http://json-schema.org/draft-07/schema#"}}}`: "OBI-D-06",
+		`{"$vocabulary":{}}`: "OBI-D-07",
+	} {
+		_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"a":{"input":`+input+`}}}`), ValidateOptions{})
+		if report.Evidence[rule] != EvidenceViolated || report.Evidence["OBI-D-17"] != EvidenceViolated {
+			t.Errorf("%s: %s %q, OBI-D-17 %q", input, rule, report.Evidence[rule], report.Evidence["OBI-D-17"])
+		}
 	}
 }

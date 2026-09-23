@@ -12,8 +12,7 @@ import (
 // boolean schemas at every schema position (`true` accepts every value,
 // `false` accepts none, `{}` is equivalent to `true`). It is intentionally
 // untyped beyond that to avoid coupling to any one JSON Schema library.
-// This preserves arbitrary keys/values structurally, but not raw JSON bytes
-// (use canonicaljson.Marshal if you need stable bytes).
+// This preserves arbitrary keys/values structurally, but not raw JSON bytes.
 //
 // As an operation's Input or Output, a nil JSONSchema means the schema is
 // unspecified (the member is absent). As an entry of Interface.Schemas, where
@@ -296,7 +295,7 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 }
 
 // DependencyEntry names an operation contract consumed at a local
-// composition point. BindingSpecs, when present, is an unordered any-of list
+// consumption point (§5.6). BindingSpecs, when present, is an unordered any-of list
 // of exact binding-specification identifiers accepted at that point. A nil
 // slice leaves the dependency unconstrained by binding family. Operation is
 // the canonical key of an operation in the same document.

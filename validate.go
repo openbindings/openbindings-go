@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -35,7 +36,8 @@ type ValidateOptions struct {
 // longer carries; ValidateDocument decides it.
 //
 // The error is a *ValidationError listing every established violation, so
-// `if _, err := iface.Validate(); err != nil` gates on violations. A nil error
+// `if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil`
+// gates on violations. A nil error
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
 // conformant or conformance undetermined. OBI-D-13 is inconclusive for a
@@ -82,8 +84,13 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 		if refusal := declaredVersionRefusal(declaredVersionOf(data)); refusal != nil {
 			return nil, ValidationReport{}, refusal
 		}
-		c.violated("OBI-D-01", "", fmt.Sprintf("not a JSON document this specification accepts: %v", err))
-		c.inconclusiveExcept("the input is not a JSON document, so this rule was not checked", "OBI-D-01")
+		if errors.Is(err, errNestingLimit) {
+			// A resource limit met is no evidence of a violation (§10.5).
+			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err))
+		} else {
+			c.violated("OBI-D-01", "", fmt.Sprintf("not a JSON document this specification accepts: %v", err))
+			c.inconclusiveExcept("the input is not a JSON document, so this rule was not checked", "OBI-D-01")
+		}
 		report, verr := c.conclude()
 		return nil, report, verr
 	}
@@ -590,11 +597,18 @@ func (d *documentCheck) walkSchema(prefix string, schema any, inResource bool) {
 		return
 	}
 
+	// §5.2's dialect constraints are also part of well-formedness
+	// (OBI-D-17), so a schema breaking one violates both rules. A $schema
+	// that is not a string is already refused by the meta-schemas.
 	if value, present := s["$schema"]; present && value != draft202012URI {
 		d.c.violated("OBI-D-06", prefix+jsonpointer.Format("$schema"), fmt.Sprintf("must equal %q; got %s", draft202012URI, describeJSON(value)))
+		if _, isString := value.(string); isString {
+			d.c.violated("OBI-D-17", prefix+jsonpointer.Format("$schema"), "not well-formed: §5.2 requires the 2020-12 dialect")
+		}
 	}
 	if _, present := s["$vocabulary"]; present {
 		d.c.violated("OBI-D-07", prefix, "$vocabulary keyword is forbidden in OBI documents")
+		d.c.violated("OBI-D-17", prefix, "not well-formed: §5.2 forbids $vocabulary")
 	}
 
 	if !inResource {
@@ -622,7 +636,7 @@ func (d *documentCheck) walkSchema(prefix string, schema any, inResource bool) {
 			d.c.violated("OBI-D-05", prefix, "$dynamicRef does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
 		}
 		if _, present := s["$dynamicAnchor"]; present {
-			d.c.violated("OBI-D-05", prefix, "$dynamicAnchor does not appear at OBI positions; it would be a second named-schema mechanism competing with the schemas map, as $anchor would")
+			d.c.violated("OBI-D-05", prefix, "$dynamicAnchor does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
 		}
 		if value, present := s["$ref"]; present {
 			refPath := prefix + jsonpointer.Format("$ref")
@@ -722,7 +736,7 @@ func describeJSON(value any) string {
 //     inconclusive.
 func validateLocation(c *ruleChecks, prefix, raw string) {
 	if isRelativeReference(raw) {
-		c.violated("OBI-D-05", prefix, fmt.Sprintf("%q must be an absolute URI or a binding-specification-defined absolute address, not a relative reference; a local artifact can be embedded as the source's content instead (a file:// URL is machine-coupled and resolves only on the authoring machine)", raw))
+		c.violated("OBI-D-05", prefix, fmt.Sprintf("%q must be an absolute URI or a binding-specification-defined absolute address, not a relative reference", raw))
 		return
 	}
 	wellFormed, hasScheme := uriReference(raw)

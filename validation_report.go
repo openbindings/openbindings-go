@@ -116,7 +116,10 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 
 // ConcludeConformance applies OBI-T-17's truth conditions to a complete map of
 // rule evidence. The caller supplies every rule applicable to the validation;
-// absence is not itself an evidence status. A violation is decisive even when
+// absence is not itself an evidence status. It concludes from exactly the
+// evidence given, as the core conformance corpus's OBI-T-17 scenarios do, so
+// an empty map concludes conformant: a report from Interface.Validate or
+// ValidateDocument always carries every document rule. A violation is decisive even when
 // other rules remain inconclusive. In the absence of a violation, any
 // inconclusive applicable rule makes the conclusion undetermined; otherwise
 // the conclusion is conformant. An unrecognized runtime status is treated
@@ -235,17 +238,16 @@ func (c *ruleChecks) conclude() (ValidationReport, error) {
 }
 
 func (c *ruleChecks) violationError() error {
-	var problems []string
+	var violations []Finding
 	for _, finding := range c.findings {
-		if finding.Status != EvidenceViolated {
-			continue
+		if finding.Status == EvidenceViolated {
+			violations = append(violations, finding)
 		}
-		problems = append(problems, formatFinding(finding.Path, finding.Message, finding.Rule))
 	}
-	if len(problems) == 0 {
+	if len(violations) == 0 {
 		return nil
 	}
-	return &ValidationError{Problems: problems}
+	return &ValidationError{Findings: violations}
 }
 
 func formatFinding(path, message, rule string) string {

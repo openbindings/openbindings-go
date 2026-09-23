@@ -138,9 +138,10 @@ func forEachSubschema(object map[string]any, fn func(child any, tokens ...string
 	}
 }
 
-// builtInMetaSchemas remembers which URIs name a meta-schema the schema
-// library carries.
-var builtInMetaSchemas sync.Map // string -> bool
+// builtInMetaSchemas remembers the URIs found to name a meta-schema the
+// schema library carries. Only those are remembered: they are few and fixed,
+// while the URIs that name none come from documents.
+var builtInMetaSchemas sync.Map // string -> struct{}
 
 // isBuiltInMetaSchema reports whether id names a JSON Schema meta-schema the
 // schema library carries, which resolves without obtaining anything.
@@ -148,12 +149,14 @@ func isBuiltInMetaSchema(id string) bool {
 	if !strings.HasPrefix(id, "http://json-schema.org/") && !strings.HasPrefix(id, "https://json-schema.org/") {
 		return false
 	}
-	if known, ok := builtInMetaSchemas.Load(id); ok {
-		return known.(bool)
+	if _, known := builtInMetaSchemas.Load(id); known {
+		return true
 	}
-	_, err := schemacompiler.New().Compile(id)
-	builtInMetaSchemas.Store(id, err == nil)
-	return err == nil
+	if _, err := schemacompiler.New().Compile(id); err != nil {
+		return false
+	}
+	builtInMetaSchemas.Store(id, struct{}{})
+	return true
 }
 
 // resolution is what a fragment resolves to within a resource.

@@ -6,6 +6,40 @@
 
 ### Fixed
 
+- **Resource limits cover what the schema library reaches, and nothing
+  else.** OBI-D-02 holds only a binding's `preference`, the one member the
+  document schema does numeric work on, to the numeric limits of schema
+  evaluation. An operation's schema is held to them, and to a nesting depth
+  of 256, over the values the library can reach from it: its schema and,
+  transitively, what the references in them name. A large number in an
+  unrelated extension or in source content no longer leaves every operation
+  unavailable and OBI-D-02 inconclusive, and a schema nested thousands of
+  levels deep no longer takes seconds to compile. A finding about a limit
+  names the offending value's location.
+- **`ParseDocument` refuses what it cannot check.** A document holding a
+  number beyond the limits parsed without its document schema applied, so a
+  missing `operations` member went unreported. It now returns an error when
+  the document schema could not be applied. An OBI-D-01 violation is a
+  `*ValidationError` like every other violation.
+- **Input nested deeper than the decoder reads is inconclusive** (§10.5), not
+  an OBI-D-01 violation.
+- **A reached pattern Go's regexp cannot compile no longer stops
+  compilation.** The graph is still resolved, so a graph that reaches
+  outside the document is outside OBI-D-11 whatever patterns it holds; one
+  that does not leaves the operation unavailable, as before.
+- **Operation-schema conclusions are deterministic.** The compiled graph is
+  inspected in full, and its first problem in sorted order reported, so a
+  document no longer concludes differently from run to run.
+- **Locations are percent-encoded as the schema library reads them.** A
+  property name with a space escaped the dialect checks, and an operation key
+  holding `%` compiled another operation's schema.
+- **OBI-D-11 compiles a document once.** Every operation's schema shares one
+  compilation of the document and its embedded resources; a document with
+  hundreds of operations and `$id` schemas took seconds.
+- **Validation keeps no state that grows with its input.** Only URIs that
+  name a meta-schema the library carries are remembered.
+- **OBI-D-17 is violated beside OBI-D-06 and OBI-D-07.** Its definition
+  includes §5.2's dialect constraints.
 - **OBI-D-05 stops at a schema resource's boundary.** A schema that declares
   its own `$id` is a schema resource whose references, nested `$id`s, and
   dynamic pair are its internal business, resolved per JSON Schema exactly as
@@ -40,8 +74,10 @@
   acted as schema keywords: a root `$defs` supplied embedded resources, and a
   root `"type": 5` made every operation's graph unavailable (OBI-T-02, §7).
   The schema library is now given the document without the root members
-  that would act as keywords there: its maps and `x-` extensions, each at the
-  location it holds, so every same-document reference means what its author
+  named like a JSON Schema 2020-12 keyword, which it would read as keywords
+  there (the OBI's own `dependencies` and `description` among them, so a
+  dependency entry is never read as a schema). Every other member stays at
+  the location it holds, so a same-document reference means what its author
   wrote. Every resource the document embeds by `$id`, nested ones included,
   resolves by it, one whose `$id` is a meta-schema's URI too, and sets the
   base of the locations inside it, so a same-document pointer into a
@@ -167,6 +203,12 @@
 
 ### Changed
 
+- **`ValidationError` carries findings** (breaking, pre-1.0). `Problems
+  []string` is replaced by `Findings []Finding`, each naming its rule and
+  location; the message is unchanged apart from saying "non-conformant
+  document". `ErrOperationNotFound` reads "no one operation is named", which
+  covers an ambiguous name too, and a version refusal names the release line
+  the SDK supports (0.2.x) rather than the tested version.
 - **Validation takes the transform engine it is given** (breaking, pre-1.0).
   `Interface.Validate` and `ValidateDocument` take a `ValidateOptions`, whose
   `Transforms` field is a `TransformEngine`: an implementation of the pinned
