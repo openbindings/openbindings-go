@@ -48,7 +48,9 @@ func init() {
 //
 // It shares the single refusal predicate (versionRefusal) that Validate and
 // ParseDocument use, so the oracle cannot drift from the actual accept/refuse
-// decision. A malformed (non-SemVer) v is refused and returns a parse error.
+// decision. A malformed (non-SemVer) v is no version at all: IsSupportedVersion
+// returns false and a parse error, while validation reports such a document
+// under OBI-D-12 rather than refusing it.
 func IsSupportedVersion(v string) (bool, error) {
 	if _, err := parseSemverStrict(v); err != nil {
 		return false, err
@@ -88,10 +90,12 @@ func versionRefusal(v string) (msg string, refused bool, err error) {
 	return "", false, nil
 }
 
-// IsHigherMajorOrPre1MinorThanMaxTested reports whether v is "higher" than the SDK's MaxTestedVersion
-// in the sense OBI-T-04 mandates refusal:
-//   - Strictly higher major version, OR
-//   - While the SDK's MaxTestedVersion is pre-1.0 (major == 0), strictly higher minor version.
+// IsHigherMajorOrPre1MinorThanMaxTested reports whether v lies above the
+// release line this SDK declares support for, one of the conditions under
+// which it refuses a document (OBI-T-04). §8.1 leaves the supported set to
+// each processor; this SDK's is the release line of MaxTestedVersion, so v is
+// above it when it has a higher major version, or, while MaxTestedVersion is
+// pre-1.0, a higher minor version.
 //
 // Returns an error if v cannot be parsed as a SemVer 2.0.0 string.
 func IsHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
@@ -108,14 +112,11 @@ func IsHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
 	return false, nil
 }
 
-// IsLowerThanMinSupported reports whether v falls below the SDK's
-// MinSupportedVersion in the sense OBI-T-04 mandates refusal — the downward
-// half of the rule: a version outside the supported range in either
-// direction is refused rather than processed under the wrong rules (pre-1.0
-// minors may change field semantics both ways). Mirrors the upward rule's
-// granularity: lower major always refuses; a lower minor refuses only while
-// the floor is pre-1.0 (post-1.0 minors are additive, so an older minor
-// within a supported major reads safely). Patch is never a refusal trigger.
+// IsLowerThanMinSupported reports whether v lies below the release line this
+// SDK declares support for, the other condition under which it refuses a
+// document by its version number (OBI-T-04): a lower major version, or, while
+// MinSupportedVersion is pre-1.0, a lower minor version (pre-1.0 minors MAY
+// break, §8.1). A patch version is never a reason to refuse.
 func IsLowerThanMinSupported(v string) (bool, error) {
 	parsed, err := parseSemverStrict(v)
 	if err != nil {

@@ -20,9 +20,6 @@ func (e *ValidationError) Error() string {
 	return "non-conformant interface: " + strings.Join(e.Problems, "; ")
 }
 
-// ErrOperationNotFound is returned when the requested operation does not exist in the OBI.
+// ErrOperationNotFound is wrapped by the errors returned for a name that
+// resolves to no operation (OBI-T-12).
 var ErrOperationNotFound = errors.New("openbindings: operation not found")
-
-// ErrDependencyNotFound is returned when a named dependency is absent or its
-// local operation reference cannot be resolved.
-var ErrDependencyNotFound = errors.New("openbindings: dependency not found or invalid")

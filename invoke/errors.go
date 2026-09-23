@@ -16,6 +16,10 @@ var (
 	// ErrNilInterface is returned when a nil interface is passed to an operation that requires one.
 	ErrNilInterface = errors.New("openbindings: nil interface")
 
+	// ErrDependencyNotFound is returned when a named dependency is absent or
+	// its local operation reference cannot be resolved.
+	ErrDependencyNotFound = errors.New("openbindings: dependency not found or invalid")
+
 	// ErrUnknownSource is returned when a binding references a source not present in the interface.
 	ErrUnknownSource = errors.New("openbindings: unknown source")
 

@@ -1,7 +1,9 @@
 package openbindings
 
 import (
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -186,10 +188,13 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // complete: a graph that reaches a resource the document does not embed, has
 // a reference that does not resolve, or holds a schema that is not
 // well-formed yields a *SchemaGraphUnavailableError, even where no value
-// would exercise that part of it. A document declaring a version outside the
-// supported set is not interpreted: CompileOperationSchema returns a
-// *VersionRefusalError (OBI-T-04). Any other error means there is nothing to
-// compile: no interface, no such operation, or no schema at that position.
+// would exercise that part of it. A document is interpreted only under a
+// supported version: one declaring a well-formed version outside the
+// supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
+// no valid version returns an error (OBI-D-12). Any other error means nothing
+// was compiled: there is no interface, the name resolves to no one operation
+// (wrapping ErrOperationNotFound), the operation specifies no schema at that
+// position, or the interface cannot be encoded.
 func CompileOperationSchema(i *Interface, operation, position string) (*CompiledSchema, error) {
 	if i == nil {
 		return nil, errors.New("openbindings: interface is nil")
@@ -197,9 +202,12 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
 		return nil, refusal
 	}
+	if !IsValidSemver(i.OpenBindings) {
+		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-12), so it is not interpreted", i.OpenBindings)
+	}
 	key, resolved, ok := ResolveOperation(i, operation)
 	if !ok {
-		return nil, fmt.Errorf("openbindings: operation %q is not defined", operation)
+		return nil, fmt.Errorf("%w: %q", ErrOperationNotFound, operation)
 	}
 	var schema JSONSchema
 	switch position {
@@ -234,9 +242,14 @@ func compileOperationContract(view any, schemas documentSchemas, key, position s
 	return compiled, nil
 }
 
-// documentURL is the base URI of an OBI document during compilation. No
-// reference resolves against the URI a document was fetched from (§7).
-const documentURL = "openbindings:///document"
+// newDocumentURL returns the base URI a compilation gives the OBI document:
+// unique to that compilation, so no URI a document declares can collide with
+// it. No reference resolves against the URI a document was fetched from (§7).
+func newDocumentURL() string {
+	var id [16]byte
+	_, _ = rand.Read(id[:])
+	return "urn:openbindings:document:" + hex.EncodeToString(id[:])
+}
 
 // compileSchemaAt compiles the schema at a location of a document's generic
 // view, given as JSON Pointer reference tokens.
@@ -251,15 +264,22 @@ func compileSchemaAt(view any, schemas documentSchemas, tokens ...string) (*Comp
 	sort.Strings(ids)
 	placed := make(map[string]string, len(ids))
 	for _, id := range ids {
+		if schemas.shadowed[id] {
+			// The backend resolves a meta-schema's URI to the meta-schema it
+			// carries; a graph reaching this resource is refused before
+			// compilation.
+			continue
+		}
 		// Every embedded resource, nested ones included, is resolved by its
 		// $id wherever it is referenced from, and sets the base of the
 		// locations inside it.
 		resource := schemas.resources[id]
-		if err := c.AddResource(id, resource.schema); err != nil {
+		if err := c.AddResource(id, withID(resource.schema, id)); err != nil {
 			return nil, fmt.Errorf("register embedded schema resource %q: %w", id, err)
 		}
 		placed[resource.location] = id
 	}
+	documentURL := newDocumentURL()
 	if err := c.AddContainer(documentURL, view, placed); err != nil {
 		return nil, err
 	}
@@ -268,6 +288,18 @@ func compileSchemaAt(view any, schemas documentSchemas, tokens ...string) (*Comp
 		return nil, err
 	}
 	return &CompiledSchema{backend: compiled}, nil
+}
+
+// withID returns a shallow copy of a resource registered by its absolute URI,
+// whose $id is that URI. A nested resource's $id may be relative to the
+// resource enclosing it, and would otherwise resolve against its own URI.
+func withID(resource map[string]any, id string) map[string]any {
+	copied := make(map[string]any, len(resource))
+	for keyword, value := range resource {
+		copied[keyword] = value
+	}
+	copied["$id"] = id
+	return copied
 }
 
 // documentResourceLoader declines every resource outside the document, as

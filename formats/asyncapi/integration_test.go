@@ -1301,3 +1301,23 @@ func TestNewInvokerWithClient(t *testing.T) {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// ASYNC-D-03 admits one spelling for a selector: a padded one identifies no
+// operation, and neither does an absent one.
+func TestInvoke_SelectorsMatchExactly(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+	for name, selector := range map[string]*string{
+		"padded": openbindings.Present(" #/operations/sendMessage "),
+		"absent": nil,
+	} {
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: httpSource(srv), Selector: selector})
+		_ = call.Write(bg(), map[string]any{"text": "hi"})
+		_, err := drainOutputs(t, call)
+		var ie *invoke.InvocationError
+		if !errors.As(err, &ie) || ie.Code != invoke.ErrCodeInvalidSelector {
+			t.Errorf("%s: want %s, got %v", name, invoke.ErrCodeInvalidSelector, err)
+		}
+	}
+}

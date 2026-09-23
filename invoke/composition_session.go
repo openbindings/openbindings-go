@@ -199,7 +199,7 @@ func NewCompositionSession(options CompositionSessionOptions) (*CompositionSessi
 func (s *CompositionSession) InspectDependency(ctx context.Context, dependencyKey string) (*DependencyInspection, error) {
 	required, ok := s.consumer.Dependency(dependencyKey)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", openbindings.ErrDependencyNotFound, dependencyKey)
+		return nil, fmt.Errorf("%w: %s", ErrDependencyNotFound, dependencyKey)
 	}
 	providers, assessments, err := s.evaluate(ctx, required)
 	if err != nil {
@@ -277,7 +277,7 @@ type untypedResolution struct {
 func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) (*untypedResolution, error) {
 	required, ok := s.consumer.Dependency(dependencyKey)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", openbindings.ErrDependencyNotFound, dependencyKey)
+		return nil, fmt.Errorf("%w: %s", ErrDependencyNotFound, dependencyKey)
 	}
 	registrationsByKey := make(map[string]ProviderRegistration, len(s.registrations))
 	policyCandidates := make([]ProviderPolicyCandidate, 0, len(s.registrations))

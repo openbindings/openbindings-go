@@ -4,8 +4,9 @@
 // against operation contracts (OBI-T-16), and the Core-defined constants
 // (versions and media type).
 //
-// The package is dependency-light and format-agnostic, and covers exactly
-// what the OpenBindings specification defines. The layers above it are
+// The package is dependency-light and format-agnostic, and covers what the
+// OpenBindings specification defines, together with PreparedInterface, a
+// validated document indexed for the layers that act on it. The layers above it are
 // separate sub-packages mirroring the published interface family: invoke
 // (binding-invoker / operation-invoker runtime), synthesize
 // (interface-synthesizer / source-inspector), and compare

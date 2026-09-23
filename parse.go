@@ -3,8 +3,6 @@ package openbindings
 import (
 	"fmt"
 
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
-
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
@@ -21,7 +19,7 @@ import (
 func ParseDocument(data []byte) (*Interface, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
-		if refusal := declaredVersionRefusal(lenientView(data)); refusal != nil {
+		if refusal := declaredVersionRefusal(declaredVersionOf(data)); refusal != nil {
 			return nil, refusal
 		}
 		return nil, fmt.Errorf("parse document: invalid JSON: %w (OBI-D-01)", err)
@@ -35,7 +33,7 @@ func ParseDocument(data []byte) (*Interface, error) {
 		return nil, verr
 	}
 	var iface Interface
-	if err := json.Unmarshal(data, &iface); err != nil {
+	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
 		return nil, fmt.Errorf("parse document: the document model cannot carry it: %w", err)
 	}
 	return &iface, nil

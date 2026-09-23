@@ -126,7 +126,9 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
 		}
 		s.AdditionalProperties = c.enqueueAdditional("additionalProperties")
 
-		if m := c.objVal("dependencies"); m != nil {
+		// 2019-09 split dependencies into dependentSchemas and
+		// dependentRequired; from 2019-09 on it is an unknown keyword.
+		if m := c.objVal("dependencies"); m != nil && s.DraftVersion < 2019 {
 			s.Dependencies = map[string]any{}
 			for pname, pvalue := range m {
 				if arr, ok := pvalue.([]any); ok {
@@ -265,7 +267,9 @@ func (c *objCompiler) compileDraft7(s *Schema) error {
 func (c *objCompiler) compileDraft2019(s *Schema) error {
 	var err error
 
-	if c.hasVocab("core") {
+	// 2020-12 replaced the recursive pair with the dynamic pair; in 2020-12
+	// they are unknown keywords.
+	if c.hasVocab("core") && s.DraftVersion == 2019 {
 		if s.RecursiveRef, err = c.enqueueRef("$recursiveRef"); err != nil {
 			return err
 		}

@@ -1,7 +1,6 @@
 package openbindings
 
 import (
-	"reflect"
 	"testing"
 )
 
@@ -60,16 +59,21 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 	}
 }
 
-func TestAllOperationIdentifiers(t *testing.T) {
-	iface := &Interface{
-		Operations: map[string]Operation{
-			"createTask": {Aliases: []string{"tasks.create", "addTask"}},
-			"listTasks":  {},
-		},
+// A name that several operations carry, in a document that violates
+// OBI-D-04, resolves to none of them: no match is privileged (OBI-T-12).
+func TestResolveOperation_AmbiguousNamesDoNotResolve(t *testing.T) {
+	iface := &Interface{Operations: map[string]Operation{
+		"a": {Aliases: []string{"shared"}},
+		"b": {Aliases: []string{"shared"}},
+		"c": {Aliases: []string{"d"}},
+		"d": {},
+	}}
+	for _, name := range []string{"shared", "d"} {
+		if key, _, ok := ResolveOperation(iface, name); ok {
+			t.Errorf("%q resolved to %q", name, key)
+		}
 	}
-	got := AllOperationIdentifiers(iface)
-	want := []string{"addTask", "createTask", "listTasks", "tasks.create"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("identifiers = %v, want %v", got, want)
+	if key, _, ok := ResolveOperation(iface, "c"); !ok || key != "c" {
+		t.Fatalf("an unambiguous key resolves: %q %v", key, ok)
 	}
 }

@@ -67,7 +67,7 @@ func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 	var c ruleChecks
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
-		if refusal := declaredVersionRefusal(lenientView(data)); refusal != nil {
+		if refusal := declaredVersionRefusal(declaredVersionOf(data)); refusal != nil {
 			return nil, ValidationReport{}, refusal
 		}
 		c.violated("OBI-D-01", "", fmt.Sprintf("not a JSON document this specification accepts: %v", err))
@@ -81,7 +81,7 @@ func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 	checkDocument(&c, view)
 	report, verr := c.conclude()
 	var iface Interface
-	if err := json.Unmarshal(data, &iface); err != nil {
+	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
 		return nil, report, verr
 	}
 	return &iface, report, verr
@@ -117,16 +117,33 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 	}
 }
 
-// lenientView decodes as much of input OBI-D-01 refuses as a JSON decoder
-// will, which is enough to read the version it declares: the version decision
-// precedes interpreting a document under this version's rules, OBI-D-01
-// included (§10.1). It is nil when the input is not JSON at all.
-func lenientView(data []byte) any {
-	var view any
-	if jsonvalue.Unmarshal(data, &view) != nil {
+// declaredVersionOf reads the version input declares from its bytes, for input
+// OBI-D-01 refuses: the version decision precedes interpreting a document
+// under this version's rules, OBI-D-01 included (§10.1). The version is read
+// only where it is established: the input is JSON, and its root object has
+// exactly one openbindings member. The returned view is nil otherwise.
+func declaredVersionOf(data []byte) any {
+	if !json.Valid(data) {
 		return nil
 	}
-	return view
+	entries, err := splitObject(data)
+	if err != nil {
+		return nil
+	}
+	var declared []json.RawMessage
+	for _, entry := range entries {
+		if entry.name == "openbindings" {
+			declared = append(declared, entry.value)
+		}
+	}
+	if len(declared) != 1 {
+		return nil
+	}
+	var version any
+	if jsonvalue.Unmarshal(declared[0], &version) != nil {
+		return nil
+	}
+	return map[string]any{"openbindings": version}
 }
 
 // declaredVersionRefusal applies OBI-T-04 to the version a document's generic
@@ -508,7 +525,8 @@ const draft202012URI = "https://json-schema.org/draft/2020-12/schema"
 
 // JSON Schema 2020-12 keywords whose values are { name -> schema } maps.
 // definitions and dependencies are the pre-2019 spellings the 2020-12
-// meta-schema still describes; the schema backend applies dependencies.
+// meta-schema still describes as schemas, so the document rules judge them;
+// 2020-12 does not evaluate dependencies.
 var schemaMapKeywords = map[string]bool{
 	"properties":        true,
 	"patternProperties": true,
@@ -632,9 +650,17 @@ func (d *documentCheck) checkDocumentReference(path, ref string) {
 	}
 	if problem := literalFragmentProblem(ref); problem != "" {
 		d.c.violated("OBI-D-05", path, problem)
-		return
 	}
-	if _, ok := jsonpointer.Resolve(d.view, ref[1:]); !ok {
+	// OBI-D-16 judges the fragment whatever its spelling: URI semantics
+	// decode it before it is read as a JSON Pointer (RFC 6901 §6), and one
+	// that is not a pointer resolves to no location from the document root.
+	pointer := ""
+	if parsed, err := url.Parse(ref); err == nil {
+		pointer = parsed.Fragment
+	} else {
+		pointer = ref[1:]
+	}
+	if _, ok := jsonpointer.Resolve(d.view, pointer); !ok {
 		d.c.violated("OBI-D-16", path, fmt.Sprintf("%q does not resolve within the document", ref))
 	}
 }
@@ -658,8 +684,11 @@ func (d *documentCheck) checkEmbeddedReference(path, ref string) {
 	if !embedded {
 		return
 	}
-	if _, _, ok := resolveInResource(resource.schema, parsed, fragment); !ok {
+	switch _, _, resolution := resolveInResource(resource, parsed, fragment); resolution {
+	case missing:
 		d.c.violated("OBI-D-16", path, fmt.Sprintf("%q does not resolve within the schema the document embeds as %s", ref, id))
+	case ambiguousAnchor:
+		d.c.inconclusive("OBI-D-16", path, fmt.Sprintf("%q names an anchor more than one schema in %s declares", ref, id))
 	}
 }
 

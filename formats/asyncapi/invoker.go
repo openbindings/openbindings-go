@@ -245,6 +245,12 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 	if !ok {
 		return asyncapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
+	// ASYNC-D-03 admits exactly one spelling for a selector; the engine's own
+	// reference grammar is more forgiving, so the binding's rule is applied
+	// here, before the engine reads the reference.
+	if _, err := parseSelector(openbindings.Value(args.Selector)); err != nil {
+		return asyncapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector}
+	}
 	var content []byte
 	var err error
 	if args.Source.Content != nil {

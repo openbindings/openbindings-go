@@ -31,6 +31,9 @@ func Validate(value any, schema any) error {
 	default:
 		return &openbindings.SchemaGraphUnavailableError{Cause: fmt.Errorf("a schema is a JSON Schema object or boolean")}
 	}
+	if problem := schemacompiler.ValueProblem(value); problem != "" {
+		return fmt.Errorf("schemavalidate: not a JSON value: %s", problem)
+	}
 	c := schemacompiler.New()
 	const url = "urn:openbindings:standalone-schema"
 	if err := c.AddResource(url, schema); err != nil {

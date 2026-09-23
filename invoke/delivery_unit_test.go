@@ -2,7 +2,10 @@ package invoke
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // TestDefaultMaxDeliveryUnitBytes pins the exported default to 10 MiB —
@@ -52,5 +55,24 @@ func TestOperationInvokerStampsDeliveryUnitBound(t *testing.T) {
 	_ = e.InvokeBinding(context.Background(), preset)
 	if preset.MaxDeliveryUnitBytes != 7 {
 		t.Errorf("caller-set MaxDeliveryUnitBytes = %d, want 7 (args-level wins)", preset.MaxDeliveryUnitBytes)
+	}
+}
+
+// The JSON form of invocation arguments is the binding-invoker contract's
+// input, and decodes back to the arguments it encodes.
+func TestBindingInvocationArgs_ContractInputRoundTrip(t *testing.T) {
+	for _, selector := range []*string{nil, openbindings.Present("tools/echo")} {
+		args := BindingInvocationArgs{Source: InvocationSource{BindingSpec: "x@1"}, Selector: selector, Context: map[string]any{"a": 1.0}}
+		data, err := json.Marshal(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back BindingInvocationArgs
+		if err := json.Unmarshal(data, &back); err != nil {
+			t.Fatal(err)
+		}
+		if (back.Selector == nil) != (selector == nil) || (selector != nil && *back.Selector != *selector) || back.Source.BindingSpec != "x@1" || back.Context["a"] != 1.0 {
+			t.Fatalf("round trip of %s gave %+v", data, back)
+		}
 	}
 }

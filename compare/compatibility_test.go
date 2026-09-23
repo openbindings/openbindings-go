@@ -355,7 +355,10 @@ func TestCheckInterfaceCompatibility_AliasesMatch(t *testing.T) {
 	}
 }
 
-func TestCheckInterfaceCompatibility_DirectKeyTakesPrecedence(t *testing.T) {
+// A name two provided operations carry, one as its key and one as an alias,
+// violates OBI-D-04 and names neither: a key match is not privileged over an
+// alias match (OBI-T-12), so the requirement finds no provided operation.
+func TestCheckInterfaceCompatibility_AmbiguousProvidedNameMatchesNothing(t *testing.T) {
 	required := &openbindings.Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]openbindings.Operation{
@@ -377,8 +380,8 @@ func TestCheckInterfaceCompatibility_DirectKeyTakesPrecedence(t *testing.T) {
 	}
 
 	issues := CheckInterfaceCompatibility(required, provided)
-	if len(issues) != 0 {
-		t.Fatalf("expected no issues (direct key match), got %d: %+v", len(issues), issues)
+	if len(issues) != 1 {
+		t.Fatalf("expected the requirement unmatched, got %d issues: %+v", len(issues), issues)
 	}
 }
 

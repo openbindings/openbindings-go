@@ -327,11 +327,24 @@ func TestValidateOperationInput_ApplicatorsTheEvaluatorSkipsStillCount(t *testin
 	for name, input := range map[string]string{
 		"then under a false if": `{"if":false,"then":{"$ref":"https://ext.example/x"}}`,
 		"then with no if":       `{"then":{"$ref":"https://ext.example/x"}}`,
-		"legacy dependencies":   `{"dependencies":{"a":{"$ref":"https://ext.example/x"}}}`,
 	} {
 		iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":`+input+`}}}`)
 		if err := ValidateOperationInput("x", iface, "op"); !errors.As(err, &unavailable) {
 			t.Errorf("%s: want graph unavailable, got %v", name, err)
+		}
+	}
+}
+
+// 2020-12 does not evaluate the pre-2019 dependencies or $recursiveRef, so
+// neither extends the graph or constrains a value.
+func TestValidateOperationInput_PreviousDialectKeywordsAreUnknown(t *testing.T) {
+	for name, input := range map[string]string{
+		"dependencies":  `{"type":"object","dependencies":{"a":["b"],"c":{"$ref":"https://ext.example/x"}}}`,
+		"$recursiveRef": `{"$recursiveRef":"#/schemas/S"}`,
+	} {
+		iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"S":{"type":"integer"}},"operations":{"op":{"input":`+input+`}}}`)
+		if err := ValidateOperationInput(map[string]any{"a": 1.0}, iface, "op"); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }
@@ -386,18 +399,28 @@ func TestValidateOperationInput_ProgresslessCyclesAreUnavailable(t *testing.T) {
 	}
 }
 
-// An $id that is the SDK's own name for the document, or a meta-schema's,
-// names no one embedded schema; graphs that do not reach it are unaffected.
-func TestValidateOperationInput_ReservedIDsOnlyAffectGraphsThatReachThem(t *testing.T) {
-	for _, id := range []string{documentURL, "https://json-schema.org/draft/2020-12/schema"} {
-		iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"X":{"$id":"`+id+`","type":"number"}},
-			"operations":{"op":{"input":{"type":"string"}},"reach":{"input":{"$ref":"#/schemas/X"}}}}`)
-		if err := ValidateOperationInput("x", iface, "op"); err != nil {
-			t.Errorf("%s: an unrelated operation must validate: %v", id, err)
-		}
-		if err := ValidateOperationInput(1, iface, "reach"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
-			t.Errorf("%s: a graph reaching it must be unavailable, got %v", id, err)
-		}
+// An embedded $id is the embedded schema's, whatever URI it is (§7). The
+// schema backend resolves a meta-schema's URI to the meta-schema it carries,
+// so a graph reaching an embedded schema that declares one is unavailable;
+// graphs that do not reach it are unaffected.
+func TestValidateOperationInput_EmbeddedIDsNameTheEmbeddedSchema(t *testing.T) {
+	document := func(id string) *Interface {
+		return mustDecode(t, `{"openbindings":"0.2.0","schemas":{"X":{"$id":"`+id+`","type":"number"}},
+			"operations":{"op":{"input":{"type":"string"}},"reach":{"input":{"$ref":"`+id+`"}}}}`)
+	}
+	ordinary := document("openbindings:///document")
+	if err := ValidateOperationInput(1, ordinary, "reach"); err != nil {
+		t.Fatalf("an ordinary embedded $id resolves to its schema: %v", err)
+	}
+	if err := ValidateOperationInput("x", ordinary, "reach"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Fatalf("want a mismatch against the embedded schema, got %v", err)
+	}
+	shadow := document("https://json-schema.org/draft/2020-12/schema")
+	if err := ValidateOperationInput("x", shadow, "op"); err != nil {
+		t.Errorf("an unrelated operation must validate: %v", err)
+	}
+	if err := ValidateOperationInput(1, shadow, "reach"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Errorf("a graph reaching an embedded meta-schema $id must be unavailable, got %v", err)
 	}
 }
 
@@ -413,5 +436,93 @@ func TestSchemaValidationError_Problems(t *testing.T) {
 	}
 	if (&SchemaValidationError{}).Error() == "" {
 		t.Fatal("a mismatch always has a message")
+	}
+}
+
+// A nested resource's relative $id resolves once, against the resource that
+// encloses it, however the resource is reached.
+func TestValidateOperationInput_NestedRelativeIDsResolveOnce(t *testing.T) {
+	iface := mustDecode(t, `{"openbindings":"0.2.0",
+		"schemas":{"A":{"$id":"https://e.example/a/","$defs":{"B":{"$id":"b/","$ref":"#/$defs/X","$defs":{"X":{"type":"string"}}}}}},
+		"operations":{"op":{"input":{"$ref":"https://e.example/a/b/"}}}}`)
+	if err := ValidateOperationInput("x", iface, "op"); err != nil {
+		t.Fatalf("an embedded, resolvable graph must validate: %v", err)
+	}
+	if err := ValidateOperationInput(5, iface, "op"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Fatalf("want a mismatch, got %v", err)
+	}
+}
+
+// Only the meta-schemas the SDK carries are reserved; any other URI under
+// json-schema.org is an ordinary embedded $id.
+func TestValidateOperationInput_OnlyBuiltInMetaSchemaIDsAreReserved(t *testing.T) {
+	iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"S":{"$id":"https://json-schema.org/example/custom","type":"string"}},
+		"operations":{"op":{"input":{"$ref":"https://json-schema.org/example/custom"}}}}`)
+	if err := ValidateOperationInput("x", iface, "op"); err != nil {
+		t.Fatalf("an embedded $id under json-schema.org resolves: %v", err)
+	}
+}
+
+// A cycle of references that never advances into the value leaves no
+// verdict wherever it sits in the graph, a branch evaluation might skip
+// included (OBI-T-16).
+func TestValidateOperationInput_ProgresslessCyclesAnywhereAreUnavailable(t *testing.T) {
+	for name, input := range map[string]string{
+		"under not":   `{"not":{"$ref":"#/schemas/Loop"}}`,
+		"in an anyOf": `{"anyOf":[{"$ref":"#/schemas/Loop"},{"type":"string"}]}`,
+		"under if":    `{"if":{"$ref":"#/schemas/Loop"},"then":false}`,
+	} {
+		iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"Loop":{"$ref":"#/schemas/Loop"}},"operations":{"op":{"input":`+input+`}}}`)
+		if err := ValidateOperationInput("s", iface, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+			t.Errorf("%s: want graph unavailable, got %v", name, err)
+		}
+	}
+	recursive := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"Node":{"type":"object","properties":{"next":{"$ref":"#/schemas/Node"}}}},
+		"operations":{"op":{"input":{"$ref":"#/schemas/Node"}}}}`)
+	if err := ValidateOperationInput(map[string]any{"next": map[string]any{}}, recursive, "op"); err != nil {
+		t.Fatalf("a recursion through a property advances into the value: %v", err)
+	}
+}
+
+// A $dynamicRef may land on any schema declaring its anchor dynamically, so
+// the graph includes all of them.
+func TestValidateOperationInput_DynamicReferencesReachEveryDynamicAnchor(t *testing.T) {
+	iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{
+		"R1":{"$id":"https://ex.test/r1","$ref":"https://ex.test/r2","$defs":{"x":{"$dynamicAnchor":"node","$ref":"https://outside.example/x"}}},
+		"R2":{"$id":"https://ex.test/r2","$dynamicAnchor":"node","type":"object","properties":{"child":{"$dynamicRef":"#node"}}}},
+		"operations":{"op":{"input":{"$ref":"https://ex.test/r1"}}}}`)
+	if err := ValidateOperationInput(map[string]any{}, iface, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("the dynamic scope reaches an external resource; want graph unavailable, got %v", err)
+	}
+}
+
+// A relative $id at an OBI position has no base to resolve against (§7).
+func TestValidateOperationInput_RelativeIDAtAnOBIPositionIsUnavailable(t *testing.T) {
+	iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$id":"rel","type":"string"}}}}`)
+	if err := ValidateOperationInput("s", iface, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("want graph unavailable, got %v", err)
+	}
+}
+
+// Only the document's schema positions embed resources: a $id in an unknown
+// member is no resource, whether or not another operation references it.
+func TestValidateOperationInput_UnknownMembersEmbedNoResources(t *testing.T) {
+	for _, extra := range []string{``, `,"b":{"input":{"$ref":"#/x-lib/S"}}`} {
+		iface := mustDecode(t, `{"openbindings":"0.2.0","x-lib":{"S":{"$id":"https://ex.test/s","type":"string"}},
+			"operations":{"a":{"input":{"$ref":"https://ex.test/s"}}`+extra+`}}`)
+		if err := ValidateOperationInput("s", iface, "a"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+			t.Errorf("with %q: want graph unavailable, got %v", extra, err)
+		}
+	}
+}
+
+// A document declaring no valid version is not interpreted.
+func TestValidateOperationInput_MalformedVersionsAreNotInterpreted(t *testing.T) {
+	for _, version := range []string{"latest", "", "0.2"} {
+		iface := &Interface{OpenBindings: version, Operations: map[string]Operation{"op": {Input: map[string]any{"type": "string"}}}}
+		err := ValidateOperationInput(5, iface, "op")
+		if err == nil || errors.As(err, new(*SchemaValidationError)) || errors.As(err, new(*SchemaGraphUnavailableError)) {
+			t.Errorf("%q: want a plain refusal to interpret, got %v", version, err)
+		}
 	}
 }

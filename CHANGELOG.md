@@ -46,10 +46,14 @@
   the document embeds by `$id`, nested ones included, resolves by it, and
   sets the base of the locations inside it, so a same-document pointer into
   a resource's interior resolves the references there against that
-  resource. An `$id` that names no one embedded schema (two schemas declare
-  it, or it is the document's own URI or a meta-schema's) leaves only the
-  graphs that reach it unavailable. The backend carries these as recorded
-  patches (`patches/README.md`).
+  resource. Only the document's schema positions embed resources: a `$id`
+  inside an unknown member declares none, whatever other operations
+  reference. An `$id` two schemas declare names no one resource and leaves
+  only the graphs that reach it unavailable; so does an embedded `$id` equal
+  to a meta-schema's URI, which the backend resolves to the meta-schema it
+  carries. Each compilation gives the document a URI unique to it, so no
+  `$id` collides with the document itself. The backend carries these as
+  recorded patches (`patches/README.md`).
 - **Operation-contract validation needs the whole graph** (§5.2, OBI-T-16).
   The backend skips subschemas it decides never apply, such as `then`
   under `if: false`, so an external reference there did not prevent
@@ -58,9 +62,22 @@
   graph is complete first: nothing outside the document but a built-in
   meta-schema, every reference resolvable, and every schema well-formed
   (the 2020-12 meta-schemas, no other `$schema`, no `$vocabulary`). An
-  unreferenced definition stays outside the graph. A reference cycle that
-  never advances is unavailable, not a mismatch. They refuse an unsupported
-  version (OBI-T-04) and resolve an operation by key or alias (OBI-T-12).
+  unreferenced definition stays outside the graph; a `$dynamicRef` reaches
+  every schema declaring its anchor dynamically. A cycle of references that
+  never advances into the value is unavailable wherever it sits, not a
+  mismatch or a pass. A relative `$id` at an OBI position has no base and
+  leaves the graph unavailable. They refuse an unsupported version
+  (OBI-T-04), refuse to interpret a document declaring no valid version
+  (OBI-D-12), and resolve an operation by key or alias (OBI-T-12). A value
+  outside the JSON value domain (a Go struct, a `map[string]int`) is refused
+  as such, not reported as a mismatch.
+- **Operation-contract validation evaluates 2020-12 only.** The backend
+  applied `$recursiveRef` and `dependencies`, keywords of earlier drafts, to
+  2020-12 schemas, so an unknown root member could assert through
+  `$recursiveRef: "#"`. Both are unknown keywords in 2020-12 now.
+- **A name several operations carry resolves to none of them.** In a
+  document violating OBI-D-04, `ResolveOperation` preferred a key match and
+  otherwise picked an alias match at random (OBI-T-12).
 - **`format` never asserts at an operation boundary** (§5.2, OBI-T-16). The
   backend asserted it under the draft-04, draft-06, and draft-07 dialects,
   which a reference to their built-in meta-schema reaches.
@@ -85,7 +102,10 @@
 - **OBI-D-16 covers absolute references into embedded resources.** An
   absolute `$ref` matching an embedded schema's `$id` is in the rule's
   scope; one that does not resolve within that resource was reported
-  conformant.
+  conformant. OBI-D-16 now judges every same-document fragment, one whose
+  spelling OBI-D-05 refuses included, and a reference to an anchor two
+  schemas declare is inconclusive. OBI-D-10 decodes a percent-encoded
+  transform reference before resolving it.
 - **An oversized version is refused.** A version whose numbers exceed a
   machine integer failed to parse and was interpreted under 0.2 rules;
   SemVer bounds no number, so versions now compare exactly at any size. The
@@ -240,6 +260,8 @@
   `synthesize.RepresentedCoverageEntries` had no callers and wrote an
   absent selector as an empty `sourceRef`, which the interface-synthesizer
   contract refuses; and
+  `AllOperationIdentifiers` had no callers; `ErrDependencyNotFound` moved
+  to `invoke`, which returns it; and
   `IsUnsupportedPrerelease`, one step of the OBI-T-04 refusal, is private,
   `IsSupportedVersion` being the refusal's oracle.
 
@@ -260,7 +282,7 @@
   which. `ValidateDocument` validates the exact input bytes instead of
   parsing first, so input that is not a JSON document is reported as a
   violation of OBI-D-01 rather than returned as a parse error, and it returns
-  the decoded document whenever the bytes decode. A version outside the
+  the decoded document whenever the document model can carry it exactly. A version outside the
   supported set is a `*VersionRefusalError` from `Validate`,
   `ValidateDocument`, and `ParseDocument` alike, returned with no report,
   because a refused document is not interpreted under this version's rules

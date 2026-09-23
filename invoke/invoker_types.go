@@ -151,17 +151,33 @@ type BindingInvocationArgs struct {
 	MaxDeliveryUnitBytes int64 `json:"-"`
 }
 
+// bindingInvocationInput is the binding-invoker contract's input.
+type bindingInvocationInput struct {
+	Source   InvocationSource `json:"source"`
+	Selector string           `json:"selector"`
+	Context  map[string]any   `json:"context,omitempty"`
+}
+
 // MarshalJSON encodes the arguments as the binding-invoker contract's
 // input: source, selector, and context. Revision 0.1 of the contract requires
 // a selector string, so an absent selector is written as "", the spelling it
 // shares with a present empty selector. A contract revision that makes the
 // member optional removes this projection.
 func (a BindingInvocationArgs) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Source   InvocationSource `json:"source"`
-		Selector string           `json:"selector"`
-		Context  map[string]any   `json:"context,omitempty"`
-	}{a.Source, openbindings.Value(a.Selector), a.Context})
+	return json.Marshal(bindingInvocationInput{a.Source, openbindings.Value(a.Selector), a.Context})
+}
+
+// UnmarshalJSON decodes the binding-invoker contract's input into the
+// arguments' source, selector, and context, leaving the process-local members
+// zero. The contract spells an absent selector "", so "" decodes as absent,
+// the inverse of MarshalJSON.
+func (a *BindingInvocationArgs) UnmarshalJSON(b []byte) error {
+	var input bindingInvocationInput
+	if err := json.Unmarshal(b, &input); err != nil {
+		return err
+	}
+	*a = BindingInvocationArgs{Source: input.Source, Selector: openbindings.NonZero(input.Selector), Context: input.Context}
+	return nil
 }
 
 // DefaultMaxDeliveryUnitBytes is the delivery-unit bound applied when

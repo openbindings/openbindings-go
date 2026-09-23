@@ -125,10 +125,32 @@ index 0000000..ebc671f
 +	return re.MatchString(value)
 +}
 diff --git a/objcompiler.go b/objcompiler.go
-index d47efa8..b6b2a9a 100644
+index d47efa8..62c3552 100644
 --- a/objcompiler.go
 +++ b/objcompiler.go
-@@ -434,6 +434,9 @@ func (c *objCompiler) hasVocab(name string) bool {
+@@ -126,7 +126,9 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
+ 		}
+ 		s.AdditionalProperties = c.enqueueAdditional("additionalProperties")
+ 
+-		if m := c.objVal("dependencies"); m != nil {
++		// 2019-09 split dependencies into dependentSchemas and
++		// dependentRequired; from 2019-09 on it is an unknown keyword.
++		if m := c.objVal("dependencies"); m != nil && s.DraftVersion < 2019 {
+ 			s.Dependencies = map[string]any{}
+ 			for pname, pvalue := range m {
+ 				if arr, ok := pvalue.([]any); ok {
+@@ -265,7 +267,9 @@ func (c *objCompiler) compileDraft7(s *Schema) error {
+ func (c *objCompiler) compileDraft2019(s *Schema) error {
+ 	var err error
+ 
+-	if c.hasVocab("core") {
++	// 2020-12 replaced the recursive pair with the dynamic pair; in 2020-12
++	// they are unknown keywords.
++	if c.hasVocab("core") && s.DraftVersion == 2019 {
+ 		if s.RecursiveRef, err = c.enqueueRef("$recursiveRef"); err != nil {
+ 			return err
+ 		}
+@@ -434,6 +438,9 @@ func (c *objCompiler) hasVocab(name string) bool {
  }
  
  func (c *objCompiler) assertFormat(draftVersion int) bool {
@@ -138,7 +160,7 @@ index d47efa8..b6b2a9a 100644
  	if c.c.assertFormat || draftVersion < 2019 {
  		return true
  	}
-@@ -489,6 +492,7 @@ func (c *objCompiler) numVal(pname string) *big.Rat {
+@@ -489,6 +496,7 @@ func (c *objCompiler) numVal(pname string) *big.Rat {
  	}
  	switch v.(type) {
  	case json.Number, float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:

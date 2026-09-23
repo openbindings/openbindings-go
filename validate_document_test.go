@@ -553,3 +553,48 @@ func TestValidateDocument_RefusesVersionsBeforeJudgingBytes(t *testing.T) {
 		t.Fatalf("ParseDocument: want a version refusal, got %v", err)
 	}
 }
+
+// A version is read before OBI-D-01 only where it is established: a repeated
+// openbindings member declares none.
+func TestValidateDocument_RepeatedVersionIsNotRead(t *testing.T) {
+	_, report, err := ValidateDocument([]byte(`{"openbindings":"0.2.0","openbindings":"0.3.0","operations":{}}`))
+	if errors.As(err, new(*VersionRefusalError)) {
+		t.Fatalf("a repeated openbindings member establishes no version: %v", err)
+	}
+	if report.Evidence["OBI-D-01"] != EvidenceViolated {
+		t.Fatalf("OBI-D-01 = %s", report.Evidence["OBI-D-01"])
+	}
+}
+
+// OBI-D-16 judges every same-document fragment, whatever OBI-D-05 says of its
+// spelling, and an anchor declared twice leaves a reference to it undecided.
+func TestValidateDocument_ReferenceResolutionIsJudgedForEveryFragment(t *testing.T) {
+	for ref, want := range map[string]RuleEvidenceStatus{
+		"#/schemas/Nope%20x": EvidenceViolated,
+		"#/schemas/T%61sk":   EvidenceSatisfied,
+		"#/schemas/~2":       EvidenceViolated,
+		"#nothere":           EvidenceViolated,
+	} {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"Task":{}},"operations":{"a":{"input":{"$ref":"`+ref+`"}}}}`)
+		if got := report.Evidence["OBI-D-16"]; got != want {
+			t.Errorf("%s: OBI-D-16 = %s, want %s", ref, got, want)
+		}
+	}
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0",
+		"schemas":{"A":{"$id":"https://ex.test/a","$defs":{"p":{"$anchor":"dup"},"q":{"$anchor":"dup"}}}},
+		"operations":{"a":{"input":{"$ref":"https://ex.test/a#dup"}}}}`)
+	if report.Evidence["OBI-D-16"] != EvidenceInconclusive {
+		t.Fatalf("an anchor declared twice: OBI-D-16 = %s, want inconclusive", report.Evidence["OBI-D-16"])
+	}
+}
+
+// A named-transform reference is decoded before it is resolved; its spelling
+// is OBI-D-05's.
+func TestValidateDocument_TransformReferencesDecodeTheirFragment(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{}},"transforms":{"ab":"$"},
+		"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+		"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":"#/transforms/a%62"}}}}`)
+	if report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Evidence["OBI-D-05"] != EvidenceViolated {
+		t.Fatalf("OBI-D-10 = %s, OBI-D-05 = %s", report.Evidence["OBI-D-10"], report.Evidence["OBI-D-05"])
+	}
+}

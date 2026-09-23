@@ -1,13 +1,18 @@
 package schemacompiler
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
+	"math"
 	"slices"
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
 	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema/kind"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 )
@@ -127,4 +132,48 @@ func relativeText(base []string, problem Problem) string {
 		return problem.Message
 	}
 	return jsonpointer.Format(problem.Location[len(base):]...) + ": " + problem.Message
+}
+
+// ValueProblem states why v is not a JSON value the validator accepts, or
+// returns "" when it is one: nil, a bool, a string, a number (a valid
+// json.Number, a finite float, or an integer type), or a []any or
+// map[string]any of JSON values. A value outside that domain has no JSON
+// meaning to validate, so validation reaches no verdict on it.
+func ValueProblem(v any) string {
+	switch v := v.(type) {
+	case nil, bool, string, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return ""
+	case json.Number:
+		if !jsonvalue.IsNumber(v) {
+			return fmt.Sprintf("json.Number %q is not a JSON number", string(v))
+		}
+		return ""
+	case float32:
+		return finiteProblem(float64(v))
+	case float64:
+		return finiteProblem(v)
+	case []any:
+		for i, item := range v {
+			if problem := ValueProblem(item); problem != "" {
+				return fmt.Sprintf("/%d: %s", i, problem)
+			}
+		}
+		return ""
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(v)) {
+			if problem := ValueProblem(v[key]); problem != "" {
+				return jsonpointer.Format(key) + ": " + problem
+			}
+		}
+		return ""
+	default:
+		return fmt.Sprintf("a Go %T is not a JSON value; decode the value as generic JSON first", v)
+	}
+}
+
+func finiteProblem(f float64) string {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return fmt.Sprintf("%v is not a JSON number", f)
+	}
+	return ""
 }

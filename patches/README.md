@@ -40,9 +40,13 @@ draft, including the drafts before 2019-09 that assert it by default and that
 a reference to their built-in metaschema reaches; Core never lets `format`
 reject a value (§5.2, OBI-T-16).
 
-One correction fixes an upstream defect: a `propertyNames` or `contentSchema`
+Two corrections fix upstream defects. A `propertyNames` or `contentSchema`
 failure stored the validator's instance location without copying it, so a
-later sibling overwrote the location it reports.
+later sibling overwrote the location it reports. And the backend applied
+keywords of earlier drafts to 2020-12 schemas: `$recursiveRef` and
+`$recursiveAnchor` (2019-09 only, replaced by the dynamic pair) and
+`dependencies` (split into `dependentSchemas` and `dependentRequired` in
+2019-09); in 2020-12 they are unknown keywords, as §5.2's dialect requires.
 
 Traversal, references, applicators, dialect semantics and annotation ownership
 remain upstream algorithms. The SDK's existing vocabulary extension separately
