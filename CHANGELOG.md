@@ -167,6 +167,19 @@
 
 ### Changed
 
+- **Validation takes the transform engine it is given** (breaking, pre-1.0).
+  `Interface.Validate` and `ValidateDocument` take a `ValidateOptions`, whose
+  `Transforms` field is a `TransformEngine`: an implementation of the pinned
+  transform language (§5.5) that parses expressions and evaluates them with
+  an input and named variables. The SDK carries none. An application
+  chooses one engine and gives the same engine to every layer that parses or
+  evaluates transforms, so the expression validation accepts is the
+  expression that runs. OBI-D-18 is decided by that engine; without one it
+  is inconclusive at every expression, as §10.2 provides for a validator
+  without a parser, so a document with transforms is
+  conformance-undetermined rather than conformant. Core no longer imports
+  the JSONata syntax package. `ErrTransformNoResult` marks an expression
+  that yields no result (JSONata's undefined).
 - **The JSON Schema library is an ordinary dependency** (behavior changes in
   rare cases). Core validated with a private, patched copy of
   `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3; it now requires the
@@ -855,7 +868,8 @@
   fields; the option turned them into rejections. Unknown non-`x-` fields
   are now always surfaced as OBI-T-02 diagnostics in a `ValidationReport`,
   which is what the rule asks for, and never affect validation.
-  `Interface.Validate` no longer takes options.
+  The option is gone; `ValidateOptions` carries only capabilities validation
+  does not have itself.
 
 - **The local provider is gone: `PrepareLocalProvider`, `PrepareLocalProviderOptions`,
   `LocalBindingImplementation`, `LocalImplementationOption`, `LocalUnary`,

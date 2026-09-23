@@ -97,7 +97,7 @@ func TestIsSupportedVersion_MatchesValidateAndParseRefusal(t *testing.T) {
 
 			// Interface.Validate path: only the version decision is tagged
 			// "(OBI-T-04)", so it is isolable from any other shape problems.
-			_, verr := (Interface{OpenBindings: v, Operations: map[string]Operation{}}).Validate()
+			_, verr := (Interface{OpenBindings: v, Operations: map[string]Operation{}}).Validate(ValidateOptions{})
 			validateVersionRefuses := verr != nil && strings.Contains(verr.Error(), "(OBI-T-04)")
 			if accepted == validateVersionRefuses {
 				t.Errorf("drift: IsSupportedVersion(%q)=%v but Validate version-refuses=%v (%v)", v, accepted, validateVersionRefuses, verr)
@@ -296,7 +296,7 @@ func TestVersionNumbersAreUnbounded(t *testing.T) {
 			t.Errorf("IsSupportedVersion(%q) = %v, %v; want %v", version, supported, err, want)
 		}
 	}
-	if _, _, err := ValidateDocument([]byte(`{"openbindings":"` + huge + `.0.0","operations":{}}`)); !errors.As(err, new(*VersionRefusalError)) {
+	if _, _, err := ValidateDocument([]byte(`{"openbindings":"`+huge+`.0.0","operations":{}}`), ValidateOptions{}); !errors.As(err, new(*VersionRefusalError)) {
 		t.Fatalf("an oversized major must be refused (OBI-T-04), got %v", err)
 	}
 	a, _ := parseSemverStrict("1.0.0-" + huge)

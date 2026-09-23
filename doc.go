@@ -19,7 +19,7 @@
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	if _, err := iface.Validate(); err != nil {
+//	if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil {
 //	    log.Fatal(err)
 //	}
 //
@@ -32,10 +32,12 @@
 // same evidence for the same document, including one the typed model cannot
 // carry. Validate returns a *ValidationError listing every violation it
 // establishes, which makes it a gate. A nil error is not conformance: a rule this SDK
-// cannot decide is inconclusive, not violated. The report beside the error
-// carries the conclusion:
+// cannot decide is inconclusive, not violated. OBI-D-18 takes a
+// [TransformEngine], which the SDK does not carry: an application gives one
+// through [ValidateOptions], and without one the rule is inconclusive. The
+// report beside the error carries the conclusion:
 //
-//	iface, report, err := openbindings.ValidateDocument(data)
+//	iface, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
 //	// report.Conclusion is conformant, non-conformant, or
 //	// conformance-undetermined (§10.5); err is a *ValidationError when a
 //	// violation was established, and a *VersionRefusalError when the declared

@@ -52,7 +52,7 @@ func ExampleInterface_Validate() {
 	}
 
 	// The error lists every violation established, so it gates on them.
-	if _, err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil {
 		fmt.Println("violation established:", err)
 		return
 	}
@@ -70,7 +70,7 @@ func ExampleValidateDocument() {
 
 	// ValidateDocument decides every document rule on the exact input bytes
 	// and reports the §10.5 conclusion.
-	_, report, err := openbindings.ValidateDocument(data)
+	_, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -92,7 +92,7 @@ func ExampleInterface_Validate_unknownFields() {
 	_ = json.Unmarshal(data, &iface)
 
 	// Unknown fields are ignored, never rejected (OBI-T-02)...
-	report, err := iface.Validate()
+	report, err := iface.Validate(openbindings.ValidateOptions{})
 	fmt.Println("violation established:", err != nil)
 
 	// ...but the report surfaces them as diagnostics so a typo is not silent.

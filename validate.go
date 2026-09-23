@@ -12,9 +12,18 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 
-	"github.com/openbindings/jsonata/go/syntax"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
+
+// ValidateOptions gives validation the capabilities it does not carry
+// itself (§10.2). The zero value gives none, and a rule that needs a missing
+// capability is inconclusive, never violated.
+type ValidateOptions struct {
+	// Transforms parses the document's transform expressions for OBI-D-18.
+	// Without one, OBI-D-18 is inconclusive for every expression the
+	// document holds.
+	Transforms TransformEngine
+}
 
 // Validate checks a document already in memory against every document rule
 // this SDK can decide. It reports the per-rule evidence, the located findings,
@@ -31,12 +40,13 @@ import (
 // not violated, and the report's Conclusion says whether the document is
 // conformant or conformance undetermined. OBI-D-13 is inconclusive for a
 // document with bindings, because only each binding's governing binding
-// specification decides it.
+// specification decides it, and OBI-D-18 is inconclusive for a document with
+// transforms unless options gives a transform engine.
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (OBI-T-04). A host
 // object that cannot be encoded returns that error and no report.
-func (i Interface) Validate() (ValidationReport, error) {
+func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
 	}
@@ -46,7 +56,7 @@ func (i Interface) Validate() (ValidationReport, error) {
 	}
 	var c ruleChecks
 	c.inconclusive("OBI-D-01", "", "decided on the exact input bytes, which a host object no longer carries; ValidateDocument decides it")
-	checkDocument(&c, view)
+	checkDocument(&c, view, options)
 	return c.conclude()
 }
 
@@ -63,7 +73,9 @@ func (i Interface) Validate() (ValidationReport, error) {
 // A document declaring a well-formed version outside the supported set is not
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
 // (OBI-T-04). The version is read first, whenever a JSON decoder can read it.
-func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
+// options gives the capabilities validation does not carry itself, as for
+// Interface.Validate.
+func ValidateDocument(data []byte, options ValidateOptions) (*Interface, ValidationReport, error) {
 	var c ruleChecks
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
@@ -78,7 +90,7 @@ func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 	if refusal := declaredVersionRefusal(view); refusal != nil {
 		return nil, ValidationReport{}, refusal
 	}
-	checkDocument(&c, view)
+	checkDocument(&c, view, options)
 	report, verr := c.conclude()
 	var iface Interface
 	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
@@ -195,12 +207,12 @@ var (
 // type contradicts what the rule requires of it violates the rule: an
 // operation reference that is a number names no operation key. Where the
 // document schema requires a member or a type, OBI-D-02 also reports it.
-func checkDocument(c *ruleChecks, view any) {
+func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 	checkDeclaredVersion(c, view)
 	validateAgainstOBISchema(c, view)
 
 	root, _ := view.(map[string]any)
-	d := documentCheck{c: c, view: view, wellFormed: map[string]bool{}, schemas: collectDocumentSchemas(view)}
+	d := documentCheck{c: c, view: view, wellFormed: map[string]bool{}, schemas: collectDocumentSchemas(view), transforms: options.Transforms}
 
 	schemas, _ := root["schemas"].(map[string]any)
 	for _, key := range sortedKeys(schemas) {
@@ -217,7 +229,7 @@ func checkDocument(c *ruleChecks, view any) {
 		path := jsonpointer.Format("transforms", key)
 		validateIdent(c, path, key)
 		if expression, ok := transforms[key].(string); ok {
-			validateTransformExpression(c, path, expression)
+			d.checkTransformExpression(path, expression)
 		} else {
 			c.violated("OBI-D-18", path, fmt.Sprintf("a transform is a JSONata expression string; got %s", jsonTypeName(transforms[key])))
 		}
@@ -297,6 +309,10 @@ type documentCheck struct {
 	// wellFormed remembers schema objects already found well-formed, keyed by
 	// their encoding, so a schema repeated across positions is checked once.
 	wellFormed map[string]bool
+
+	// transforms parses transform expressions for OBI-D-18; nil when
+	// validation was given none.
+	transforms TransformEngine
 }
 
 // checkReference decides a referential rule (OBI-D-08, OBI-D-09, OBI-D-19)
@@ -396,7 +412,7 @@ func (d *documentCheck) checkSchema(path string, schema any) {
 func (d *documentCheck) checkBindingTransform(path string, value any, transforms map[string]any) {
 	switch transform := value.(type) {
 	case string:
-		validateTransformExpression(d.c, path, transform)
+		d.checkTransformExpression(path, transform)
 	case map[string]any:
 		refPath := path + jsonpointer.Format("$ref")
 		if value, present := transform["$ref"]; present {
@@ -470,29 +486,20 @@ func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, kn
 	c.diagnose("OBI-T-02", path, fmt.Sprintf("unknown %s ignored: %s; extensions use the x- prefix", noun, strings.Join(unknown, ", ")))
 }
 
-// validateTransformExpression records an OBI-D-18 violation when expr does
-// not parse as a syntactically valid expression of the pinned transform
-// language (§5.5: the incorporated JSONata 2.1 documentation). Parse-only:
-// membership in the language, not success of evaluation; undefined results
-// and dynamic errors remain evaluation outcomes.
-func validateTransformExpression(c *ruleChecks, prefix, expr string) {
-	if !jsonataParses(expr) {
-		c.violated("OBI-D-18", prefix, "not a syntactically valid JSONata expression")
+// checkTransformExpression decides OBI-D-18 for one transform expression: it
+// parses under the pinned transform language (§5.5). Parse-only: membership
+// in the language, not success of evaluation; a result that is absent and a
+// dynamic error remain evaluation outcomes. Without a transform engine the
+// rule is inconclusive, as the spec provides for a validator without a
+// parser.
+func (d *documentCheck) checkTransformExpression(path, expression string) {
+	if d.transforms == nil {
+		d.c.inconclusive("OBI-D-18", path, "not parsed: validation was given no transform engine")
+		return
 	}
-}
-
-// jsonataParses reports whether expr parses under the bundled JSONata
-// syntax package, without importing the evaluator or initializing its
-// standard library. The parser is only ever handed document-supplied strings,
-// so a parser panic is treated as a parse failure rather than crashing
-// document validation.
-func jsonataParses(expr string) (ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	return syntax.Validate(expr) == nil
+	if err := d.transforms.Parse(expression); err != nil {
+		d.c.violated("OBI-D-18", path, fmt.Sprintf("not a syntactically valid expression of the pinned transform language: %v", err))
+	}
 }
 
 // transformRefProblem states why a named-transform $ref does not resolve to a

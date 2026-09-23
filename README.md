@@ -18,7 +18,7 @@ its environment, independently of protocol. See the
 > the released package path; they do not install this branch today. Use the
 > source-workspace instructions to evaluate 0.2 before release.
 
-**Conformance:** `ValidateDocument(data)` validates a document's exact bytes
+**Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
 [§10.5](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#105-conformance-conclusions):
 evidence for every document rule, located findings, OBI-T-02 diagnostics, and a
@@ -28,7 +28,10 @@ require knowledge of the exact governing binding specification, so a
 core-only validator records them as inconclusive rather than passing or
 failing them. A document with bindings is therefore conformance-undetermined
 here until something that implements its binding specifications adds that
-evidence. `Interface.Validate()` does the same for a document already in
+evidence. OBI-D-18 needs a parser for the transform language: the SDK carries
+none, so an application passes its `TransformEngine` in
+`ValidateOptions.Transforms`, and without one the rule is inconclusive.
+`Interface.Validate(options)` does the same for a document already in
 memory, where OBI-D-01 is inconclusive because a host object no longer
 carries the exact input bytes. The rules judge the JSON a document is, never
 its typed decoding, so a document the typed model cannot carry is still judged
@@ -170,7 +173,7 @@ iface, err := openbindings.ParseDocument(data)
 if err != nil {
     log.Fatal(err)
 }
-if _, err := iface.Validate(); err != nil {
+if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil {
     log.Fatal(err)
 }
 
@@ -652,8 +655,12 @@ optional `BindingPreflighter` capability; see [preflighting an operation](PREFLI
 ## Transforms (invoking tools only)
 
 OpenBindings 0.2.0 uses the documented JSONata 2.1 language for binding
-transforms. Document validation imports only the runtime family's syntax
-package: it does not initialize an evaluator or apply arithmetic budgets.
+transforms. The core package defines `TransformEngine`, an implementation of
+the pinned transform language that parses (OBI-D-18) and evaluates (OBI-T-10),
+and carries none. An application chooses one engine and gives the same engine
+to every layer that parses or evaluates transforms, so the expression
+validation accepts is the expression that runs. Document validation receives
+it in `ValidateOptions.Transforms`.
 
 Invocation remains explicitly dependency-injected. The official adapter uses
 the independent JSONata runtime's closed JSON-text boundary:

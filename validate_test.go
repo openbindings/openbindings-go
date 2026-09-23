@@ -9,7 +9,7 @@ import (
 
 func TestInterfaceValidate_RequiresOpenBindingsAndOperations(t *testing.T) {
 	i := Interface{}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -52,7 +52,7 @@ func TestInterfaceValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 		OpenBindings: "1.0.0",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error for higher-major version")
 	}
@@ -68,7 +68,7 @@ func TestInterfaceValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
 		OpenBindings: "0.99.0",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error for pre-1.0 higher-minor version")
 	}
@@ -83,7 +83,7 @@ func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error for invalid semver")
 	}
@@ -100,7 +100,7 @@ func TestInterfaceValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
 			"b": {Aliases: []string{"shared"}},
 		},
 	}
-	if _, err := i.Validate(); err == nil {
+	if _, err := i.Validate(ValidateOptions{}); err == nil {
 		t.Fatalf("expected error")
 	}
 }
@@ -116,7 +116,7 @@ func TestInterfaceValidate_AliasAsContractNameIsValid(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
@@ -126,7 +126,7 @@ func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T)
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -159,7 +159,7 @@ func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
 			"empty": {BindingSpec: "openapi@3.1"},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -187,29 +187,9 @@ func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 			},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err != nil {
 		t.Fatalf("expected no error for source with both location and content, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_EmptyTransformExpressionRejected(t *testing.T) {
-	// OBI-D-18: every value in the transforms map parses as a syntactically
-	// valid JSONata expression; an empty string is not one (jsonata-js 2.1.1
-	// rejects it at parse, the normative tiebreak).
-	i := Interface{
-		OpenBindings: "0.2.0",
-		Operations:   map[string]Operation{},
-		Transforms: map[string]Transform{
-			"empty": "",
-		},
-	}
-	_, err := i.Validate()
-	if err == nil {
-		t.Fatal("expected empty named transform to be rejected (OBI-D-18)")
-	}
-	if !strings.Contains(err.Error(), `/transforms/empty: not a syntactically valid JSONata expression (OBI-D-18)`) {
-		t.Fatalf("expected OBI-D-18 problem for empty transform, got %v", err)
 	}
 }
 
@@ -234,7 +214,7 @@ func TestInterfaceValidate_SourceLocationFormatDefinedAddress(t *testing.T) {
 					"svc": {BindingSpec: "grpc@1.0", Location: Present(addr)},
 				},
 			}
-			if _, err := i.Validate(); err != nil {
+			if _, err := i.Validate(ValidateOptions{}); err != nil {
 				t.Fatalf("location %q should be accepted, got %v", addr, err)
 			}
 		})
@@ -252,7 +232,7 @@ func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
 					"api": {BindingSpec: "openapi@3.1", Location: Present(loc)},
 				},
 			}
-			_, err := i.Validate()
+			_, err := i.Validate(ValidateOptions{})
 			if err == nil {
 				t.Fatalf("relative location %q should be rejected", loc)
 			}
@@ -276,7 +256,7 @@ func TestInterfaceValidate_PlainNameFragmentRefRejected(t *testing.T) {
 			"Task": map[string]any{"$anchor": "task", "type": "object"},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("plain-name fragment $ref should be rejected")
 	}
@@ -296,7 +276,7 @@ func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("dangling same-document $ref should be rejected")
 	}
@@ -318,7 +298,7 @@ func TestInterfaceValidate_PercentEncodedFragmentRejected(t *testing.T) {
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("percent-encoded fragment should be rejected as not in literal form")
 	}
@@ -338,7 +318,7 @@ func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) 
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("dangling percent-encoded $ref should be rejected")
 	}
@@ -364,7 +344,7 @@ func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("resource-internal $ref should be out of D-16 scope, got %v", err)
 	}
 }
@@ -387,7 +367,7 @@ func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("anchor inside $id scope must be permitted, got %v", err)
 	}
 }
@@ -410,7 +390,7 @@ func TestInterfaceValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) 
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("nested relative $id inside $id scope must be permitted, got %v", err)
 	}
 }
@@ -427,7 +407,7 @@ func TestInterfaceValidate_TopLevelRelativeIDRejected(t *testing.T) {
 			"Task": map[string]any{"$id": "task.schema.json", "type": "object"},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("relative $id at an OBI position should be rejected")
 	}
@@ -445,7 +425,7 @@ func TestInterfaceValidate_DynamicRefAtOperationPositionRejected(t *testing.T) {
 			"getTask": {Output: map[string]any{"$dynamicRef": "#node"}},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("$dynamicRef at an OBI position should be rejected")
 	}
@@ -466,7 +446,7 @@ func TestInterfaceValidate_DynamicAnchorInSchemasMapRejected(t *testing.T) {
 			"Task": map[string]any{"$dynamicAnchor": "task", "type": "object"},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("$dynamicAnchor at an OBI position should be rejected")
 	}
@@ -499,7 +479,7 @@ func TestInterfaceValidate_DynamicPairInsideIDScopePermitted(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("dynamic pair inside $id scope must be permitted, got %v", err)
 	}
 }
@@ -520,7 +500,7 @@ func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
 			}},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("property named $dynamicRef/$dynamicAnchor must be treated as data, got %v", err)
 	}
 }
@@ -542,7 +522,7 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -567,7 +547,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -589,40 +569,12 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
 	if !containsProblem(err, `/bindings/op.nonexistent/source: references unknown source "nonexistent" (OBI-D-09)`) {
 		t.Fatalf("expected source ref error, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_EmptyInlineTransformRejected(t *testing.T) {
-	// OBI-D-18: an inline transform string must parse as a syntactically
-	// valid JSONata expression; an empty string is not one.
-	i := Interface{
-		OpenBindings: "0.2.0",
-		Operations: map[string]Operation{
-			"op": {},
-		},
-		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
-		},
-		Bindings: map[string]BindingEntry{
-			"op.api": {
-				Operation:       "op",
-				Source:          "api",
-				OutputTransform: InlineTransform(""),
-			},
-		},
-	}
-	_, err := i.Validate()
-	if err == nil {
-		t.Fatal("expected empty inline transform to be rejected (OBI-D-18)")
-	}
-	if !strings.Contains(err.Error(), `/bindings/op.api/outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`) {
-		t.Fatalf("expected OBI-D-18 problem for empty inline transform, got %v", err)
 	}
 }
 
@@ -646,7 +598,7 @@ func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
@@ -692,7 +644,7 @@ func TestInterfaceValidate_ExampleValidation_ValidExamplePasses(t *testing.T) {
 			},
 		},
 	)
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
@@ -708,7 +660,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 			},
 		},
 	)
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error for invalid example input")
 	}
@@ -737,7 +689,7 @@ func TestInterfaceValidate_ExampleValidation_UsesOBIDocumentRoot(t *testing.T) {
 			"bad": {Input: exampleValue(map[string]any{"name": float64(42)})},
 		},
 	)
-	if _, err := i.Validate(); !containsProblemSubstring(err, "OBI-D-11") {
+	if _, err := i.Validate(ValidateOptions{}); !containsProblemSubstring(err, "OBI-D-11") {
 		t.Fatalf("expected document-root schema to reject example, got %v", err)
 	}
 }
@@ -753,7 +705,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 			},
 		},
 	)
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error for invalid example output")
 	}
@@ -775,7 +727,7 @@ func TestInterfaceValidate_ExampleValidation_RunsByDefault(t *testing.T) {
 			},
 		},
 	)
-	if _, err := i.Validate(); err == nil {
+	if _, err := i.Validate(ValidateOptions{}); err == nil {
 		t.Fatalf("expected error because OBI-D-11 is always enforced")
 	}
 }
@@ -792,7 +744,7 @@ func TestInterfaceValidate_ExampleValidation_NoSchemasSkipsGracefully(t *testing
 			},
 		},
 	)
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected no error when schemas are absent, got %v", err)
 	}
 }
@@ -804,7 +756,7 @@ func TestInterfaceValidate_ExampleValidation_NoExamplesSkipsGracefully(t *testin
 		map[string]any{"type": "object"},
 		nil,
 	)
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected no error when examples are absent, got %v", err)
 	}
 }
@@ -818,7 +770,7 @@ func TestInterfaceValidate_ExampleValidation_ExampleWithoutInputOrOutput(t *test
 			"empty": {Description: Present("an example with no data")},
 		},
 	)
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected no error for example without input/output, got %v", err)
 	}
 }
@@ -840,7 +792,7 @@ func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 			},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected error for invalid example against $ref schema")
 	}
@@ -862,7 +814,7 @@ func TestParseDocument_UnknownTopLevelFieldValidates_OBI_T_02(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected unknown top-level field to parse, got %v", err)
 	}
-	if _, err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected unknown top-level field to validate (OBI-T-02), got %v", err)
 	}
 }
@@ -888,7 +840,7 @@ func TestParseDocument_TransformRefWithExtensionKeyValidates_OBI_T_03(t *testing
 	if err != nil {
 		t.Fatalf("expected transform $ref with x- key to parse, got %v", err)
 	}
-	if _, err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected transform $ref with x- key to validate (OBI-T-03), got %v", err)
 	}
 }
@@ -924,7 +876,7 @@ func TestInterfaceValidate_ExampleValidation_ExplicitNullIsValidated(t *testing.
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	_, err = iface.Validate()
+	_, err = iface.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected explicit-null example input to fail against {\"type\":\"object\"}")
 	}
@@ -951,7 +903,7 @@ func TestInterfaceValidate_ExampleValidation_AbsentInputStillSkipped(t *testing.
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if _, err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected absent example input to be skipped, got %v", err)
 	}
 }
@@ -968,7 +920,7 @@ func TestInterfaceValidate_ExampleValidation_ExternalRefAbstains(t *testing.T) {
 			"opaque": {Input: exampleValue(map[string]any{"anything": true})},
 		},
 	)
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected abstention for external $ref schema, got %v", err)
 	}
 }
@@ -990,7 +942,7 @@ func TestInterfaceValidate_ExampleValidation_ExternalRefInSchemasMapAbstains(t *
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected abstention for external $ref via schemas map, got %v", err)
 	}
 }
@@ -1011,7 +963,7 @@ func TestInterfaceValidate_ExampleValidation_InternalRefStillValidated(t *testin
 			},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatalf("expected internal-ref example validation to fail")
 	}
@@ -1029,7 +981,7 @@ func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
 	}
-	_, err := iface.Validate()
+	_, err := iface.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("a document below MinSupportedVersion must refuse")
 	}
@@ -1065,7 +1017,7 @@ func TestInterfaceValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected boolean-form schemas to validate, got %v", err)
 	}
 }
@@ -1105,7 +1057,7 @@ func TestInterfaceValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.
 				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{"op": tc.op},
 			}
-			_, err := i.Validate()
+			_, err := i.Validate(ValidateOptions{})
 			if err == nil {
 				t.Fatal("expected OBI-D-17 violation")
 			}
@@ -1128,7 +1080,7 @@ func TestInterfaceValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
 			"op": {Output: "not-a-schema"},
 		},
 	}
-	_, err := i.Validate()
+	_, err := i.Validate(ValidateOptions{})
 	if err == nil {
 		t.Fatal("expected OBI-D-17 violations")
 	}
@@ -1161,69 +1113,8 @@ func TestInterfaceValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T)
 			},
 		},
 	}
-	if _, err := i.Validate(); err != nil {
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("expected narrow OBI-D-17 to accept, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
-	// OBI-D-18: named and inline transform expressions must parse as
-	// JSONata; parse-only (an expression whose evaluation would fail is
-	// still document-valid).
-	valid := Interface{
-		OpenBindings: "0.2.0",
-		Operations:   map[string]Operation{"op": {}},
-		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
-		},
-		Transforms: map[string]Transform{
-			"nontrivial":      `items[price > 10].{ "label": name & " ($" & $string(price) & ")", "total": price * quantity }`,
-			"evalWouldFail":   "payload.does.not.exist",
-			"unknownFunction": "$definitelyNotARealFunction(payload)",
-		},
-		Bindings: map[string]BindingEntry{
-			"op.api": {
-				Operation:      "op",
-				Source:         "api",
-				InputTransform: InlineTransform(`{ "task_title": title }`),
-			},
-		},
-	}
-	if _, err := valid.Validate(); err != nil {
-		t.Fatalf("expected parse-valid transforms to be accepted, got %v", err)
-	}
-
-	invalid := Interface{
-		OpenBindings: "0.2.0",
-		Operations:   map[string]Operation{"op": {}},
-		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
-		},
-		Transforms: map[string]Transform{
-			"unbalanced": "(a + b",
-		},
-		Bindings: map[string]BindingEntry{
-			"op.api": {
-				Operation:       "op",
-				Source:          "api",
-				InputTransform:  InlineTransform("items["),
-				OutputTransform: InlineTransform(`{ "id": }`),
-			},
-		},
-	}
-	_, err := invalid.Validate()
-	if err == nil {
-		t.Fatal("expected OBI-D-18 violations")
-	}
-	msg := err.Error()
-	for _, want := range []string{
-		`/transforms/unbalanced: not a syntactically valid JSONata expression (OBI-D-18)`,
-		`/bindings/op.api/inputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
-		`/bindings/op.api/outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
-	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("expected problem %q, got: %s", want, msg)
-		}
 	}
 }
 
@@ -1235,7 +1126,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 			"customer.delivery": {Operation: "deliver"},
 		},
 	}
-	if _, err := valid.Validate(); err != nil {
+	if _, err := valid.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("valid dependency: %v", err)
 	}
 
@@ -1243,7 +1134,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 	emptyConstraint.Dependencies = map[string]DependencyEntry{
 		"customer.delivery": {Operation: "deliver", BindingSpecs: []string{}},
 	}
-	if _, err := emptyConstraint.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
+	if _, err := emptyConstraint.Validate(ValidateOptions{}); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
 		t.Fatalf("empty bindingSpecs validation = %v, want OBI-D-02", err)
 	}
 
@@ -1251,7 +1142,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 	missingOperation.Dependencies = map[string]DependencyEntry{
 		"customer.delivery": {Operation: "missing"},
 	}
-	if _, err := missingOperation.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-19") {
+	if _, err := missingOperation.Validate(ValidateOptions{}); err == nil || !strings.Contains(err.Error(), "OBI-D-19") {
 		t.Fatalf("missing dependency operation validation = %v, want OBI-D-19", err)
 	}
 }
@@ -1261,7 +1152,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 // OBI-T-02 makes unknown fields ignored, never rejected.
 func unknownFieldDiagnostics(t *testing.T, iface Interface) map[string]string {
 	t.Helper()
-	report, err := iface.Validate()
+	report, err := iface.Validate(ValidateOptions{})
 	if err != nil {
 		t.Fatalf("unknown fields must not fail validation (OBI-T-02): %v", err)
 	}

@@ -149,12 +149,12 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 		`{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","bindingSpecs":[]}}}`,
 	}
 	for _, document := range documents {
-		_, fromBytes, _ := ValidateDocument([]byte(document))
+		_, fromBytes, _ := ValidateDocument([]byte(document), ValidateOptions{})
 		var iface Interface
 		if err := json.Unmarshal([]byte(document), &iface); err != nil {
 			t.Fatalf("%s: decode: %v", document, err)
 		}
-		fromHost, err := iface.Validate()
+		fromHost, err := iface.Validate(ValidateOptions{})
 		var violation *ValidationError
 		if err != nil && !errors.As(err, &violation) {
 			t.Fatalf("%s: %v", document, err)
@@ -262,7 +262,7 @@ func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
 func TestValidate_RefusesAHostObjectWhoseEncodingViolatesTheRules(t *testing.T) {
 	iface := &Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
 	var violation *ValidationError
-	if _, err := iface.Validate(); !errors.As(err, &violation) {
+	if _, err := iface.Validate(ValidateOptions{}); !errors.As(err, &violation) {
 		t.Fatalf("want a *ValidationError, got %T %v", err, err)
 	}
 }

@@ -9,7 +9,7 @@ import (
 func TestPublicDocumentReadersRetainNumbers(t *testing.T) {
 	for _, token := range []string{"9007199254740993", "0.10000000000000000001", "1e400", "1e-400"} {
 		validate := func(data []byte) (*Interface, error) {
-			iface, _, err := ValidateDocument(data)
+			iface, _, err := ValidateDocument(data, ValidateOptions{})
 			return iface, err
 		}
 		for name, read := range map[string]func([]byte) (*Interface, error){"parse": ParseDocument, "validate": validate} {
@@ -50,7 +50,7 @@ func TestPublicDocumentValidationDistinguishesAdjacentExactBounds(t *testing.T) 
 		{"0.10000000000000000002", "0.10000000000000000002", true},
 	} {
 		raw := []byte(fmt.Sprintf(`{"openbindings":"0.2.0","operations":{"test":{"input":{"minimum":%s},"examples":{"test":{"input":%s}}}}}`, tc.bound, tc.input))
-		if _, _, err := ValidateDocument(raw); (err == nil) != tc.conforms {
+		if _, _, err := ValidateDocument(raw, ValidateOptions{}); (err == nil) != tc.conforms {
 			t.Fatalf("bound=%s input=%s expectConforms=%v err=%v", tc.bound, tc.input, tc.conforms, err)
 		}
 	}

@@ -10,7 +10,7 @@ import (
 
 func mustValidateDocument(t *testing.T, document string) ValidationReport {
 	t.Helper()
-	_, report, err := ValidateDocument([]byte(document))
+	_, report, err := ValidateDocument([]byte(document), ValidateOptions{})
 	var violation *ValidationError
 	if err != nil && !errors.As(err, &violation) {
 		t.Fatalf("ValidateDocument: %v", err)
@@ -38,7 +38,7 @@ func TestInterfaceValidate_HostObjectCannotDecideD01(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := iface.Validate()
+	report, err := iface.Validate(ValidateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ const documentWithBinding = `{
 }`
 
 func TestValidateDocument_BindingIdentifiabilityIsLeftToTheBindingSpecification(t *testing.T) {
-	_, report, err := ValidateDocument([]byte(documentWithBinding))
+	_, report, err := ValidateDocument([]byte(documentWithBinding), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("an inconclusive rule is not a violation; ValidateDocument = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestValidateDocument_SourceLocationForms(t *testing.T) {
 
 func TestValidate_VersionRefusalIsNotAConclusion(t *testing.T) {
 	document := `{"openbindings":"9.0.0","operations":{}}`
-	iface, report, err := ValidateDocument([]byte(document))
+	iface, report, err := ValidateDocument([]byte(document), ValidateOptions{})
 	var refusal *VersionRefusalError
 	if !errors.As(err, &refusal) || refusal.Version != "9.0.0" {
 		t.Fatalf("ValidateDocument error = %v, want a version refusal for 9.0.0", err)
@@ -136,7 +136,7 @@ func TestValidate_VersionRefusalIsNotAConclusion(t *testing.T) {
 	}
 
 	host := Interface{OpenBindings: "9.0.0", Operations: map[string]Operation{}}
-	hostReport, err := host.Validate()
+	hostReport, err := host.Validate(ValidateOptions{})
 	if !errors.As(err, &refusal) || hostReport.Evidence != nil {
 		t.Fatalf("Validate = %+v, %v; want a version refusal and no report", hostReport, err)
 	}
@@ -152,7 +152,7 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesD01(t *testing.T) {
 		"byte-order mark": append([]byte{0xef, 0xbb, 0xbf}, []byte(`{"openbindings":"0.2.0","operations":{}}`)...),
 	} {
 		t.Run(name, func(t *testing.T) {
-			iface, report, err := ValidateDocument(input)
+			iface, report, err := ValidateDocument(input, ValidateOptions{})
 			var violation *ValidationError
 			if !errors.As(err, &violation) || iface != nil {
 				t.Fatalf("ValidateDocument = %v, %v; want a report, its violation, and no document", iface, err)
@@ -294,7 +294,7 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 	}
 	data := []byte(`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1"}}}`)
 	_, parseErr := ParseDocument(data)
-	_, _, validateErr := ValidateDocument(data)
+	_, _, validateErr := ValidateDocument(data, ValidateOptions{})
 	var parsed, validated *ValidationError
 	if !errors.As(parseErr, &parsed) || !errors.As(validateErr, &validated) {
 		t.Fatalf("want ValidationErrors, got %v and %v", parseErr, validateErr)
@@ -312,7 +312,7 @@ func TestValidate_GatesOnTheDocumentSchema(t *testing.T) {
 		Version:      Present(""),
 		Operations:   map[string]Operation{"op": {}},
 	}
-	if _, err := iface.Validate(); err == nil {
+	if _, err := iface.Validate(ValidateOptions{}); err == nil {
 		t.Fatal("a present empty version violates the document schema")
 	}
 }
@@ -323,7 +323,8 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 	iface, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0",
 		"operations":{"a":{"input":null,"description":null}},
 		"sources":{"s":{"bindingSpec":"x@1","location":"./local.json"}},
-		"bindings":{"b":{"operation":"missing","source":"s"}}}`))
+		"bindings":{"b":{"operation":"missing","source":"s"}}}`), ValidateOptions{})
+
 	if iface != nil {
 		t.Fatal("the model cannot carry a null input; no Interface is returned")
 	}
@@ -555,7 +556,7 @@ func TestValidateDocument_KeyFindingPathsAreDeterministic(t *testing.T) {
 // The version is read, and an unsupported one refused, even from input
 // OBI-D-01 refuses.
 func TestValidateDocument_RefusesVersionsBeforeJudgingBytes(t *testing.T) {
-	if _, _, err := ValidateDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`)); !errors.As(err, new(*VersionRefusalError)) {
+	if _, _, err := ValidateDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`), ValidateOptions{}); !errors.As(err, new(*VersionRefusalError)) {
 		t.Fatalf("want a version refusal, got %v", err)
 	}
 	if _, err := ParseDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`)); !errors.As(err, new(*VersionRefusalError)) {
@@ -566,7 +567,7 @@ func TestValidateDocument_RefusesVersionsBeforeJudgingBytes(t *testing.T) {
 // A version is read before OBI-D-01 only where it is established: a repeated
 // openbindings member declares none.
 func TestValidateDocument_RepeatedVersionIsNotRead(t *testing.T) {
-	_, report, err := ValidateDocument([]byte(`{"openbindings":"0.2.0","openbindings":"0.3.0","operations":{}}`))
+	_, report, err := ValidateDocument([]byte(`{"openbindings":"0.2.0","openbindings":"0.3.0","operations":{}}`), ValidateOptions{})
 	if errors.As(err, new(*VersionRefusalError)) {
 		t.Fatalf("a repeated openbindings member establishes no version: %v", err)
 	}
