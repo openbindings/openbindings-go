@@ -100,10 +100,10 @@ func (b *compiledOperationBehavior) Preflight(ctx context.Context, opts ...Invok
 	args := &BindingInvocationArgs{
 		Source: InvocationSource{
 			BindingSpec: b.source.BindingSpec,
-			Location:    b.source.Location,
+			Location:    sourceLocation(b.source.Location),
 			Content:     b.source.Content,
 		},
-		Selector:             b.binding.Selector,
+		Selector:             contractSelector(b.binding.Selector),
 		Binding:              b.binding,
 		Context:              cfg.context,
 		Interface:            b.interface_,
@@ -116,7 +116,7 @@ func (b *compiledOperationBehavior) Preflight(ctx context.Context, opts ...Invok
 		InvokedAs:   b.operationKey,
 		BindingKey:  b.bindingKey,
 		BindingSpec: b.source.BindingSpec,
-		Selector:    b.binding.Selector,
+		Selector:    contractSelector(b.binding.Selector),
 	}
 	if runtime := b.invoker.invoker.findInvoker(b.source.BindingSpec); runtime != nil {
 		stampSite(args.Site, runtime)
@@ -158,7 +158,7 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 		return nil, fmt.Errorf("openbindings: operation invoker is required")
 	}
 	actual, ok := prepared.Binding(binding.Key)
-	if !ok || actual != binding {
+	if !ok || !samePreparedBinding(actual, binding) {
 		return nil, fmt.Errorf("openbindings: binding %q is not part of the prepared interface", binding.Key)
 	}
 	supported := false
@@ -203,10 +203,10 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 			args := &BindingInvocationArgs{
 				Source: InvocationSource{
 					BindingSpec: source.BindingSpec,
-					Location:    source.Location,
+					Location:    sourceLocation(source.Location),
 					Content:     source.Content,
 				},
-				Selector:    bindingEntry.Selector,
+				Selector:    contractSelector(bindingEntry.Selector),
 				Binding:     &bindingEntry,
 				Interface:   snapshot,
 				InputSchema: operation.Input,
@@ -215,7 +215,7 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 					InvokedAs:   binding.OperationKey,
 					BindingKey:  binding.Key,
 					BindingSpec: binding.BindingSpec,
-					Selector:    binding.Selector,
+					Selector:    contractSelector(binding.Selector),
 				},
 			}
 			stampSite(args.Site, runtime)

@@ -204,7 +204,7 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 func usageOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if binding.Selector == selector {
+		if openbindings.Value(binding.Selector) == selector {
 			return binding.Operation
 		}
 	}

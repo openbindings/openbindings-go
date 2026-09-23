@@ -12,7 +12,7 @@ func TestInspectSourceUsesPinnedContentAndCanonicalSelectors(t *testing.T) {
 	content, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": synthesisSchema()}})
 	inspection, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpec,
-		Location:    "https://api.example.test/graphql",
+		Location:    openbindings.Present("https://api.example.test/graphql"),
 		Content:     content,
 	})
 	if err != nil {

@@ -44,7 +44,7 @@ func TestConvertToInterfaceInventoriesRootFields(t *testing.T) {
 	}
 	var selectors []string
 	for _, binding := range iface.Bindings {
-		selectors = append(selectors, binding.Selector)
+		selectors = append(selectors, synthesize.ContractSelector(binding.Selector))
 	}
 	sort.Strings(selectors)
 	wantSelectors := []string{"mutation/status", "query/status", "query/viewer"}

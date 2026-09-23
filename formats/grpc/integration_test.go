@@ -432,8 +432,8 @@ func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if iface.Name != "ItemService" {
-		t.Errorf("name = %q, want %q", iface.Name, "ItemService")
+	if iface.Name == nil || *iface.Name != "ItemService" {
+		t.Errorf("name = %q, want %q", openbindings.Value(iface.Name), "ItemService")
 	}
 	// Every protobuf interaction kind remains bindable; synthesis does not
 	// erase client-streaming or bidirectional declarations.
@@ -499,8 +499,8 @@ service ItemService {
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("source format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
-	if src.Location != "localhost:50051" {
-		t.Errorf("source location = %q, want %q", src.Location, "localhost:50051")
+	if src.Location == nil || *src.Location != "localhost:50051" {
+		t.Errorf("source location = %q, want %q", openbindings.Value(src.Location), "localhost:50051")
 	}
 
 	// Bindings should resolve to package.Service/Method selectors.
@@ -509,8 +509,8 @@ service ItemService {
 	if !ok {
 		t.Fatalf("expected binding %q", bindingKey)
 	}
-	if binding.Selector != "testpkg.ItemService/GetItem" {
-		t.Errorf("binding selector = %q, want %q", binding.Selector, "testpkg.ItemService/GetItem")
+	if binding.Selector == nil || *binding.Selector != "testpkg.ItemService/GetItem" {
+		t.Errorf("binding selector = %q, want %q", openbindings.Value(binding.Selector), "testpkg.ItemService/GetItem")
 	}
 	if binding.Operation != "GetItem" {
 		t.Errorf("binding operation = %q, want %q", binding.Operation, "GetItem")
@@ -525,7 +525,7 @@ func TestIntegration_SynthesizeInterface_PublicAPI_NoSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if iface.OpenBindings != openbindings.MaxTestedVersion || iface.Name != "scaffold" || len(iface.Operations) != 0 || len(iface.Sources) != 0 || len(iface.Bindings) != 0 {
+	if iface.OpenBindings != openbindings.MaxTestedVersion || (iface.Name == nil || *iface.Name != "scaffold") || len(iface.Operations) != 0 || len(iface.Sources) != 0 || len(iface.Bindings) != 0 {
 		t.Fatalf("unexpected source-less scaffold: %+v", iface)
 	}
 }
@@ -908,7 +908,7 @@ func TestIntegration_NoInputConvention(t *testing.T) {
 
 	ctx := testCtx(t)
 	args := bufconnArgs("testpkg.ItemService/GetItem", nil)
-	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Selector: "testpkg.ItemService/GetItem"}
+	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Selector: openbindings.Present("testpkg.ItemService/GetItem")}
 	// InputSchema deliberately nil → no-input operation.
 
 	inv := invoker.InvokeBinding(ctx, args)

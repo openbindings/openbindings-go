@@ -26,8 +26,8 @@ func ExampleInterface_basic() {
 		log.Fatal(err)
 	}
 
-	fmt.Println(iface.Name)
-	fmt.Println(iface.Operations["getUser"].Description)
+	fmt.Println(*iface.Name)
+	fmt.Println(*iface.Operations["getUser"].Description)
 	// Output:
 	// Example API
 	// Get a user by ID
@@ -127,7 +127,7 @@ func ExampleInterface_lossless() {
 
 func ExampleOperation() {
 	op := openbindings.Operation{
-		Description: "Create a new user",
+		Description: openbindings.Present("Create a new user"),
 		Input: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -136,7 +136,7 @@ func ExampleOperation() {
 		},
 	}
 
-	fmt.Println(op.Description)
+	fmt.Println(*op.Description)
 	fmt.Println(op.Input.(map[string]any)["type"])
 	// Output:
 	// Create a new user
@@ -146,11 +146,11 @@ func ExampleOperation() {
 func ExampleSource() {
 	bs := openbindings.Source{
 		BindingSpec: "openapi@3.1",
-		Location:    "https://api.example.com/openapi.yaml",
+		Location:    openbindings.Present("https://api.example.com/openapi.yaml"),
 	}
 
 	fmt.Println(bs.BindingSpec)
-	fmt.Println(bs.Location)
+	fmt.Println(*bs.Location)
 	// Output:
 	// openapi@3.1
 	// https://api.example.com/openapi.yaml
@@ -179,14 +179,14 @@ func ExampleTransform() {
 			"toStripeInput": "{ charge_amount: amount * 100 }",
 		},
 		Sources: map[string]openbindings.Source{
-			"stripe": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
+			"stripe": {BindingSpec: "openapi@3.1", Location: openbindings.Present("https://api.example.com/stripe.json")},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"processPayment.stripe": {
 				Operation: "processPayment",
 				Source:    "stripe",
 				InputTransform: &openbindings.TransformOrRef{
-					Ref: "#/transforms/toStripeInput",
+					Reference: &openbindings.TransformReference{Ref: "#/transforms/toStripeInput"},
 				},
 			},
 		},

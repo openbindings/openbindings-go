@@ -18,7 +18,7 @@ import (
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	var disc *discovery
 	if source.Content != nil {
-		if err := validateEndpoint(source.Location); err != nil {
+		if err := validateEndpoint(openbindings.Value(source.Location)); err != nil {
 			return nil, err
 		}
 		d, err := pinnedDiscovery(source.Content)
@@ -27,10 +27,10 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		}
 		disc = d
 	} else {
-		if source.Location == "" {
+		if openbindings.Value(source.Location) == "" {
 			return nil, fmt.Errorf("MCP source requires a location (server URL)")
 		}
-		d, err := discover(ctx, c.clientVersion, c.httpClient, source.Location)
+		d, err := discover(ctx, c.clientVersion, c.httpClient, openbindings.Value(source.Location))
 		if err != nil {
 			return nil, fmt.Errorf("MCP discovery: %w", err)
 		}
@@ -96,7 +96,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: description}
+		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
 	}
 	return target
 }

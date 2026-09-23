@@ -107,7 +107,7 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	iface := testSynthesizeInterface(t, doc, "")
 	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createSelectors[b.Selector] = true
+		createSelectors[openbindings.Value(b.Selector)] = true
 	}
 
 	content := `{
@@ -172,7 +172,7 @@ func TestInspectSource_Description(t *testing.T) {
 	descBySelector := map[string]string{}
 	for _, selector := range result.Targets {
 		if selector.Operation != nil {
-			descBySelector[selector.Selector] = selector.Operation.Description
+			descBySelector[selector.Selector] = openbindings.Value(selector.Operation.Description)
 		}
 	}
 

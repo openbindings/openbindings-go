@@ -14,7 +14,7 @@ func TestInspectSourceExposesOnlyEligibleTools(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpec,
-		Location:    server.URL,
+		Location:    openbindings.Present(server.URL),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -39,13 +39,13 @@ func TestInspectSourceSelectorsMatchSynthesis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inspection, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{BindingSpec: BindingSpec, Location: server.URL})
+	inspection, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{BindingSpec: BindingSpec, Location: openbindings.Present(server.URL)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	bindings := map[string]string{}
 	for _, binding := range iface.Bindings {
-		bindings[binding.Selector] = binding.Operation
+		bindings[openbindings.Value(binding.Selector)] = binding.Operation
 	}
 	for _, target := range inspection.Targets {
 		if bindings[target.Selector] != target.OperationKey {
@@ -64,7 +64,7 @@ func TestInspectPinnedListingIsOfflineAndReportsExclusions(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpec,
-		Location:    server.URL,
+		Location:    openbindings.Present(server.URL),
 		Content:     mustContent(content),
 	})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestInspectSourceRefusesInvalidPinAndMissingLocation(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpec,
-		Location:    server.URL,
+		Location:    openbindings.Present(server.URL),
 		Content:     mustContent(map[string]any{"nextCursor": "later"}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "MCP-D-01") {

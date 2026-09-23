@@ -605,7 +605,7 @@ func TestIntegration_BareCloseDispatchesWhenArtifactPermits(t *testing.T) {
 	call := binv.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(widgetSpec(srv.URL))},
 		Selector: "#/paths/~1session/get",
-		Binding:  &openbindings.BindingEntry{Operation: "getSession", Source: "api", Selector: "#/paths/~1session/get"},
+		Binding:  &openbindings.BindingEntry{Operation: "getSession", Source: "api", Selector: openbindings.Present("#/paths/~1session/get")},
 		// InputSchema nil — the document makes no claim at this boundary.
 	})
 	// The caller speaks: nothing to write, so it closes. Bounded by ctx so a
@@ -1429,7 +1429,7 @@ func TestConformance_G1_AbsentInputIsNotNoInput(t *testing.T) {
 	call := NewInvoker().InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(widgetSpec(srv.URL))},
 		Selector: "#/paths/~1widgets/post",
-		Binding:  &openbindings.BindingEntry{Operation: "createWidget", Source: "api", Selector: "#/paths/~1widgets/post"},
+		Binding:  &openbindings.BindingEntry{Operation: "createWidget", Source: "api", Selector: openbindings.Present("#/paths/~1widgets/post")},
 		// InputSchema nil — the document makes no claim at this boundary.
 	})
 

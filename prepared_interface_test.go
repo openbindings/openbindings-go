@@ -1,7 +1,6 @@
 package openbindings
 
 import (
-	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -30,10 +29,10 @@ func preparedFixture() Interface {
 			"delivery": {Operation: "deliver", BindingSpecs: []string{"example.local@1"}},
 		},
 		Sources: map[string]Source{
-			"local": {BindingSpec: "example.local@1", Location: "app://delivery"},
+			"local": {BindingSpec: "example.local@1", Location: Present("app://delivery")},
 		},
 		Bindings: map[string]BindingEntry{
-			"local": {Operation: "deliver", Source: "local", Selector: "deliver"},
+			"local": {Operation: "deliver", Source: "local", Selector: Present("deliver")},
 		},
 	}
 }
@@ -61,7 +60,7 @@ func TestPreparedInterfaceContentSnapshotAndIndexes(t *testing.T) {
 	}
 
 	// Caller mutations cannot change the private snapshot or its identity.
-	iface.Operations["deliver"] = Operation{Description: "mutated"}
+	iface.Operations["deliver"] = Operation{Description: Present("mutated")}
 	if got, _ := prepared.Operation("deliver"); got.CanonicalKey != "deliver" {
 		t.Fatalf("prepared operation drifted: %#v", got)
 	}
@@ -109,26 +108,17 @@ func TestPreparedInterfaceDoesNotRetainNamedJSONContainers(t *testing.T) {
 	}
 }
 
-func TestOperationExplicitNullPresenceRoundTrip(t *testing.T) {
+// A null operation schema is not a schema, and the model cannot carry it as a
+// present member (nil is absence), so decoding refuses it rather than
+// dropping it.
+func TestOperationNullSchemaIsRefused(t *testing.T) {
 	var iface Interface
-	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","operations":{"x":{"input":null}}}`), &iface); err != nil {
-		t.Fatal(err)
-	}
-	op := iface.Operations["x"]
-	if !op.InputPresent || op.OutputPresent {
-		t.Fatalf("presence = input %v output %v", op.InputPresent, op.OutputPresent)
-	}
-	roundTrip, err := json.Marshal(iface)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(roundTrip, []byte(`"input":null`)) {
-		t.Fatalf("round trip = %s", roundTrip)
+	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","operations":{"x":{"input":null}}}`), &iface); err == nil {
+		t.Fatal("a null operation schema must fail decoding")
 	}
 }
 
 func TestPreparedInterfaceRetainsTypedOBIStructuralGates(t *testing.T) {
-	unsafePreference := 9007199254740992.0
 	for name, iface := range map[string]*Interface{
 		"empty dependency binding specs": {
 			OpenBindings: "0.2.0",
@@ -139,11 +129,17 @@ func TestPreparedInterfaceRetainsTypedOBIStructuralGates(t *testing.T) {
 			OpenBindings: "0.2.0",
 			Operations:   map[string]Operation{"op": {}},
 			Sources:      map[string]Source{"source": {BindingSpec: "example@1", Content: json.RawMessage(`{}`)}},
-			Bindings:     map[string]BindingEntry{"binding": {Operation: "op", Source: "source", Preference: &unsafePreference}},
+			Bindings:     map[string]BindingEntry{"binding": {Operation: "op", Source: "source", Preference: Present[int64](9007199254740992)}},
 		},
-		"explicit null operation schema": {
+		"present empty version": {
 			OpenBindings: "0.2.0",
-			Operations:   map[string]Operation{"op": {InputPresent: true}},
+			Version:      Present(""),
+			Operations:   map[string]Operation{"op": {}},
+		},
+		"present empty source location": {
+			OpenBindings: "0.2.0",
+			Operations:   map[string]Operation{"op": {}},
+			Sources:      map[string]Source{"source": {BindingSpec: "example@1", Location: Present(""), Content: json.RawMessage(`{}`)}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

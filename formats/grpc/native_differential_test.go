@@ -53,7 +53,7 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 		if !ok {
 			t.Fatalf("synthesized OBI has no binding for %s", operation)
 		}
-		return binding.Selector
+		return synthesize.ContractSelector(binding.Selector)
 	}
 	argsFor := func(selector string) *invoke.BindingInvocationArgs {
 		args := bufconnArgs(selector, nil)

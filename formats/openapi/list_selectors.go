@@ -20,9 +20,9 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	}
 	observed, err := c.synthesizeProviderProjection(ctx, &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 		BindingSpec: source.BindingSpec,
-		Location:    source.Location,
+		Location:    openbindings.Value(source.Location),
 		Content:     source.Content,
-		Description: source.Description,
+		Description: openbindings.Value(source.Description),
 	}}}, true)
 	if err != nil {
 		return nil, err
@@ -33,7 +33,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	var targets []synthesize.BindableTarget
 	for _, binding := range observed.iface.Bindings {
 		op := observed.iface.Operations[binding.Operation]
-		targets = append(targets, synthesize.BindableTarget{Selector: binding.Selector, OperationKey: binding.Operation, Operation: &op})
+		targets = append(targets, synthesize.BindableTarget{Selector: synthesize.ContractSelector(binding.Selector), OperationKey: binding.Operation, Operation: &op})
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Selector < targets[j].Selector })
 
@@ -43,7 +43,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 func (c *Synthesizer) inspectSwagger20Source(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	in := &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 		BindingSpec: source.BindingSpec,
-		Location:    source.Location,
+		Location:    openbindings.Value(source.Location),
 		Content:     source.Content,
 	}}}
 	iface, _, _, err := c.synthesizeSwagger20(ctx, in, true)
@@ -54,7 +54,7 @@ func (c *Synthesizer) inspectSwagger20Source(ctx context.Context, source *openbi
 	for _, binding := range iface.Bindings {
 		operation := iface.Operations[binding.Operation]
 		targets = append(targets, synthesize.BindableTarget{
-			Selector: binding.Selector, OperationKey: binding.Operation, Operation: &operation,
+			Selector: synthesize.ContractSelector(binding.Selector), OperationKey: binding.Operation, Operation: &operation,
 		})
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Selector < targets[j].Selector })
@@ -64,7 +64,7 @@ func (c *Synthesizer) inspectSwagger20Source(ctx context.Context, source *openbi
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: description}
+		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
 	}
 	return target
 }

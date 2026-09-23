@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	openbindings "github.com/openbindings/openbindings-go"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,14 +38,14 @@ cmd "greet" help="Say hello"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if iface.Name != "mycli" {
-		t.Errorf("Name = %q, want mycli", iface.Name)
+	if iface.Name == nil || *iface.Name != "mycli" {
+		t.Errorf("Name = %q, want mycli", openbindings.Value(iface.Name))
 	}
-	if iface.Version != "1.2.3" {
-		t.Errorf("Version = %q, want 1.2.3", iface.Version)
+	if iface.Version == nil || *iface.Version != "1.2.3" {
+		t.Errorf("Version = %q, want 1.2.3", openbindings.Value(iface.Version))
 	}
-	if iface.Description != "A test CLI" {
-		t.Errorf("Description = %q, want 'A test CLI'", iface.Description)
+	if iface.Description == nil || *iface.Description != "A test CLI" {
+		t.Errorf("Description = %q, want 'A test CLI'", openbindings.Value(iface.Description))
 	}
 }
 
@@ -83,8 +84,8 @@ cmd "greet" help="Say hello"
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Selector != "greet" {
-		t.Errorf("selector = %q, want greet", binding.Selector)
+	if binding.Selector == nil || *binding.Selector != "greet" {
+		t.Errorf("selector = %q, want greet", openbindings.Value(binding.Selector))
 	}
 	if binding.Operation != "greet" {
 		t.Errorf("operation = %q, want greet", binding.Operation)
@@ -108,8 +109,8 @@ cmd "config" {
 		t.Error("expected operation 'config.set'")
 	}
 	binding := iface.Bindings["config.set."+DefaultSourceName]
-	if binding.Selector != "config set" {
-		t.Errorf("selector = %q, want 'config set'", binding.Selector)
+	if binding.Selector == nil || *binding.Selector != "config set" {
+		t.Errorf("selector = %q, want 'config set'", openbindings.Value(binding.Selector))
 	}
 }
 
@@ -224,8 +225,8 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 	src := iface.Sources[DefaultSourceName]
 	// A bare artifact synthesizes to a PRISTINE embedded source: the kdl
 	// text verbatim, under the exact published identifier.
-	if src.Location != "" {
-		t.Errorf("location = %q, want empty (embedded artifact)", src.Location)
+	if src.Location != nil {
+		t.Errorf("location = %q, want empty (embedded artifact)", openbindings.Value(src.Location))
 	}
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("bindingSpec = %q, want %q", src.BindingSpec, BindingSpec)
@@ -316,8 +317,8 @@ arg "[file]..." help="Files to search"
 	if !ok {
 		t.Fatalf("expected root operation 'grep', got operations: %v", mapKeys(iface.Operations))
 	}
-	if op.Description != "Search for patterns" {
-		t.Errorf("description = %q, want 'Search for patterns'", op.Description)
+	if op.Description == nil || *op.Description != "Search for patterns" {
+		t.Errorf("description = %q, want 'Search for patterns'", openbindings.Value(op.Description))
 	}
 	if op.Input == nil {
 		t.Fatal("expected input schema")
@@ -343,8 +344,8 @@ arg "[file]..." help="Files to search"
 
 	// The root operation binds via its unit; the unit's command is empty.
 	binding := iface.Bindings["grep."+DefaultSourceName]
-	if binding.Selector != "" {
-		t.Errorf("root binding selector = %q, want \"\" (the root command)", binding.Selector)
+	if binding.Selector != nil {
+		t.Errorf("root binding selector = %q, want \"\" (the root command)", openbindings.Value(binding.Selector))
 	}
 }
 
@@ -426,8 +427,8 @@ func TestSynthesizeInterface_FilePathEmitsEmbeddedContent(t *testing.T) {
 				t.Fatalf("synthesize: %v", err)
 			}
 			src := iface.Sources[DefaultSourceName]
-			if src.Location != "" {
-				t.Errorf("emitted location = %q, want empty (a file path is not a conformant OBI-D-05 location)", src.Location)
+			if src.Location != nil {
+				t.Errorf("emitted location = %q, want empty (a file path is not a conformant OBI-D-05 location)", openbindings.Value(src.Location))
 			}
 			var got string
 			if err := json.Unmarshal(src.Content, &got); err != nil || got != emissionTestKDL {
@@ -466,8 +467,8 @@ func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
 		t.Fatalf("synthesize: %v", err)
 	}
 	src := iface.Sources[DefaultSourceName]
-	if src.Location != locator {
-		t.Errorf("emitted location = %q, want the exec: locator %q", src.Location, locator)
+	if src.Location == nil || *src.Location != locator {
+		t.Errorf("emitted location = %q, want the exec: locator %q", openbindings.Value(src.Location), locator)
 	}
 	if src.Content != nil {
 		t.Errorf("a URI-valid exec: locator emits by reference, got embedded content %v", src.Content)
@@ -492,8 +493,8 @@ func TestSynthesizeInterface_SpacedExecLocatorEmitsLocation(t *testing.T) {
 		t.Fatalf("synthesize: %v", err)
 	}
 	src := iface.Sources[DefaultSourceName]
-	if src.Location != locator {
-		t.Errorf("emitted location = %q, want the exec address %q", src.Location, locator)
+	if src.Location == nil || *src.Location != locator {
+		t.Errorf("emitted location = %q, want the exec address %q", openbindings.Value(src.Location), locator)
 	}
 	if src.Content != nil {
 		t.Errorf("an exec address emits by reference, got embedded content %v", src.Content)
@@ -683,10 +684,10 @@ cmd "database" {
 		"db run": true, "db r": true,
 	}
 	for _, binding := range result.Interface.Bindings {
-		if !want[binding.Selector] {
-			t.Errorf("unexpected binding selector %q", binding.Selector)
+		if !want[openbindings.Value(binding.Selector)] {
+			t.Errorf("unexpected binding selector %q", openbindings.Value(binding.Selector))
 		}
-		delete(want, binding.Selector)
+		delete(want, openbindings.Value(binding.Selector))
 	}
 	if len(want) != 0 {
 		t.Errorf("missing binding selectors: %v", want)
@@ -718,7 +719,7 @@ cmd "beta" {
 	}
 	var selectors []string
 	for _, binding := range result.Interface.Bindings {
-		selectors = append(selectors, binding.Selector)
+		selectors = append(selectors, openbindings.Value(binding.Selector))
 	}
 	sort.Strings(selectors)
 	if want := []string{"", "beta"}; !reflect.DeepEqual(selectors, want) {

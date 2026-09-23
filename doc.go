@@ -40,15 +40,23 @@
 // OBI declares its target spec version via the top-level openbindings
 // field, checked against [MinSupportedVersion] through [MaxTestedVersion].
 //
-// # Lossless JSON (Forward Compatibility)
+// # An Exact Document Model
 //
-// OpenBindings documents may include:
-//   - Extension fields (x-*) at any object location
-//   - Unknown (future) fields as the spec evolves
+// Re-encoding a decoded document reproduces every member:
+//   - An optional member is absent exactly when its Go value is nil. Optional
+//     strings and booleans are pointers (set them with [Present], read them
+//     with [Value] where absence and the zero value mean the same); optional
+//     collections distinguish nil (absent) from empty (present).
+//   - JSON null is carried where it is a value: example values and source
+//     content are json.RawMessage, where the bytes `null` are a present null.
+//   - Members the SDK does not model are kept: LosslessFields.Extensions for
+//     keys beginning with x-, LosslessFields.Unknown for other keys, at every
+//     OBI-defined object, a transform's $ref object included.
 //
-// This SDK preserves all JSON fields on unmarshal → marshal by storing:
-//   - LosslessFields.Extensions for keys beginning with x-
-//   - LosslessFields.Unknown for other unknown keys
+// A document the model cannot carry exactly fails decoding instead of being
+// altered: a JSON null at any other known position, a missing required
+// string member, or a binding preference that is not an integer in range.
+// ValidateDocument still judges such a document from its bytes.
 //
 // # Collision Semantics
 //

@@ -31,13 +31,15 @@ type PreparedDependencyDescriptor struct {
 }
 
 // PreparedBindingDescriptor is the SDK-derived identity of one concrete OBI
-// binding. It contains no runtime-supplied metadata.
+// binding. It contains no runtime-supplied metadata. Selector is nil when the
+// binding has no selector member, which its binding specification gives a
+// meaning distinct from any present value (§5.3).
 type PreparedBindingDescriptor struct {
 	Key           string
 	OperationKey  string
 	SourceKey     string
 	BindingSpec   string
-	Selector      string
+	Selector      *string
 	HasTransforms bool
 }
 
@@ -129,7 +131,7 @@ func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 			OperationKey:  binding.Operation,
 			SourceKey:     binding.Source,
 			BindingSpec:   source.BindingSpec,
-			Selector:      binding.Selector,
+			Selector:      clonePointer(binding.Selector),
 			HasTransforms: binding.InputTransform != nil || binding.OutputTransform != nil,
 		}
 	}
@@ -147,70 +149,106 @@ func PrepareInterface(iface *Interface) (*PreparedInterface, error) {
 
 func clonePreparedInterface(source Interface) Interface {
 	clone := source
+	clone.Name = clonePointer(source.Name)
+	clone.Version = clonePointer(source.Version)
+	clone.Description = clonePointer(source.Description)
 	clone.LosslessFields = clonePreparedLossless(source.LosslessFields)
-	clone.Schemas = make(map[string]JSONSchema, len(source.Schemas))
+	clone.Schemas = clonePreparedMap(source.Schemas)
 	for key, schema := range source.Schemas {
 		clone.Schemas[key] = clonePreparedJSON(schema)
 	}
-	clone.Operations = make(map[string]Operation, len(source.Operations))
+	clone.Operations = clonePreparedMap(source.Operations)
 	for key, operation := range source.Operations {
 		copyOperation := operation
+		copyOperation.Description = clonePointer(operation.Description)
+		copyOperation.Deprecated = clonePointer(operation.Deprecated)
 		copyOperation.Tags = clonePreparedStrings(operation.Tags)
 		copyOperation.Aliases = clonePreparedStrings(operation.Aliases)
 		copyOperation.Input = clonePreparedJSON(operation.Input)
 		copyOperation.Output = clonePreparedJSON(operation.Output)
 		copyOperation.LosslessFields = clonePreparedLossless(operation.LosslessFields)
-		if operation.Idempotent != nil {
-			value := *operation.Idempotent
-			copyOperation.Idempotent = &value
-		}
-		copyOperation.Examples = make(map[string]OperationExample, len(operation.Examples))
+		copyOperation.Idempotent = clonePointer(operation.Idempotent)
+		copyOperation.Examples = clonePreparedMap(operation.Examples)
 		for exampleKey, example := range operation.Examples {
 			copyExample := example
-			copyExample.Input = clonePreparedJSON(example.Input)
-			copyExample.Output = clonePreparedJSON(example.Output)
+			copyExample.Description = clonePointer(example.Description)
+			copyExample.Input = clonePreparedRaw(example.Input)
+			copyExample.Output = clonePreparedRaw(example.Output)
 			copyExample.LosslessFields = clonePreparedLossless(example.LosslessFields)
 			copyOperation.Examples[exampleKey] = copyExample
 		}
 		clone.Operations[key] = copyOperation
 	}
-	clone.Dependencies = make(map[string]DependencyEntry, len(source.Dependencies))
+	clone.Dependencies = clonePreparedMap(source.Dependencies)
 	for key, dependency := range source.Dependencies {
 		copyDependency := dependency
 		copyDependency.BindingSpecs = clonePreparedStrings(dependency.BindingSpecs)
 		copyDependency.LosslessFields = clonePreparedLossless(dependency.LosslessFields)
 		clone.Dependencies[key] = copyDependency
 	}
-	clone.Sources = make(map[string]Source, len(source.Sources))
+	clone.Sources = clonePreparedMap(source.Sources)
 	for key, value := range source.Sources {
 		copySource := value
-		copySource.Content = append(json.RawMessage(nil), value.Content...)
+		copySource.Location = clonePointer(value.Location)
+		copySource.Description = clonePointer(value.Description)
+		copySource.Content = clonePreparedRaw(value.Content)
 		copySource.LosslessFields = clonePreparedLossless(value.LosslessFields)
 		clone.Sources[key] = copySource
 	}
-	clone.Bindings = make(map[string]BindingEntry, len(source.Bindings))
+	clone.Bindings = clonePreparedMap(source.Bindings)
 	for key, binding := range source.Bindings {
 		copyBinding := binding
-		if binding.Preference != nil {
-			value := *binding.Preference
-			copyBinding.Preference = &value
-		}
-		if binding.InputTransform != nil {
-			value := *binding.InputTransform
-			copyBinding.InputTransform = &value
-		}
-		if binding.OutputTransform != nil {
-			value := *binding.OutputTransform
-			copyBinding.OutputTransform = &value
-		}
+		copyBinding.Selector = clonePointer(binding.Selector)
+		copyBinding.Preference = clonePointer(binding.Preference)
+		copyBinding.Description = clonePointer(binding.Description)
+		copyBinding.Deprecated = clonePointer(binding.Deprecated)
+		copyBinding.InputTransform = clonePreparedTransform(binding.InputTransform)
+		copyBinding.OutputTransform = clonePreparedTransform(binding.OutputTransform)
 		copyBinding.LosslessFields = clonePreparedLossless(binding.LosslessFields)
 		clone.Bindings[key] = copyBinding
 	}
-	clone.Transforms = make(map[string]Transform, len(source.Transforms))
+	clone.Transforms = clonePreparedMap(source.Transforms)
 	for key, transform := range source.Transforms {
 		clone.Transforms[key] = transform
 	}
 	return clone
+}
+
+func clonePointer[T any](source *T) *T {
+	if source == nil {
+		return nil
+	}
+	value := *source
+	return &value
+}
+
+// clonePreparedMap copies a map's presence: nil stays nil (absent) and an
+// empty map stays an empty map (present).
+func clonePreparedMap[K comparable, V any](source map[K]V) map[K]V {
+	if source == nil {
+		return nil
+	}
+	return make(map[K]V, len(source))
+}
+
+func clonePreparedRaw(source json.RawMessage) json.RawMessage {
+	if source == nil {
+		return nil
+	}
+	return append(json.RawMessage{}, source...)
+}
+
+func clonePreparedTransform(source *TransformOrRef) *TransformOrRef {
+	if source == nil {
+		return nil
+	}
+	clone := *source
+	if source.Reference != nil {
+		reference := *source.Reference
+		reference.LosslessFields = clonePreparedLossless(source.Reference.LosslessFields)
+		clone.Reference = &reference
+	}
+	return &clone
 }
 
 func clonePreparedLossless(source LosslessFields) LosslessFields {
@@ -311,8 +349,8 @@ func clonePreparedJSON(value any) any {
 		return value
 	}
 
-	// A custom JSON scalar/struct is uncommon, but canonicalization admitted
-	// it by its encoded JSON meaning. Decode just this subtree so the snapshot
+	// A custom JSON scalar/struct is uncommon, but preparation encoded it by
+	// its JSON meaning. Decode just this subtree so the snapshot
 	// retains neither its pointers nor a custom mutable implementation object.
 	return clonePreparedEncodedJSON(value)
 }
@@ -320,7 +358,7 @@ func clonePreparedJSON(value any) any {
 func clonePreparedEncodedJSON(value any) any {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return value // unreachable after the successful whole-document JCS gate
+		return value // unreachable for a value that encoded when the document was prepared
 	}
 	var clone any
 	if err := jsonvalue.Unmarshal(encoded, &clone); err != nil {
@@ -415,6 +453,7 @@ func (p *PreparedInterface) Binding(key string) (PreparedBindingDescriptor, bool
 		return PreparedBindingDescriptor{}, false
 	}
 	descriptor, ok := p.state.bindings[key]
+	descriptor.Selector = clonePointer(descriptor.Selector)
 	return descriptor, ok
 }
 

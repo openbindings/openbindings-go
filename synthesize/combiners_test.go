@@ -24,7 +24,7 @@ func (s *supportTestSynthesizer) CheckBindingSpecs(bindingSpecs []string) []bind
 }
 
 func (s *supportTestSynthesizer) SynthesizeInterface(context.Context, *SynthesizeInput) (*openbindings.Interface, error) {
-	return &openbindings.Interface{OpenBindings: "0.2.0", Name: s.name}, nil
+	return &openbindings.Interface{OpenBindings: "0.2.0", Name: openbindings.Present(s.name)}, nil
 }
 
 func TestCombineSynthesizersChecksAuthoritativeSupport(t *testing.T) {
@@ -58,7 +58,7 @@ func TestCombineSynthesizersChecksAuthoritativeSupport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if iface.Name != "hidden" {
-		t.Fatalf("synthesized interface name = %q, want hidden", iface.Name)
+	if iface.Name == nil || *iface.Name != "hidden" {
+		t.Fatalf("synthesized interface name is not hidden: %+v", iface)
 	}
 }

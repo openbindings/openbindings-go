@@ -442,15 +442,15 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 		// silently becoming authoritative after synthesis.
 		sourceEntry.Content = src.Content
 		if emittableAsLocation(location) {
-			sourceEntry.Location = location
+			sourceEntry.Location = openbindings.NonZero(location)
 		}
 	} else if src.Embed {
 		sourceEntry.Content = jsonvalue.TextContent(text)
 		if emittableAsLocation(location) {
-			sourceEntry.Location = location
+			sourceEntry.Location = openbindings.NonZero(location)
 		}
 	} else if emittableAsLocation(location) {
-		sourceEntry.Location = location
+		sourceEntry.Location = openbindings.NonZero(location)
 	} else {
 		sourceEntry.Content = jsonvalue.TextContent(text)
 	}

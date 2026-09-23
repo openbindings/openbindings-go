@@ -880,7 +880,7 @@ func TestInvokeBinding_NoInputConvention(t *testing.T) {
 	srv := fakeConnectServer(t, http.StatusOK, `{"id":"","name":"ok"}`)
 
 	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
-	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Selector: "testpkg.TestService/GetItem"}
+	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Selector: openbindings.Present("testpkg.TestService/GetItem")}
 	// InputSchema deliberately nil → no-input operation.
 
 	inv := NewInvoker().InvokeBinding(ctx, args)

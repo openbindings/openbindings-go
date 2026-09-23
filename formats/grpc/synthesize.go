@@ -21,7 +21,7 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(s
 		BindingSpec: BindingSpec,
 	}
 	if sourceLocation != "" {
-		sourceEntry.Location = sourceLocation
+		sourceEntry.Location = openbindings.NonZero(sourceLocation)
 	}
 
 	iface := openbindings.Interface{
@@ -56,7 +56,7 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(s
 			usedKeys[opKey] = fqn
 
 			op := openbindings.Operation{
-				Description: commentToDescription(method),
+				Description: openbindings.NonZero(commentToDescription(method)),
 			}
 
 			if inputType := method.Input(); inputType != nil {
@@ -72,16 +72,16 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(s
 			iface.Bindings[bindingKey] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Selector:  fqn,
+				Selector:  openbindings.NonZero(fqn),
 			}
 		}
 	}
 
 	if len(disc.services) > 0 {
 		svc := disc.services[0]
-		iface.Name = string(svc.Name())
+		iface.Name = openbindings.NonZero(string(svc.Name()))
 		if len(disc.services) > 1 {
-			iface.Name = packageName(svc)
+			iface.Name = openbindings.NonZero(packageName(svc))
 		}
 	}
 

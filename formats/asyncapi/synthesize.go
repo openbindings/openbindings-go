@@ -33,14 +33,14 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 		BindingSpec: src.BindingSpec,
 	}
 	if src.Location != "" {
-		sourceEntry.Location = src.Location
+		sourceEntry.Location = openbindings.NonZero(src.Location)
 	}
 
 	iface := openbindings.Interface{
 		OpenBindings: openbindings.MaxTestedVersion,
-		Name:         doc.Info.Title,
-		Version:      doc.Info.Version,
-		Description:  doc.Info.Description,
+		Name:         openbindings.NonZero(doc.Info.Title),
+		Version:      openbindings.NonZero(doc.Info.Version),
+		Description:  openbindings.NonZero(doc.Info.Description),
 		Operations:   map[string]openbindings.Operation{},
 		Bindings:     map[string]openbindings.BindingEntry{},
 		Sources: map[string]openbindings.Source{
@@ -49,13 +49,13 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 	}
 
 	if in.Name != "" {
-		iface.Name = in.Name
+		iface.Name = openbindings.NonZero(in.Name)
 	}
 	if in.Version != "" {
-		iface.Version = in.Version
+		iface.Version = openbindings.NonZero(in.Version)
 	}
 	if in.Description != "" {
-		iface.Description = in.Description
+		iface.Description = openbindings.NonZero(in.Description)
 	}
 
 	usedKeys := map[string]bool{}
@@ -68,7 +68,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 		usedKeys[opKey] = true
 
 		obiOp := openbindings.Operation{
-			Description: operationDescription(asyncOp),
+			Description: openbindings.NonZero(operationDescription(asyncOp)),
 		}
 
 		if len(asyncOp.Tags) > 0 {
@@ -98,7 +98,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  selector,
+			Selector:  openbindings.NonZero(selector),
 		}
 	}
 

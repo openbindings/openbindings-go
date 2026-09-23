@@ -89,6 +89,33 @@
 
 ### Changed
 
+- **The document model is exact** (breaking, pre-1.0). Re-encoding a
+  decoded document dropped members whose value is a Go zero value
+  (`deprecated: false`, empty strings, empty arrays and maps) and every
+  member of a transform's `$ref` object besides `$ref`, extensions included.
+  So `Interface.Validate()` missed violations its bytes carry, such as a
+  present empty `location`, and a present empty `selector` became an absent
+  one, which a binding specification can give a different meaning (§5.3).
+  Now an optional member is absent exactly when its Go value is nil:
+  optional strings and booleans are pointers (`Name`, `Version`,
+  `Description`, `Deprecated`, `Source.Location`, `BindingEntry.Selector`),
+  set with `Present` and read with `Value` where absence and the zero value
+  mean the same; optional collections encode `omitzero`, so nil is absent
+  and empty is present. Example values are `json.RawMessage`, where `null` is
+  a present value, like `Source.Content`; `InputPresent`, `OutputPresent`,
+  `HasInput`, `HasOutput`, and `Source.ContentPresent` are gone.
+  `BindingEntry.Preference` is an exact `*int64`. `TransformOrRef` is a
+  tagged union whose `Reference` keeps the `$ref` object's other members, so
+  `{"$ref": ""}` stays an object. A document the model cannot carry exactly
+  fails decoding instead of being altered: JSON null at any other known
+  position (members, map entries, and array elements), a missing required
+  string member, or a preference that is not an integer in range.
+  `ValidateDocument` still judges such a document from its bytes.
+  `PreparedBindingDescriptor.Selector` keeps selector presence. The
+  binding-invoker (0.1), interface-synthesizer (0.2), and source-inspector
+  (0.1) contracts require a selector string, so the SDK sends an absent
+  selector to them as `""` at one documented projection each.
+
 - **Finding and diagnostic paths are JSON Pointers** (breaking, pre-1.0).
   `Finding.Path` and `Diagnostic.Path` are RFC 6901 pointers into the
   document, such as `/bindings/createTask/operation`; the empty pointer is

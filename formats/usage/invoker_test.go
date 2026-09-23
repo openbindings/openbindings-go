@@ -58,7 +58,7 @@ func TestSynthesizer_NoSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if iface.OpenBindings != openbindings.MaxTestedVersion || iface.Name != "scaffold" || len(iface.Operations) != 0 || len(iface.Sources) != 0 || len(iface.Bindings) != 0 {
+	if iface.OpenBindings != openbindings.MaxTestedVersion || (iface.Name == nil || *iface.Name != "scaffold") || len(iface.Operations) != 0 || len(iface.Sources) != 0 || len(iface.Bindings) != 0 {
 		t.Fatalf("unexpected source-less scaffold: %+v", iface)
 	}
 }

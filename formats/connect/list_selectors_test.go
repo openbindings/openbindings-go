@@ -109,7 +109,7 @@ service TestService {
 
 	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createSelectors[b.Selector] = true
+		createSelectors[openbindings.Value(b.Selector)] = true
 	}
 
 	for _, selector := range result.Targets {

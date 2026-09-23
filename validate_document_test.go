@@ -297,15 +297,15 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 }
 
 func TestPrepareInterface_GatesOnTheDocumentSchema(t *testing.T) {
-	fractional := 1.5
+	// A present empty version violates only the document schema; the model
+	// carries it, so both gates see it.
 	iface := &Interface{
 		OpenBindings: "0.2.0",
+		Version:      Present(""),
 		Operations:   map[string]Operation{"op": {}},
-		Sources:      map[string]Source{"s": {BindingSpec: "x@1", Location: "https://example.com/x"}},
-		Bindings:     map[string]BindingEntry{"b": {Operation: "op", Source: "s", Preference: &fractional}},
 	}
 	if _, err := iface.Validate(); err == nil {
-		t.Fatal("a fractional preference violates the document schema")
+		t.Fatal("a present empty version violates the document schema")
 	}
 	if _, err := PrepareInterface(iface); err == nil {
 		t.Fatal("PrepareInterface must refuse what Validate establishes as a violation")

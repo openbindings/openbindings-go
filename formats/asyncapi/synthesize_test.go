@@ -54,7 +54,7 @@ func TestSynthesizeInterface_AppliesStandaloneTraitNormalization(t *testing.T) {
 		t.Fatal(err)
 	}
 	operation, ok := iface.Operations["submit"]
-	if !ok || operation.Description != "Submit a command" {
+	if !ok || (operation.Description == nil || *operation.Description != "Submit a command") {
 		t.Fatalf("operation = %#v", operation)
 	}
 	input, ok := operation.Input.(map[string]any)
@@ -78,7 +78,7 @@ func TestSynthesizeInterface_FilePathEmitsInvocableFileURI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := iface.Sources[DefaultSourceName].Location, "file://"+path; got != want {
+	if got, want := openbindings.Value(iface.Sources[DefaultSourceName].Location), "file://"+path; got != want {
 		t.Fatalf("emitted location = %q, want %q", got, want)
 	}
 	if got, err := sourceContentBytes(iface.Sources[DefaultSourceName].Content); err != nil || string(got) != content {
@@ -110,14 +110,14 @@ func TestSynthesizeInterface_CopiesMetadata(t *testing.T) {
 	}
 
 	iface := testSynthesizeInterface(t, doc, "")
-	if iface.Name != "Test API" {
-		t.Errorf("Name = %q, want %q", iface.Name, "Test API")
+	if iface.Name == nil || *iface.Name != "Test API" {
+		t.Errorf("Name = %q, want %q", openbindings.Value(iface.Name), "Test API")
 	}
-	if iface.Version != "1.0.0" {
-		t.Errorf("Version = %q, want %q", iface.Version, "1.0.0")
+	if iface.Version == nil || *iface.Version != "1.0.0" {
+		t.Errorf("Version = %q, want %q", openbindings.Value(iface.Version), "1.0.0")
 	}
-	if iface.Description != "A test" {
-		t.Errorf("Description = %q, want %q", iface.Description, "A test")
+	if iface.Description == nil || *iface.Description != "A test" {
+		t.Errorf("Description = %q, want %q", openbindings.Value(iface.Description), "A test")
 	}
 }
 
@@ -160,8 +160,8 @@ func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Selector != "#/operations/sendMsg" {
-		t.Errorf("selector = %q, want %q", binding.Selector, "#/operations/sendMsg")
+	if binding.Selector == nil || *binding.Selector != "#/operations/sendMsg" {
+		t.Errorf("selector = %q, want %q", openbindings.Value(binding.Selector), "#/operations/sendMsg")
 	}
 	if binding.Operation != "sendMsg" {
 		t.Errorf("operation = %q, want %q", binding.Operation, "sendMsg")
@@ -402,8 +402,8 @@ func TestSynthesizeInterface_PreservesAsyncAPIV2NativeRefAndPerspective(t *testi
 		t.Fatalf("bindings = %#v", result.Interface.Bindings)
 	}
 	for _, binding := range result.Interface.Bindings {
-		if binding.Selector != "#/channels/events~1{tenant}/publish" {
-			t.Fatalf("binding selector = %q", binding.Selector)
+		if binding.Selector == nil || *binding.Selector != "#/channels/events~1{tenant}/publish" {
+			t.Fatalf("binding selector = %q", openbindings.Value(binding.Selector))
 		}
 	}
 	for _, op := range result.Interface.Operations {
@@ -418,13 +418,13 @@ func TestSynthesizeInterface_SourceLocationConditional(t *testing.T) {
 	doc := &document{AsyncAPI: "3.0.0", Operations: map[string]asyncOperation{}}
 
 	withLoc := testSynthesizeInterface(t, doc, "https://example.com/spec.json")
-	if withLoc.Sources[DefaultSourceName].Location != "https://example.com/spec.json" {
-		t.Errorf("with location: got %q", withLoc.Sources[DefaultSourceName].Location)
+	if withLoc.Sources[DefaultSourceName].Location == nil || *withLoc.Sources[DefaultSourceName].Location != "https://example.com/spec.json" {
+		t.Errorf("with location: got %q", openbindings.Value(withLoc.Sources[DefaultSourceName].Location))
 	}
 
 	withoutLoc := testSynthesizeInterface(t, doc, "")
-	if withoutLoc.Sources[DefaultSourceName].Location != "" {
-		t.Errorf("without location: got %q, want empty", withoutLoc.Sources[DefaultSourceName].Location)
+	if withoutLoc.Sources[DefaultSourceName].Location != nil {
+		t.Errorf("without location: got %q, want empty", openbindings.Value(withoutLoc.Sources[DefaultSourceName].Location))
 	}
 }
 
@@ -459,8 +459,8 @@ func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	if !ok {
 		t.Fatal("expected the default source entry")
 	}
-	if src.Location != "" {
-		t.Errorf("content-only synthesis must not invent a location, got %q", src.Location)
+	if src.Location != nil {
+		t.Errorf("content-only synthesis must not invent a location, got %q", openbindings.Value(src.Location))
 	}
 	if src.Content == nil {
 		t.Fatal("content-fed synthesis must embed the artifact")

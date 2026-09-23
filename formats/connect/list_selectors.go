@@ -12,11 +12,11 @@ import (
 // InspectSource returns all bindable targets (package.Service/Method) from a
 // Connect source by parsing the proto definition.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
-	if source.Location == "" && source.Content == nil {
+	if openbindings.Value(source.Location) == "" && source.Content == nil {
 		return nil, fmt.Errorf("Connect source requires a location or content")
 	}
 
-	disc, err := discoverFromProto(ctx, source.Location, source.Content)
+	disc, err := discoverFromProto(ctx, openbindings.Value(source.Location), source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("Connect proto parse: %w", err)
 	}
@@ -51,7 +51,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: description}
+		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
 	}
 	return target
 }

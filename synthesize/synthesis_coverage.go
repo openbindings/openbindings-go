@@ -118,7 +118,7 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 			}
 			if entry.BindingKey == "" {
 				for bindingKey, binding := range iface.Bindings {
-					if binding.Operation == entry.OperationKey && binding.Selector == entry.BindingSelector {
+					if binding.Operation == entry.OperationKey && ContractSelector(binding.Selector) == entry.BindingSelector {
 						if entry.BindingKey != "" {
 							return nil, fmt.Errorf("%s synthesis coverage entry %d matches several bindings; bindingKey is required to disambiguate", entry.Status, index)
 						}
@@ -127,7 +127,7 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 				}
 			}
 			binding, ok := iface.Bindings[entry.BindingKey]
-			if !ok || binding.Operation != entry.OperationKey || binding.Selector != entry.BindingSelector {
+			if !ok || binding.Operation != entry.OperationKey || ContractSelector(binding.Selector) != entry.BindingSelector {
 				return nil, fmt.Errorf("%s synthesis coverage entry %d has no matching binding for operation %q and selector %q", entry.Status, index, entry.OperationKey, entry.BindingSelector)
 			}
 			if entry.SourceKey == "" {
@@ -194,12 +194,12 @@ func RepresentedCoverageEntries(iface *openbindings.Interface, sourceIndex int) 
 		entries = append(entries, SynthesisCoverageEntry{
 			SourceIndex:     sourceIndex,
 			SourceKey:       binding.Source,
-			SourceRef:       binding.Selector,
+			SourceRef:       ContractSelector(binding.Selector),
 			Scope:           SynthesisCoverageTarget,
 			Status:          SynthesisRepresented,
 			OperationKey:    binding.Operation,
 			BindingKey:      key,
-			BindingSelector: binding.Selector,
+			BindingSelector: ContractSelector(binding.Selector),
 		})
 	}
 	return entries

@@ -518,7 +518,7 @@ func TestNoInputOperationRefused_HTTPPublish(t *testing.T) {
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   httpSource(srv),
 		Selector: "#/operations/sendAck",
-		Binding:  &openbindings.BindingEntry{Operation: "sendAck", Source: DefaultSourceName, Selector: "#/operations/sendAck"},
+		Binding:  &openbindings.BindingEntry{Operation: "sendAck", Source: DefaultSourceName, Selector: openbindings.Present("#/operations/sendAck")},
 		// InputSchema nil → no-input operation; publish has no empty message.
 	})
 	_, err := drainOutputs(t, call)
@@ -545,7 +545,7 @@ func TestNoInputOperationRefused_WSPublish(t *testing.T) {
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   wsSource(srv, nil),
 		Selector: "#/operations/publish",
-		Binding:  &openbindings.BindingEntry{Operation: "publish", Source: DefaultSourceName, Selector: "#/operations/publish"},
+		Binding:  &openbindings.BindingEntry{Operation: "publish", Source: DefaultSourceName, Selector: openbindings.Present("#/operations/publish")},
 		Context:  wsTextContext(nil),
 	})
 	_, err := drainOutputs(t, call)
@@ -802,7 +802,7 @@ func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"sendMessage." + DefaultSourceName: {
-				Operation: "sendMessage", Source: DefaultSourceName, Selector: "#/operations/sendMessage",
+				Operation: "sendMessage", Source: DefaultSourceName, Selector: openbindings.Present("#/operations/sendMessage"),
 			},
 		},
 	}

@@ -38,7 +38,7 @@ func TestTransformResultJSONDomain(t *testing.T) {
 						entry.InputTransform = nil
 						transform := &openbindings.TransformOrRef{Inline: "$"}
 						if referenced {
-							transform = &openbindings.TransformOrRef{Ref: "#/transforms/map"}
+							transform = &openbindings.TransformOrRef{Reference: &openbindings.TransformReference{Ref: "#/transforms/map"}}
 							iface.Transforms = map[string]openbindings.Transform{"map": "$"}
 						}
 						if direction == "input" {

@@ -35,7 +35,7 @@ func TestSwagger20SynthesisEmitsFlatContractEnvelopeTransformAndCoverage(t *test
 		t.Fatal(err)
 	}
 	op, ok := result.Interface.Operations["create_pet"]
-	if !ok || op.Input == nil || op.Output == nil || op.Description != "Create one" {
+	if !ok || op.Input == nil || op.Output == nil || (op.Description == nil || *op.Description != "Create one") {
 		t.Fatalf("operation = %#v", op)
 	}
 	binding := result.Interface.Bindings["create_pet.openapi"]

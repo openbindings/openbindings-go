@@ -201,13 +201,13 @@ func analyzeProviderProjection(
 		}
 	}
 	iface := providerProjectionSkeleton(source, content, location)
-	iface.Name = analysis.OpenAPI3.Name
-	iface.Version = analysis.OpenAPI3.Version
-	iface.Description = analysis.OpenAPI3.Description
+	iface.Name = openbindings.NonZero(analysis.OpenAPI3.Name)
+	iface.Version = openbindings.NonZero(analysis.OpenAPI3.Version)
+	iface.Description = openbindings.NonZero(analysis.OpenAPI3.Description)
 	for key, operation := range analysis.OpenAPI3.Operations {
 		projected := openbindings.Operation{
-			Description: operation.Description,
-			Deprecated:  operation.Deprecated,
+			Description: openbindings.NonZero(operation.Description),
+			Deprecated:  openbindings.NonZero(operation.Deprecated),
 			Tags:        append([]string(nil), operation.Tags...),
 			Input:       operation.Input,
 			Output:      operation.Output,
@@ -219,7 +219,7 @@ func analyzeProviderProjection(
 		projected := openbindings.BindingEntry{
 			Operation: binding.Operation,
 			Source:    DefaultSourceName,
-			Selector:  binding.Selector,
+			Selector:  openbindings.NonZero(binding.Selector),
 		}
 		if binding.Input != nil {
 			projected.InputTransform = &openbindings.TransformOrRef{Inline: providerInputTransform(binding.Input)}
@@ -315,7 +315,7 @@ func cloneStringMap(value map[string]string) map[string]string {
 }
 
 func providerProjectionSkeleton(source synthesize.SynthesizeSource, content json.RawMessage, location string) *openbindings.Interface {
-	entry := openbindings.Source{BindingSpec: source.BindingSpec, Location: location, Description: source.Description}
+	entry := openbindings.Source{BindingSpec: source.BindingSpec, Location: openbindings.NonZero(location), Description: openbindings.NonZero(source.Description)}
 	if content != nil {
 		entry.Content = append(json.RawMessage(nil), content...)
 	}

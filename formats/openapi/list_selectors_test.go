@@ -136,7 +136,7 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 	descBySelector := map[string]string{}
 	for _, selector := range result.Targets {
 		if selector.Operation != nil {
-			descBySelector[selector.Selector] = selector.Operation.Description
+			descBySelector[selector.Selector] = openbindings.Value(selector.Operation.Description)
 		}
 	}
 
@@ -178,7 +178,7 @@ func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 	}
 	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createSelectors[b.Selector] = true
+		createSelectors[openbindings.Value(b.Selector)] = true
 	}
 
 	synthesizer := NewSynthesizer()
@@ -229,7 +229,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 	// Map each selector to the operation key SynthesizeInterface assigned it.
 	createKeyBySelector := map[string]string{}
 	for _, b := range iface.Bindings {
-		createKeyBySelector[b.Selector] = b.Operation
+		createKeyBySelector[openbindings.Value(b.Selector)] = b.Operation
 	}
 
 	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{

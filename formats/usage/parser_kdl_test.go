@@ -68,13 +68,13 @@ func TestParseKDL(t *testing.T) {
 	if meta.MinUsageVersion != "1.0" {
 		t.Errorf("MinUsageVersion = %q, want %q", meta.MinUsageVersion, "1.0")
 	}
-	if meta.Name != "Test CLI" {
+	if meta.Name == nil || *meta.Name != "Test CLI" {
 		t.Errorf("Name = %q, want %q", meta.Name, "Test CLI")
 	}
 	if meta.Bin != "testcli" {
 		t.Errorf("Bin = %q, want %q", meta.Bin, "testcli")
 	}
-	if meta.Version != "1.0.0" {
+	if meta.Version == nil || *meta.Version != "1.0.0" {
 		t.Errorf("Version = %q, want %q", meta.Version, "1.0.0")
 	}
 	if len(meta.Examples) != 2 {
@@ -101,13 +101,13 @@ func TestParseKDL(t *testing.T) {
 	if len(args) != 2 {
 		t.Errorf("Args count = %d, want 2", len(args))
 	}
-	if args[0].Name != "<input>" {
+	if args[0].Name == nil || *args[0].Name != "<input>" {
 		t.Errorf("First arg name = %q, want %q", args[0].Name, "<input>")
 	}
 	if !args[0].IsRequired() {
 		t.Error("First arg should be required")
 	}
-	if args[1].Name != "[output]" {
+	if args[1].Name == nil || *args[1].Name != "[output]" {
 		t.Errorf("Second arg name = %q, want %q", args[1].Name, "[output]")
 	}
 	if args[1].IsRequired() {
@@ -214,7 +214,7 @@ func TestFindCommandWithKDL(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("config set command not found")
 	}
-	if cmd.Name != "set" {
+	if cmd.Name == nil || *cmd.Name != "set" {
 		t.Errorf("name = %q, want %q", cmd.Name, "set")
 	}
 	if cmd.Help != "Set a config value" {

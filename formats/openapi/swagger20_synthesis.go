@@ -67,13 +67,13 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 	}
 	iface := openbindings.Interface{
 		OpenBindings: openbindings.MaxTestedVersion,
-		Name:         model.Name,
-		Version:      model.Version,
-		Description:  model.Description,
+		Name:         openbindings.NonZero(model.Name),
+		Version:      openbindings.NonZero(model.Version),
+		Description:  openbindings.NonZero(model.Description),
 		Operations:   map[string]openbindings.Operation{},
 		Bindings:     map[string]openbindings.BindingEntry{},
 		Sources: map[string]openbindings.Source{
-			DefaultSourceName: {BindingSpec: BindingSpecOpenAPI20, Location: loadLocation},
+			DefaultSourceName: {BindingSpec: BindingSpecOpenAPI20, Location: openbindings.NonZero(loadLocation)},
 		},
 	}
 	if artifactContent != nil {
@@ -120,8 +120,8 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 		iface.Operations[opKey] = obiOperation
 		bindingKey := opKey + "." + DefaultSourceName
 		binding := openbindings.BindingEntry{
-			Operation: opKey, Source: DefaultSourceName, Selector: operation.Ref,
-			Deprecated: operation.Deprecated,
+			Operation: opKey, Source: DefaultSourceName, Selector: openbindings.NonZero(operation.Ref),
+			Deprecated: openbindings.NonZero(operation.Deprecated),
 		}
 		if inputTransform != "" {
 			binding.InputTransform = &openbindings.TransformOrRef{Inline: inputTransform}
@@ -171,8 +171,8 @@ type swagger20ProjectionLoss struct {
 
 func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOperation, operationKey string) (openbindings.Operation, string, []swagger20ProjectionLoss, error) {
 	result := openbindings.Operation{
-		Description: operation.Description,
-		Deprecated:  operation.Deprecated,
+		Description: openbindings.NonZero(operation.Description),
+		Deprecated:  openbindings.NonZero(operation.Deprecated),
 		Tags:        append([]string(nil), operation.Tags...),
 	}
 	properties := map[string]any{}

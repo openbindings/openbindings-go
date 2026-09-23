@@ -48,7 +48,7 @@ func operationRequirementCandidate(bindingSpec string, output openbindings.JSONS
 	}
 	return &openbindings.Interface{
 		OpenBindings: "0.2.0",
-		Name:         bindingSpec,
+		Name:         openbindings.Present(bindingSpec),
 		Operations: map[string]openbindings.Operation{
 			"createTodo": {
 				Aliases: []string{"example.tasks.create"},
@@ -64,7 +64,7 @@ func operationRequirementCandidate(bindingSpec string, output openbindings.JSONS
 			"createTodo": {
 				Operation: "createTodo",
 				Source:    "service",
-				Selector:  "create",
+				Selector:  openbindings.Present("create"),
 			},
 		},
 	}

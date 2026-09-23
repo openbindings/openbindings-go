@@ -278,11 +278,11 @@ cmd "config" subcommand_required=#true {
 		t.Fatal(err)
 	}
 
-	if iface.Name != "mycli" {
-		t.Errorf("name = %q, want mycli", iface.Name)
+	if iface.Name == nil || *iface.Name != "mycli" {
+		t.Errorf("name = %q, want mycli", openbindings.Value(iface.Name))
 	}
-	if iface.Version != "1.0.0" {
-		t.Errorf("version = %q, want 1.0.0", iface.Version)
+	if iface.Version == nil || *iface.Version != "1.0.0" {
+		t.Errorf("version = %q, want 1.0.0", openbindings.Value(iface.Version))
 	}
 
 	if len(iface.Operations) != 4 {
@@ -323,8 +323,8 @@ cmd "config" subcommand_required=#true {
 		t.Fatal("expected the pristine kdl text as embedded content")
 	}
 	binding := iface.Bindings["config.get."+DefaultSourceName]
-	if binding.Selector != "config get" {
-		t.Errorf("config.get selector = %q, want 'config get'", binding.Selector)
+	if binding.Selector == nil || *binding.Selector != "config get" {
+		t.Errorf("config.get selector = %q, want 'config get'", openbindings.Value(binding.Selector))
 	}
 
 	// FLOOR-TRUE derived outputs: {"type":"string"} with the in-schema
@@ -339,7 +339,7 @@ cmd "config" subcommand_required=#true {
 
 	// Synthesize-then-invoke coherence: the emitted selector resolves in the
 	// emitted artifact.
-	if _, err := findCommand(mustParse(t, spec), binding.Selector); err != nil {
+	if _, err := findCommand(mustParse(t, spec), openbindings.Value(binding.Selector)); err != nil {
 		t.Fatalf("emitted binding selector does not resolve: %v", err)
 	}
 }
@@ -431,7 +431,7 @@ func TestIntegration_NoInputOperationRunsBare(t *testing.T) {
 	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   testSource(),
 		Selector: "mixed",
-		Binding:  &openbindings.BindingEntry{Operation: "mixed", Source: "s", Selector: "mixed"},
+		Binding:  &openbindings.BindingEntry{Operation: "mixed", Source: "s", Selector: openbindings.Present("mixed")},
 		// InputSchema nil and no input transform: nothing crosses.
 	})
 	// The caller writes nothing and does not close; the binding must still run.
@@ -458,7 +458,7 @@ func TestIntegration_NoInputOperationCarriesASuppliedValue(t *testing.T) {
 		Binding: &openbindings.BindingEntry{
 			Operation:      "json",
 			Source:         "s",
-			Selector:       "json",
+			Selector:       openbindings.Present("json"),
 			InputTransform: &openbindings.TransformOrRef{Inline: "$"},
 		},
 	})
@@ -524,7 +524,7 @@ func mapKeys[V any](m map[string]V) []string {
 func TestIntegration_NoInputOperationThroughOperationLayer(t *testing.T) {
 	iface := &openbindings.Interface{
 		OpenBindings: openbindings.MaxTestedVersion,
-		Name:         "no-input-operation-layer",
+		Name:         openbindings.Present("no-input-operation-layer"),
 		Operations: map[string]openbindings.Operation{
 			// No input declared: the boundary makes no portable claim.
 			"list": {},
@@ -539,7 +539,7 @@ func TestIntegration_NoInputOperationThroughOperationLayer(t *testing.T) {
 			"list.cli": {
 				Operation: "list",
 				Source:    "cli",
-				Selector:  "json",
+				Selector:  openbindings.Present("json"),
 				// The transform injects the pair the command echoes back,
 				// which is only observable if a value crosses the boundary.
 				InputTransform: &openbindings.TransformOrRef{Inline: `{"pairs": ["name=alice"]}`},

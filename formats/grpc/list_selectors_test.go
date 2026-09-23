@@ -89,7 +89,7 @@ func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 
 	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createSelectors[b.Selector] = true
+		createSelectors[openbindings.Value(b.Selector)] = true
 	}
 
 	protoContent := `

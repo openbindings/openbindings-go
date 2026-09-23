@@ -27,7 +27,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		BindingSpec: bindingSpec,
 	}
 	if sourceLocation != "" {
-		sourceEntry.Location = sourceLocation
+		sourceEntry.Location = openbindings.NonZero(sourceLocation)
 	}
 
 	iface := openbindings.Interface{
@@ -40,10 +40,10 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 	}
 
 	if disc.ServerInfo != nil {
-		iface.Name = disc.ServerInfo.Name
-		iface.Version = disc.ServerInfo.Version
+		iface.Name = openbindings.NonZero(disc.ServerInfo.Name)
+		iface.Version = openbindings.NonZero(disc.ServerInfo.Version)
 		if disc.ServerInfo.Title != "" {
-			iface.Description = disc.ServerInfo.Title
+			iface.Description = openbindings.NonZero(disc.ServerInfo.Title)
 		}
 	}
 
@@ -66,7 +66,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		}
 
 		op := openbindings.Operation{
-			Description: desc,
+			Description: openbindings.NonZero(desc),
 		}
 
 		if tool.InputSchema != nil {
@@ -85,7 +85,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  refPrefixTools + tool.Name,
+			Selector:  openbindings.NonZero(refPrefixTools + tool.Name),
 		}
 	}
 
@@ -103,7 +103,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		// the URI is the binding's selector, not caller input, so the operation
 		// declares no input schema.
 		op := openbindings.Operation{
-			Description: desc,
+			Description: openbindings.NonZero(desc),
 			Output:      resourceOutputSchema(),
 		}
 
@@ -113,7 +113,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  refPrefixResources + resource.URI,
+			Selector:  openbindings.NonZero(refPrefixResources + resource.URI),
 		}
 	}
 
@@ -128,7 +128,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		}
 
 		op := openbindings.Operation{
-			Description: desc,
+			Description: openbindings.NonZero(desc),
 			Output:      resourceOutputSchema(),
 		}
 		if in := templateInputSchema(tmpl.URITemplate); in != nil {
@@ -141,7 +141,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  refPrefixResourceTemplates + tmpl.URITemplate,
+			Selector:  openbindings.NonZero(refPrefixResourceTemplates + tmpl.URITemplate),
 		}
 	}
 
@@ -156,7 +156,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		}
 
 		op := openbindings.Operation{
-			Description: desc,
+			Description: openbindings.NonZero(desc),
 			Output:      promptOutputSchema(),
 		}
 
@@ -170,7 +170,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Selector:  refPrefixPrompts + prompt.Name,
+			Selector:  openbindings.NonZero(refPrefixPrompts + prompt.Name),
 		}
 	}
 

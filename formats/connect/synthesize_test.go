@@ -99,8 +99,8 @@ service TestService {
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Selector != "testpkg.TestService/GetItem" {
-		t.Errorf("selector = %q, want %q", binding.Selector, "testpkg.TestService/GetItem")
+	if binding.Selector == nil || *binding.Selector != "testpkg.TestService/GetItem" {
+		t.Errorf("selector = %v, want %q", binding.Selector, "testpkg.TestService/GetItem")
 	}
 	if binding.Operation != "GetItem" {
 		t.Errorf("operation = %q, want %q", binding.Operation, "GetItem")
@@ -168,8 +168,8 @@ service TestService {
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
-	if src.Location != "http://api.example.com" {
-		t.Errorf("location = %q, want %q", src.Location, "http://api.example.com")
+	if src.Location == nil || *src.Location != "http://api.example.com" {
+		t.Errorf("location = %v, want %q", src.Location, "http://api.example.com")
 	}
 }
 

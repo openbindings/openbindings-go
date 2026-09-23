@@ -11,7 +11,7 @@ import (
 func makeTestInterface(name string, ops ...string) *openbindings.Interface {
 	iface := &openbindings.Interface{
 		OpenBindings: "0.2.0",
-		Name:         name,
+		Name:         openbindings.Present(name),
 		Operations:   map[string]openbindings.Operation{},
 	}
 	for _, op := range ops {

@@ -31,7 +31,7 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []synthesiz
 	}
 	represented := make(map[string]identity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		represented[binding.Selector] = identity{operation: binding.Operation, selector: binding.Selector}
+		represented[synthesize.ContractSelector(binding.Selector)] = identity{operation: binding.Operation, selector: synthesize.ContractSelector(binding.Selector)}
 	}
 
 	operationIDs := make([]string, 0, len(doc.Operations))

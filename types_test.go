@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -50,7 +51,7 @@ func TestInterface_LosslessRoundTrip_PreservesExtensionsAndUnknownTopLevel(t *te
 func TestInterface_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
-		Name:         "Good Example",
+		Name:         Present("Good Example"),
 		Operations:   map[string]Operation{},
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
@@ -94,7 +95,7 @@ func TestOperation_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T)
 
 func TestOperation_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	op := Operation{
-		Description: "typed description",
+		Description: Present("typed description"),
 		LosslessFields: LosslessFields{
 			Unknown:    map[string]json.RawMessage{"description": json.RawMessage(`"unknown description"`)},
 			Extensions: map[string]json.RawMessage{"x-extensionField": json.RawMessage(`"extensionFieldValue"`)},
@@ -214,7 +215,7 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	s := Source{
 		BindingSpec: "openbindings.openapi-3.1@1",
-		Location:    "./typed-location.json",
+		Location:    Present("./typed-location.json"),
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
 				"bindingSpec": json.RawMessage(`"openbindings.grpc@1"`),
@@ -268,8 +269,8 @@ func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	be := BindingEntry{
 		Operation:   "typed.op",
 		Source:      "typedSource",
-		Selector:    "#/typed/selector",
-		Description: "typed description",
+		Selector:    Present("#/typed/selector"),
+		Description: Present("typed description"),
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
 				"operation":   json.RawMessage(`"unknown.op"`),
@@ -425,8 +426,8 @@ func TestOperationExample_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *tes
 	outMap := mustRoundTripToMap(t, in, &ex)
 	assertPreservedExtensionAndUnknown(t, outMap)
 
-	if ex.Description != "Example" {
-		t.Fatalf("expected description=Example, got %q", ex.Description)
+	if ex.Description == nil || *ex.Description != "Example" {
+		t.Fatalf("expected description=Example, got %+v", ex)
 	}
 	if outMap["description"] != "Example" {
 		t.Fatalf("expected description preserved in output, got %#v", outMap["description"])
@@ -449,9 +450,9 @@ func TestOperationExample_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *tes
 
 func TestOperationExample_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	ex := OperationExample{
-		Description: "typed description",
-		Input:       map[string]any{"typed": true},
-		Output:      map[string]any{"typed": true},
+		Description: Present("typed description"),
+		Input:       exampleValue(map[string]any{"typed": true}),
+		Output:      exampleValue(map[string]any{"typed": true}),
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
 				"description": json.RawMessage(`"unknown description"`),
@@ -492,38 +493,39 @@ func TestOperationExample_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	}
 }
 
-func TestTransformOrRef_RefIgnoresExtraFields(t *testing.T) {
-	in := []byte(`{
-  "$ref": "#/transforms/myTransform",
-  "x-custom": "ignored"
-}`)
+func TestTransformOrRef_RefObjectKeepsItsOtherMembers(t *testing.T) {
+	// The $ref object form is an OBI-defined object: extensions and unknown
+	// members are preserved (§12, OBI-T-02), not dropped.
+	in := []byte(`{"$ref":"#/transforms/myTransform","x-custom":"kept","later":1}`)
 
 	var tor TransformOrRef
 	if err := json.Unmarshal(in, &tor); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-
-	if !tor.IsRef() {
-		t.Fatal("expected ref")
+	if !tor.IsRef() || tor.Reference.Ref != "#/transforms/myTransform" {
+		t.Fatalf("expected the reference form, got %+v", tor)
 	}
-	if tor.Ref != "#/transforms/myTransform" {
-		t.Fatalf("expected ref, got %q", tor.Ref)
-	}
-
-	// Round-trip produces only $ref
 	out, err := json.Marshal(tor)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var outMap map[string]any
-	if err := json.Unmarshal(out, &outMap); err != nil {
-		t.Fatalf("unmarshal output: %v", err)
+	var got, want any
+	_ = json.Unmarshal(out, &got)
+	_ = json.Unmarshal(in, &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip = %s, want %s", out, in)
 	}
-	if outMap["$ref"] != "#/transforms/myTransform" {
-		t.Fatalf("expected $ref preserved, got %v", outMap["$ref"])
+
+	// An empty $ref is still the object form, not an empty inline expression.
+	var empty TransformOrRef
+	if err := json.Unmarshal([]byte(`{"$ref":""}`), &empty); err != nil || !empty.IsRef() {
+		t.Fatalf("empty $ref: %+v, %v", empty, err)
 	}
-	if _, hasExtra := outMap["x-custom"]; hasExtra {
-		t.Fatal("expected x-custom to be dropped per schema additionalProperties:false")
+	if out, _ := json.Marshal(empty); string(out) != `{"$ref":""}` {
+		t.Fatalf("empty $ref round trip = %s", out)
+	}
+	if _, err := json.Marshal(TransformOrRef{Inline: "$", Reference: &TransformReference{Ref: "#/transforms/x"}}); err == nil {
+		t.Fatal("a transform with both forms set must not encode")
 	}
 }
 
@@ -566,8 +568,8 @@ func TestTransformOrRef_Reference(t *testing.T) {
 	if !tor.IsRef() {
 		t.Fatal("expected ref, got inline transform")
 	}
-	if tor.Ref != "#/transforms/myTransform" {
-		t.Fatalf("expected ref=#/transforms/myTransform, got %q", tor.Ref)
+	if tor.Reference.Ref != "#/transforms/myTransform" {
+		t.Fatalf("expected ref=#/transforms/myTransform, got %q", tor.Reference.Ref)
 	}
 	if tor.Inline != "" {
 		t.Fatalf("expected Inline to be empty for ref, got %q", tor.Inline)
@@ -622,8 +624,8 @@ func TestBindingEntry_WithTransforms(t *testing.T) {
 	if !be.OutputTransform.IsRef() {
 		t.Fatal("expected outputTransform to be a ref")
 	}
-	if be.OutputTransform.Ref != "#/transforms/fromApiOutput" {
-		t.Fatalf("expected outputTransform.$ref=#/transforms/fromApiOutput, got %q", be.OutputTransform.Ref)
+	if be.OutputTransform.Reference.Ref != "#/transforms/fromApiOutput" {
+		t.Fatalf("expected outputTransform.$ref=#/transforms/fromApiOutput, got %q", be.OutputTransform.Reference.Ref)
 	}
 
 	// Round-trip
@@ -704,8 +706,8 @@ func TestInterface_WithTransforms(t *testing.T) {
 	if b.InputTransform == nil || !b.InputTransform.IsRef() {
 		t.Fatal("expected inputTransform to be a ref")
 	}
-	if b.InputTransform.Ref != "#/transforms/toStripeInput" {
-		t.Fatalf("expected inputTransform ref, got %q", b.InputTransform.Ref)
+	if b.InputTransform.Reference.Ref != "#/transforms/toStripeInput" {
+		t.Fatalf("expected inputTransform ref, got %q", b.InputTransform.Reference.Ref)
 	}
 
 	// Round-trip
@@ -736,7 +738,7 @@ func TestTransformOrRef_Resolve(t *testing.T) {
 	}
 
 	// Resolving a ref returns the named expression.
-	ref := TransformOrRef{Ref: "#/transforms/myTransform"}
+	ref := TransformOrRef{Reference: &TransformReference{Ref: "#/transforms/myTransform"}}
 	expr, ok := ref.Resolve(transforms)
 	if !ok {
 		t.Fatal("expected ref to resolve")
@@ -756,13 +758,13 @@ func TestTransformOrRef_Resolve(t *testing.T) {
 	}
 
 	// Unresolvable ref returns ok=false.
-	badRef := TransformOrRef{Ref: "#/transforms/nonexistent"}
+	badRef := TransformOrRef{Reference: &TransformReference{Ref: "#/transforms/nonexistent"}}
 	if _, ok := badRef.Resolve(transforms); ok {
 		t.Fatal("expected unresolvable ref to return ok=false")
 	}
 
 	// Malformed ref (wrong prefix) returns ok=false.
-	malformed := TransformOrRef{Ref: "notavalidref"}
+	malformed := TransformOrRef{Reference: &TransformReference{Ref: "notavalidref"}}
 	if _, ok := malformed.Resolve(transforms); ok {
 		t.Fatal("expected malformed ref to return ok=false")
 	}
@@ -830,14 +832,11 @@ func TestOperationExample_ExplicitNullPresenceAndRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(in, &ex); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !ex.InputPresent {
-		t.Fatalf("expected InputPresent for explicit null input")
+	if string(ex.Input) != "null" {
+		t.Fatalf("expected a present null input, got %q", ex.Input)
 	}
-	if ex.OutputPresent {
-		t.Fatalf("expected OutputPresent false for absent output")
-	}
-	if !ex.HasInput() || ex.HasOutput() {
-		t.Fatalf("expected HasInput && !HasOutput, got %v %v", ex.HasInput(), ex.HasOutput())
+	if ex.Output != nil {
+		t.Fatalf("expected an absent output, got %q", ex.Output)
 	}
 	out, err := json.Marshal(ex)
 	if err != nil {

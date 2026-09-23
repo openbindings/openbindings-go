@@ -167,10 +167,10 @@ func ExampleInvoke_contextRecovery() {
 	ctx := context.Background()
 	iface := &openbindings.Interface{
 		OpenBindings: "0.2.0",
-		Name:         "Echo",
+		Name:         openbindings.Present("Echo"),
 		Operations:   map[string]openbindings.Operation{"echo": {}},
-		Sources:      map[string]openbindings.Source{"echo": {BindingSpec: "echo@1.0", Location: "mem://echo"}},
-		Bindings:     map[string]openbindings.BindingEntry{"echo.main": {Operation: "echo", Source: "echo", Selector: "echo"}},
+		Sources:      map[string]openbindings.Source{"echo": {BindingSpec: "echo@1.0", Location: openbindings.Present("mem://echo")}},
+		Bindings:     map[string]openbindings.BindingEntry{"echo.main": {Operation: "echo", Source: "echo", Selector: openbindings.Present("echo")}},
 	}
 	opInv := invoke.NewOperationInvoker(credentialEchoInvoker{})
 	start := func(given map[string]any) invoke.Invocation[any, any] {

@@ -18,7 +18,7 @@ import (
 )
 
 func makeTestInterface(name string, ops ...string) *openbindings.Interface {
-	iface := &openbindings.Interface{OpenBindings: "0.2.0", Name: name, Operations: map[string]openbindings.Operation{}}
+	iface := &openbindings.Interface{OpenBindings: "0.2.0", Name: openbindings.Present(name), Operations: map[string]openbindings.Operation{}}
 	for _, op := range ops {
 		iface.Operations[op] = openbindings.Operation{}
 	}
@@ -244,10 +244,10 @@ func (coverageFetchSynthesizer) SynthesizeInterfaceWithCoverage(_ context.Contex
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"ping": {}},
 		Sources: map[string]openbindings.Source{
-			"source": {BindingSpec: "fake.coverage@1", Location: location},
+			"source": {BindingSpec: "fake.coverage@1", Location: openbindings.Present(location)},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"ping.source": {Operation: "ping", Source: "source", Selector: "ping"},
+			"ping.source": {Operation: "ping", Source: "source", Selector: openbindings.Present("ping")},
 		},
 	}
 	return synthesize.NewSynthesisResult(iface, []synthesize.SynthesisCoverageEntry{{

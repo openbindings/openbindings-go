@@ -125,7 +125,7 @@ draft-only `replace` directives to an application intended for release.
 
 - **Core types** for the OpenBindings interface document: operations,
   dependencies, bindings, sources, transforms, and schemas
-- **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
+- **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
 - **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, unknown fields surfaced as diagnostics rather than rejected, and a violation gate for acting on documents
 - **Schema compatibility** checking under the OpenBindings Schema Comparison Profile `OB-2020-12` (covariant outputs, contravariant inputs) with diagnostic reasons
 - **`httpdiscovery.Discover`** for retrieving an existing OBI from an origin's well-known endpoint without requiring synthesis

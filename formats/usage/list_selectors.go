@@ -13,7 +13,7 @@ import (
 // command-path selectors (the format's own grammar), one per bindable command,
 // exactly as synthesis would bind them.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
-	location, err := absolutizeArtifactLocation(source.Location, source.Content)
+	location, err := absolutizeArtifactLocation(openbindings.Value(source.Location), source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load usage source: %w", err)
 	}
@@ -68,7 +68,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: description}
+		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
 	}
 	return target
 }

@@ -49,16 +49,16 @@ func TestConvertToInterfaceProjectsOnlyEligibleToolApplicationContracts(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if iface.Name != "test-server" || iface.Version != "1.0.0" || iface.Description != "Test Server" {
+	if (iface.Name == nil || *iface.Name != "test-server") || (iface.Version == nil || *iface.Version != "1.0.0") || (iface.Description == nil || *iface.Description != "Test Server") {
 		t.Fatalf("metadata = %#v", iface)
 	}
 	if len(iface.Operations) != 1 || !reflect.DeepEqual(iface.Operations["calc"].Output, outputSchema) {
 		t.Fatalf("operations = %#v", iface.Operations)
 	}
-	if binding := iface.Bindings["calc."+DefaultSourceName]; binding.Selector != "tools/calc" {
+	if binding := iface.Bindings["calc."+DefaultSourceName]; binding.Selector == nil || *binding.Selector != "tools/calc" {
 		t.Fatalf("binding = %#v", binding)
 	}
-	if source := iface.Sources[DefaultSourceName]; source.BindingSpec != BindingSpec || source.Location != "https://mcp.example.test" {
+	if source := iface.Sources[DefaultSourceName]; source.BindingSpec != BindingSpec || (source.Location == nil || *source.Location != "https://mcp.example.test") {
 		t.Fatalf("source = %#v", source)
 	}
 }

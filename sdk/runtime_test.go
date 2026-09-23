@@ -66,10 +66,10 @@ func testInterface() *openbindings.Interface {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"ping": {}},
 		Sources: map[string]openbindings.Source{
-			"source": {BindingSpec: testBindingSpec, Location: "memory://source"},
+			"source": {BindingSpec: testBindingSpec, Location: openbindings.Present("memory://source")},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"ping.binding": {Operation: "ping", Source: "source", Selector: "target"},
+			"ping.binding": {Operation: "ping", Source: "source", Selector: openbindings.Present("target")},
 		},
 	}
 }

@@ -112,7 +112,7 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 			"g": {BindingSpec: BindingSpec, Content: mustContent(graphDoc)},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"recurse.g": {Operation: "recurse", Source: "g", Selector: "#/graphs/loop"},
+			"recurse.g": {Operation: "recurse", Source: "g", Selector: openbindings.Present("#/graphs/loop")},
 		},
 	}
 

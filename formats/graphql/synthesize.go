@@ -20,7 +20,7 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string, bind
 		BindingSpec: bindingSpec,
 	}
 	if sourceLocation != "" {
-		sourceEntry.Location = sourceLocation
+		sourceEntry.Location = openbindings.NonZero(sourceLocation)
 	}
 
 	iface := openbindings.Interface{
@@ -75,10 +75,10 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string, bind
 
 			op := openbindings.Operation{}
 			if f.Description != "" {
-				op.Description = f.Description
+				op.Description = openbindings.NonZero(f.Description)
 			}
 			if f.IsDeprecated {
-				op.Deprecated = true
+				op.Deprecated = openbindings.Present(true)
 			}
 
 			op.Input = map[string]any{"type": "object"}
@@ -90,7 +90,7 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string, bind
 			iface.Bindings[bindingKey] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Selector:  selector,
+				Selector:  openbindings.NonZero(selector),
 			}
 		}
 	}

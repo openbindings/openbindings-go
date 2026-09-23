@@ -14,14 +14,14 @@ import (
 // selectors. The first candidate lists query and mutation fields and excludes
 // subscriptions rather than approximating their lifecycle.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
-	endpoint := source.Location
+	endpoint := openbindings.Value(source.Location)
 	if err := validateHTTPLocation(endpoint); err != nil {
 		return nil, err
 	}
 
 	var schema *introspectionSchema
 	var err error
-	if source.ContentPresent() {
+	if source.Content != nil {
 		schema, err = parseIntrospectionContent(source.Content)
 	} else {
 		var disc *discovery
@@ -89,7 +89,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: description}
+		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
 	}
 	return target
 }

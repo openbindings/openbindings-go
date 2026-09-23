@@ -161,7 +161,7 @@ func checkExamples(c *ruleChecks, i Interface, view func() any) {
 			var provided []string
 			for _, ek := range exKeys {
 				ex := op.Examples[ek]
-				if (position == "input" && ex.HasInput()) || (position == "output" && ex.HasOutput()) {
+				if (position == "input" && ex.Input != nil) || (position == "output" && ex.Output != nil) {
 					provided = append(provided, ek)
 				}
 			}
@@ -183,9 +183,14 @@ func checkExamples(c *ruleChecks, i Interface, view func() any) {
 			}
 			for _, ek := range provided {
 				ex := op.Examples[ek]
-				value := ex.Input
+				encoded := ex.Input
 				if position == "output" {
-					value = ex.Output
+					encoded = ex.Output
+				}
+				var value any
+				if err := jsonvalue.Unmarshal(encoded, &value); err != nil {
+					c.inconclusive("OBI-D-11", jsonPointer("operations", opKey, "examples", ek, position), fmt.Sprintf("the example value is not JSON, so it was not checked: %v", err))
+					continue
 				}
 				if verr := compiled.Validate(value); verr != nil {
 					examplePath := jsonPointer("operations", opKey, "examples", ek, position)

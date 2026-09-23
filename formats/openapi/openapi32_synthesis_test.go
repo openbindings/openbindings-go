@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	openbindings "github.com/openbindings/openbindings-go"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -40,11 +41,11 @@ func TestOpenAPI32RequestSurfaceSynthesisEmitsContractsAndEditionSelectors(t *te
 	}
 	queryBinding := result.Interface.Bindings["queryItem."+DefaultSourceName]
 	mixedBinding := result.Interface.Bindings["mixedItem."+DefaultSourceName]
-	if queryBinding.Selector != "#/paths/~1items~1{id}/query" {
-		t.Errorf("QUERY selector = %q", queryBinding.Selector)
+	if queryBinding.Selector == nil || *queryBinding.Selector != "#/paths/~1items~1{id}/query" {
+		t.Errorf("QUERY selector = %q", openbindings.Value(queryBinding.Selector))
 	}
-	if mixedBinding.Selector != "#/paths/~1items~1{id}/additionalOperations/MiXeD" {
-		t.Errorf("additional selector = %q", mixedBinding.Selector)
+	if mixedBinding.Selector == nil || *mixedBinding.Selector != "#/paths/~1items~1{id}/additionalOperations/MiXeD" {
+		t.Errorf("additional selector = %q", openbindings.Value(mixedBinding.Selector))
 	}
 	if queryBinding.InputTransform == nil || mixedBinding.InputTransform == nil {
 		t.Fatal("request-bearing 3.2 bindings did not emit inputTransform")

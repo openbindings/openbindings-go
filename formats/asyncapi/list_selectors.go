@@ -12,7 +12,7 @@ import (
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	// Authoring convenience: a bare filesystem path loads as its file://
 	// spelling (the strict loader refuses bare paths, ASYNC-D-02).
-	loadLocation, err := absolutizeArtifactLocation(source.Location)
+	loadLocation, err := absolutizeArtifactLocation(openbindings.Value(source.Location))
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: description}
+		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
 	}
 	return target
 }

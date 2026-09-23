@@ -28,7 +28,7 @@ func preflightInterface(source openbindings.Source) *openbindings.Interface {
 		Operations:   map[string]openbindings.Operation{"run": {}},
 		Sources:      map[string]openbindings.Source{"service": source},
 		Bindings: map[string]openbindings.BindingEntry{
-			"run.service": {Operation: "run", Source: "service", Selector: "#/paths/~1run/get"},
+			"run.service": {Operation: "run", Source: "service", Selector: openbindings.Present("#/paths/~1run/get")},
 		},
 	}
 }
@@ -133,7 +133,7 @@ func TestPreflightCancellationDoesNotCancelConcurrentInvocation(t *testing.T) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer server.Close()
-	iface := preflightInterface(openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Location: server.URL + "/description"})
+	iface := preflightInterface(openbindings.Source{BindingSpec: BindingSpecOpenAPI31, Location: openbindings.Present(server.URL + "/description")})
 	invoker := invoke.NewOperationInvoker(NewAdapter())
 	screenCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()

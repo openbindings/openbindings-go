@@ -8,11 +8,11 @@ import (
 func TestResolveOperation_DirectKey(t *testing.T) {
 	iface := &Interface{
 		Operations: map[string]Operation{
-			"createTask": {Description: "native"},
+			"createTask": {Description: Present("native")},
 		},
 	}
 	key, op, ok := ResolveOperation(iface, "createTask")
-	if !ok || key != "createTask" || op.Description != "native" {
+	if !ok || key != "createTask" || (op.Description == nil || *op.Description != "native") {
 		t.Fatalf("direct key resolution failed: key=%q ok=%v op=%+v", key, ok, op)
 	}
 }
@@ -48,7 +48,7 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 	// matches are not privileged: OBI-D-04 guarantees a name belongs to one op.
 	iface := &Interface{
 		Operations: map[string]Operation{
-			"nativeThing": {Description: "native"},
+			"nativeThing": {Description: Present("native")},
 			"otherThing":  {Aliases: []string{"sharedContract.do"}},
 		},
 	}

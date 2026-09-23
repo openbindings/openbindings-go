@@ -97,7 +97,7 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 	}
 	operation := ""
 	for _, binding := range iface.Bindings {
-		if binding.Selector == selector {
+		if synthesize.ContractSelector(binding.Selector) == selector {
 			operation = binding.Operation
 			break
 		}

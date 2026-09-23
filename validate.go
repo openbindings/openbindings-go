@@ -182,9 +182,9 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 	}
 
 	// OBI-D-12: the openbindings field is a valid SemVer 2.0.0 string. The
-	// typed model holds a required string, so an empty value is its absence.
+	// typed model always carries this required member.
 	if !o.versionDecided {
-		checkVersionValue(c, i.OpenBindings, i.OpenBindings != "")
+		checkVersionValue(c, i.OpenBindings, true)
 	}
 
 	// Same-document schema $refs are resolved against the document root for
@@ -266,14 +266,10 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		if op.Input != nil {
 			validateSchemaWellFormedness(c, jsonPointer("operations", k, "input"), op.Input, validSchemaShapes)
 			walkSchema(c, jsonPointer("operations", k, "input"), op.Input, refView, false)
-		} else if op.InputPresent {
-			c.violated("OBI-D-17", jsonPointer("operations", k, "input"), "a schema is a JSON Schema 2020-12 object or boolean; got null")
 		}
 		if op.Output != nil {
 			validateSchemaWellFormedness(c, jsonPointer("operations", k, "output"), op.Output, validSchemaShapes)
 			walkSchema(c, jsonPointer("operations", k, "output"), op.Output, refView, false)
-		} else if op.OutputPresent {
-			c.violated("OBI-D-17", jsonPointer("operations", k, "output"), "a schema is a JSON Schema 2020-12 object or boolean; got null")
 		}
 
 		// OBI-D-03: example keys must match the identifier pattern.
@@ -325,8 +321,8 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		// (absolute URI or a bindingSpec-defined absolute address; never relative).
 		// Its presence and the bindingSpec requirement belong to the embedded
 		// document schema (OBI-D-02).
-		if src.Location != "" {
-			validateLocation(c, jsonPointer("sources", k, "location"), src.Location)
+		if src.Location != nil {
+			validateLocation(c, jsonPointer("sources", k, "location"), *src.Location)
 		}
 		diagnoseUnknownFields(c, jsonPointer("sources", k), src.Unknown)
 	}
@@ -371,7 +367,7 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		// parse-validity (OBI-D-18).
 		if b.InputTransform != nil {
 			if b.InputTransform.IsRef() {
-				if problem := transformRefProblem(b.InputTransform.Ref, i.Transforms); problem != "" {
+				if problem := transformRefProblem(b.InputTransform.Reference.Ref, i.Transforms); problem != "" {
 					c.violated("OBI-D-10", jsonPointer("bindings", k, "inputTransform", "$ref"), problem)
 				}
 			} else {
@@ -380,7 +376,7 @@ func (i Interface) checkDocumentRules(c *ruleChecks, docView any, opts ...valida
 		}
 		if b.OutputTransform != nil {
 			if b.OutputTransform.IsRef() {
-				if problem := transformRefProblem(b.OutputTransform.Ref, i.Transforms); problem != "" {
+				if problem := transformRefProblem(b.OutputTransform.Reference.Ref, i.Transforms); problem != "" {
 					c.violated("OBI-D-10", jsonPointer("bindings", k, "outputTransform", "$ref"), problem)
 				}
 			} else {

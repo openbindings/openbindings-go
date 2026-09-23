@@ -517,9 +517,9 @@ func excludedOpenAPISourceInterface(in *synthesize.SynthesizeInput) (*openbindin
 	}
 	entry := openbindings.Source{
 		BindingSpec: src.BindingSpec,
-		Location:    location,
+		Location:    openbindings.NonZero(location),
 		Content:     append(json.RawMessage(nil), src.Content...),
-		Description: src.Description,
+		Description: openbindings.NonZero(src.Description),
 	}
 	skeleton.Sources = map[string]openbindings.Source{DefaultSourceName: entry}
 	skeleton.Bindings = map[string]openbindings.BindingEntry{}

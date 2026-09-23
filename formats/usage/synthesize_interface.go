@@ -127,9 +127,9 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 
 	iface := openbindings.Interface{
 		OpenBindings: openbindings.MaxTestedVersion,
-		Name:         meta.Name,
-		Version:      meta.Version,
-		Description:  meta.About,
+		Name:         openbindings.NonZero(meta.Name),
+		Version:      openbindings.NonZero(meta.Version),
+		Description:  openbindings.NonZero(meta.About),
 		Operations:   map[string]openbindings.Operation{},
 		Sources: map[string]openbindings.Source{
 			DefaultSourceName: sourceEntry,
@@ -151,7 +151,7 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 		}
 		opKey := synthesize.UniqueKey(synthesize.SanitizeKey(name), usedOperationKeys)
 		usedOperationKeys[opKey] = true
-		op := openbindings.Operation{Description: help}
+		op := openbindings.Operation{Description: openbindings.NonZero(help)}
 		if len(path) > 1 {
 			op.Tags = make([]string, len(path)-1)
 			copy(op.Tags, path[:len(path)-1])
@@ -183,7 +183,7 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 			iface.Bindings[bindingKey] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Selector:  selector,
+				Selector:  openbindings.NonZero(selector),
 			}
 		}
 		return nil

@@ -143,8 +143,8 @@ func operationSchemaDefect(doc *document, op *asyncOperation) *authoringExclusio
 	}
 	probe := openbindings.Interface{
 		OpenBindings: openbindings.MaxTestedVersion,
-		Name:         "probe",
-		Version:      "0.0.0",
+		Name:         openbindings.Present("probe"),
+		Version:      openbindings.Present("0.0.0"),
 		Operations:   map[string]openbindings.Operation{"probe": probeOp},
 	}
 	if _, err := probe.Validate(); err != nil {

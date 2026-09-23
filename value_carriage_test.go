@@ -52,7 +52,7 @@ func TestInterfaceKnownJSONFieldsRetainNumbers(t *testing.T) {
 	if op.Input.(map[string]any)["minimum"] != json.Number("0.10000000000000000001") {
 		t.Fatalf("minimum changed: %#v", op.Input)
 	}
-	if op.Examples["wide"].Input != json.Number("9007199254740993") || op.Examples["wide"].Output != json.Number("1e400") {
+	if string(op.Examples["wide"].Input) != "9007199254740993" || string(op.Examples["wide"].Output) != "1e400" {
 		t.Fatalf("examples changed: %#v", op.Examples)
 	}
 	if _, err := json.Marshal(iface); err != nil {

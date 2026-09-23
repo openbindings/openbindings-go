@@ -21,7 +21,7 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []synthesize.S
 	}
 	represented := make(map[string]identity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		represented[binding.Selector] = identity{operation: binding.Operation, selector: binding.Selector}
+		represented[synthesize.ContractSelector(binding.Selector)] = identity{operation: binding.Operation, selector: synthesize.ContractSelector(binding.Selector)}
 	}
 	var entries []synthesize.SynthesisCoverageEntry
 	add := func(sourceRef, bindingSelector string, scope synthesize.SynthesisCoverageScope, exclusion *synthesize.SynthesisCoverageEntry) {

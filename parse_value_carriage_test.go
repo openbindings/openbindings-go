@@ -20,7 +20,7 @@ func TestPublicDocumentReadersRetainNumbers(t *testing.T) {
 					t.Fatal(err)
 				}
 				op := iface.Operations["test"]
-				if op.Input.(map[string]any)["minimum"] != json.Number(token) || op.Examples["exact"].Input != json.Number(token) {
+				if op.Input.(map[string]any)["minimum"] != json.Number(token) || string(op.Examples["exact"].Input) != token {
 					t.Fatalf("numeric fields changed: %#v", op)
 				}
 				output, err := json.Marshal(iface)

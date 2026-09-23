@@ -154,7 +154,7 @@ func PrepareProvider(options PreparedProviderOptions) (*PreparedProvider, error)
 			BindingKey:   binding.Key,
 			SourceKey:    binding.SourceKey,
 			BindingSpec:  binding.BindingSpec,
-			Selector:     binding.Selector,
+			Selector:     contractSelector(binding.Selector),
 			Supported:    supported,
 			binding:      binding,
 		}

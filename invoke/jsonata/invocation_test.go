@@ -43,7 +43,7 @@ func (b *echoBinding) InvokeBinding(ctx context.Context, _ *invoke.BindingInvoca
 func fixture(direction string, named, schema bool, expression string) *openbindings.Interface {
 	tor := &openbindings.TransformOrRef{Inline: expression}
 	if named {
-		tor = &openbindings.TransformOrRef{Ref: "#/transforms/map"}
+		tor = &openbindings.TransformOrRef{Reference: &openbindings.TransformReference{Ref: "#/transforms/map"}}
 	}
 	entry := openbindings.BindingEntry{Operation: "echo", Source: "test"}
 	if direction == "input" {

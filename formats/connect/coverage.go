@@ -29,8 +29,8 @@ func synthesisCoverage(
 	bySelector := make(map[string]coverageIdentity, len(iface.Bindings))
 	byOperation := make(map[string]coverageIdentity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		id := coverageIdentity{operationKey: binding.Operation, bindingSelector: binding.Selector}
-		bySelector[binding.Selector] = id
+		id := coverageIdentity{operationKey: binding.Operation, bindingSelector: synthesize.ContractSelector(binding.Selector)}
+		bySelector[synthesize.ContractSelector(binding.Selector)] = id
 		byOperation[binding.Operation] = id
 	}
 

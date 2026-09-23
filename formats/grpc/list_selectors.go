@@ -15,13 +15,13 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	var disc *discovery
 	var err error
 
-	if source.Content != nil || isProtoFile(source.Location) {
-		disc, err = discoverFromProto(ctx, source.Location, source.Content)
+	if source.Content != nil || isProtoFile(openbindings.Value(source.Location)) {
+		disc, err = discoverFromProto(ctx, openbindings.Value(source.Location), source.Content)
 		if err != nil {
 			return nil, fmt.Errorf("gRPC proto parse: %w", err)
 		}
 	} else {
-		addr := source.Location
+		addr := openbindings.Value(source.Location)
 		if addr == "" {
 			return nil, fmt.Errorf("gRPC source requires a location or content")
 		}
@@ -61,7 +61,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
 	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
-		target.Operation = &openbindings.Operation{Description: description}
+		target.Operation = &openbindings.Operation{Description: openbindings.NonZero(description)}
 	}
 	return target
 }

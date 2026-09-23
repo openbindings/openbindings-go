@@ -182,7 +182,7 @@ func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 		Sources: map[string]Source{
 			"both": {
 				BindingSpec: "openapi@3.1",
-				Location:    "https://api.example.com/api.json",
+				Location:    Present("https://api.example.com/api.json"),
 				Content:     json.RawMessage(`{"openapi": "3.1.0"}`),
 			},
 		},
@@ -231,7 +231,7 @@ func TestInterfaceValidate_SourceLocationFormatDefinedAddress(t *testing.T) {
 				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{},
 				Sources: map[string]Source{
-					"svc": {BindingSpec: "grpc@1.0", Location: addr},
+					"svc": {BindingSpec: "grpc@1.0", Location: Present(addr)},
 				},
 			}
 			if _, err := i.Validate(); err != nil {
@@ -249,7 +249,7 @@ func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
 				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{},
 				Sources: map[string]Source{
-					"api": {BindingSpec: "openapi@3.1", Location: loc},
+					"api": {BindingSpec: "openapi@3.1", Location: Present(loc)},
 				},
 			}
 			_, err := i.Validate()
@@ -532,14 +532,14 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
 				Operation: "op",
 				Source:    "api",
 				InputTransform: &TransformOrRef{
-					Ref: "#/transforms/nonexistent",
+					Reference: &TransformReference{Ref: "#/transforms/nonexistent"},
 				},
 			},
 		},
@@ -560,7 +560,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
 		},
 		Bindings: map[string]BindingEntry{
 			"nonexistent.api": {
@@ -609,7 +609,7 @@ func TestInterfaceValidate_EmptyInlineTransformRejected(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -638,13 +638,13 @@ func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 			"toApi": "{ amount: total * 100 }",
 		},
 		Sources: map[string]Source{
-			"stripe": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
+			"stripe": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/stripe.json")},
 		},
 		Bindings: map[string]BindingEntry{
 			"pay.stripe": {
 				Operation:      "pay",
 				Source:         "stripe",
-				InputTransform: &TransformOrRef{Ref: "#/transforms/toApi"},
+				InputTransform: &TransformOrRef{Reference: &TransformReference{Ref: "#/transforms/toApi"}},
 			},
 		},
 	}
@@ -689,8 +689,8 @@ func TestInterfaceValidate_ExampleValidation_ValidExamplePasses(t *testing.T) {
 		map[string]any{"type": "object", "properties": map[string]any{"greeting": map[string]any{"type": "string"}}},
 		map[string]OperationExample{
 			"basic": {
-				Input:  map[string]any{"name": "Alice"},
-				Output: map[string]any{"greeting": "Hello, Alice!"},
+				Input:  exampleValue(map[string]any{"name": "Alice"}),
+				Output: exampleValue(map[string]any{"greeting": "Hello, Alice!"}),
 			},
 		},
 	)
@@ -706,7 +706,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 		map[string]OperationExample{
 			"bad": {
 				// Missing required "name" field.
-				Input: map[string]any{"wrong": 42},
+				Input: exampleValue(map[string]any{"wrong": 42}),
 			},
 		},
 	)
@@ -736,7 +736,7 @@ func TestInterfaceValidate_ExampleValidation_UsesOBIDocumentRoot(t *testing.T) {
 		},
 		nil,
 		map[string]OperationExample{
-			"bad": {Input: map[string]any{"name": float64(42)}},
+			"bad": {Input: exampleValue(map[string]any{"name": float64(42)})},
 		},
 	)
 	if _, err := i.Validate(); !containsProblemSubstring(err, "OBI-D-11") {
@@ -751,7 +751,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 		map[string]OperationExample{
 			"bad": {
 				// "count" should be integer, not string; extra field also present.
-				Output: map[string]any{"count": "not-a-number", "extra": true},
+				Output: exampleValue(map[string]any{"count": "not-a-number", "extra": true}),
 			},
 		},
 	)
@@ -773,7 +773,7 @@ func TestInterfaceValidate_ExampleValidation_RunsByDefault(t *testing.T) {
 		nil,
 		map[string]OperationExample{
 			"bad": {
-				Input: map[string]any{"wrong": 42}, // missing required "name"
+				Input: exampleValue(map[string]any{"wrong": 42}), // missing required "name"
 			},
 		},
 	)
@@ -789,8 +789,8 @@ func TestInterfaceValidate_ExampleValidation_NoSchemasSkipsGracefully(t *testing
 		nil,
 		map[string]OperationExample{
 			"ex1": {
-				Input:  map[string]any{"anything": true},
-				Output: "arbitrary",
+				Input:  exampleValue(map[string]any{"anything": true}),
+				Output: exampleValue("arbitrary"),
 			},
 		},
 	)
@@ -817,7 +817,7 @@ func TestInterfaceValidate_ExampleValidation_ExampleWithoutInputOrOutput(t *test
 		map[string]any{"type": "object"},
 		map[string]any{"type": "object"},
 		map[string]OperationExample{
-			"empty": {Description: "an example with no data"},
+			"empty": {Description: Present("an example with no data")},
 		},
 	)
 	if _, err := i.Validate(); err != nil {
@@ -836,8 +836,8 @@ func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 			"greet": {
 				Input: map[string]any{"$ref": "#/schemas/Person"},
 				Examples: map[string]OperationExample{
-					"valid":   {Input: map[string]any{"name": "Bob"}},
-					"invalid": {Input: map[string]any{"wrong": 1}},
+					"valid":   {Input: exampleValue(map[string]any{"name": "Bob"})},
+					"invalid": {Input: exampleValue(map[string]any{"wrong": 1})},
 				},
 			},
 		},
@@ -967,7 +967,7 @@ func TestInterfaceValidate_ExampleValidation_ExternalRefAbstains(t *testing.T) {
 		map[string]any{"$ref": "https://schemas.example.com/user.json"},
 		nil,
 		map[string]OperationExample{
-			"opaque": {Input: map[string]any{"anything": true}},
+			"opaque": {Input: exampleValue(map[string]any{"anything": true})},
 		},
 	)
 	if _, err := i.Validate(); err != nil {
@@ -987,7 +987,7 @@ func TestInterfaceValidate_ExampleValidation_ExternalRefInSchemasMapAbstains(t *
 			"greet": {
 				Input: map[string]any{"$ref": "#/schemas/User"},
 				Examples: map[string]OperationExample{
-					"opaque": {Input: map[string]any{"anything": true}},
+					"opaque": {Input: exampleValue(map[string]any{"anything": true})},
 				},
 			},
 		},
@@ -1008,7 +1008,7 @@ func TestInterfaceValidate_ExampleValidation_InternalRefStillValidated(t *testin
 			"greet": {
 				Input: map[string]any{"$ref": "#/schemas/User"},
 				Examples: map[string]OperationExample{
-					"bad": {Input: map[string]any{"wrong": 42}},
+					"bad": {Input: exampleValue(map[string]any{"wrong": 42})},
 				},
 			},
 		},
@@ -1176,7 +1176,7 @@ func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"op": {}},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
 		},
 		Transforms: map[string]Transform{
 			"nontrivial":      `items[price > 10].{ "label": name & " ($" & $string(price) & ")", "total": price * quantity }`,
@@ -1199,7 +1199,7 @@ func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"op": {}},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
 		},
 		Transforms: map[string]Transform{
 			"unbalanced": "(a + b",
@@ -1310,7 +1310,7 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsAreDiagnosed(t *test
 		Sources: map[string]Source{
 			"src": {
 				BindingSpec: "openapi@3.1",
-				Location:    "https://api.example.com/api.json",
+				Location:    Present("https://api.example.com/api.json"),
 				LosslessFields: LosslessFields{
 					Unknown: map[string]json.RawMessage{
 						"unknownField": json.RawMessage(`{"value":"unknownFieldValue"}`),
@@ -1341,7 +1341,7 @@ func TestInterfaceValidate_OperationExampleUnknownFieldsAreDiagnosed(t *testing.
 			"op": {
 				Examples: map[string]OperationExample{
 					"ex1": {
-						Description: "test",
+						Description: Present("test"),
 						LosslessFields: LosslessFields{
 							Unknown: map[string]json.RawMessage{
 								"unknownField": json.RawMessage(`"bad"`),
@@ -1362,7 +1362,7 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsAreDiagnosed(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {

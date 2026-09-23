@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	openbindings "github.com/openbindings/openbindings-go"
 	"strings"
 	"testing"
 
@@ -204,8 +205,8 @@ func TestConvertToInterface_CreatesBindingsWithSelectors(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Selector != "testpkg.TestService/GetItem" {
-		t.Errorf("selector = %q, want %q", binding.Selector, "testpkg.TestService/GetItem")
+	if binding.Selector == nil || *binding.Selector != "testpkg.TestService/GetItem" {
+		t.Errorf("selector = %q, want %q", openbindings.Value(binding.Selector), "testpkg.TestService/GetItem")
 	}
 	if binding.Operation != "GetItem" {
 		t.Errorf("operation = %q, want %q", binding.Operation, "GetItem")
@@ -228,8 +229,8 @@ func TestConvertToInterface_CreatesSourceEntry(t *testing.T) {
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
-	if src.Location != "api.example.com:443" {
-		t.Errorf("location = %q, want %q", src.Location, "api.example.com:443")
+	if src.Location == nil || *src.Location != "api.example.com:443" {
+		t.Errorf("location = %q, want %q", openbindings.Value(src.Location), "api.example.com:443")
 	}
 }
 
@@ -334,8 +335,8 @@ func TestConvertToInterface_SingleServiceName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if iface.Name != "ItemService" {
-		t.Errorf("name = %q, want %q", iface.Name, "ItemService")
+	if iface.Name == nil || *iface.Name != "ItemService" {
+		t.Errorf("name = %q, want %q", openbindings.Value(iface.Name), "ItemService")
 	}
 }
 
@@ -369,8 +370,8 @@ func TestConvertToInterface_MultiServiceUsesPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if iface.Name != "testpkg" {
-		t.Errorf("name = %q, want %q", iface.Name, "testpkg")
+	if iface.Name == nil || *iface.Name != "testpkg" {
+		t.Errorf("name = %q, want %q", openbindings.Value(iface.Name), "testpkg")
 	}
 }
 

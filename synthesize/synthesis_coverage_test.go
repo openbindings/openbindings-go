@@ -13,10 +13,10 @@ func synthesisCoverageTestInterface() *openbindings.Interface {
 			"getUser": {},
 		},
 		Sources: map[string]openbindings.Source{
-			"api": {BindingSpec: "openbindings.example@1", Location: "https://example.com/spec"},
+			"api": {BindingSpec: "openbindings.example@1", Location: openbindings.Present("https://example.com/spec")},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"getUser.api": {Operation: "getUser", Source: "api", Selector: "#/getUser"},
+			"getUser.api": {Operation: "getUser", Source: "api", Selector: openbindings.Present("#/getUser")},
 		},
 	}
 }

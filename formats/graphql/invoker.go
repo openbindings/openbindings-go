@@ -425,22 +425,22 @@ func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.I
 		items = append(items, item{key: key, binding: binding})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].binding.Selector < items[j].binding.Selector
+		return synthesize.ContractSelector(items[i].binding.Selector) < synthesize.ContractSelector(items[j].binding.Selector)
 	})
 	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(items))
 	for _, item := range items {
 		requirements := []string{"document"}
-		if strings.HasPrefix(item.binding.Selector, "subscription/") {
+		if strings.HasPrefix(synthesize.ContractSelector(item.binding.Selector), "subscription/") {
 			requirements = append(requirements, "subscriptionTarget")
 		}
 		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex:     0,
-			SourceRef:       item.binding.Selector,
+			SourceRef:       synthesize.ContractSelector(item.binding.Selector),
 			Scope:           synthesize.SynthesisCoverageTarget,
 			Status:          synthesize.SynthesisRepresented,
 			OperationKey:    item.binding.Operation,
 			BindingKey:      item.key,
-			BindingSelector: item.binding.Selector,
+			BindingSelector: synthesize.ContractSelector(item.binding.Selector),
 			Requirements:    requirements,
 		})
 	}

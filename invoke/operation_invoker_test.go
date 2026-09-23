@@ -355,23 +355,23 @@ func opTestInterface() *openbindings.Interface {
 			"uploadChunks": {},
 		},
 		Sources: map[string]openbindings.Source{
-			"mock": {BindingSpec: "mock@1.0", Location: "mem://mock"},
+			"mock": {BindingSpec: "mock@1.0", Location: openbindings.Present("mem://mock")},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"ping.main":    {Operation: "ping", Source: "mock", Selector: "ping"},
-			"getUser.main": {Operation: "getUser", Source: "mock", Selector: "getUser", Preference: pf(99)},
-			"getUser.bad":  {Operation: "getUser", Source: "mock", Selector: "badUser", Preference: pf(1)},
+			"ping.main":    {Operation: "ping", Source: "mock", Selector: openbindings.Present("ping")},
+			"getUser.main": {Operation: "getUser", Source: "mock", Selector: openbindings.Present("getUser"), Preference: openbindings.Present[int64](99)},
+			"getUser.bad":  {Operation: "getUser", Source: "mock", Selector: openbindings.Present("badUser"), Preference: openbindings.Present[int64](1)},
 			"echo.transformed": {
-				Operation: "echo", Source: "mock", Selector: "echoInput",
+				Operation: "echo", Source: "mock", Selector: openbindings.Present("echoInput"),
 				InputTransform: &openbindings.TransformOrRef{Inline: "idToUserId"},
 			},
-			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Selector: "watchOrders", Preference: pf(99)},
+			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Selector: openbindings.Present("watchOrders"), Preference: openbindings.Present[int64](99)},
 			"watchOrders.challenge": {
-				Operation: "watchOrders", Source: "mock", Selector: "watchThenChallenge", Preference: pf(1),
+				Operation: "watchOrders", Source: "mock", Selector: openbindings.Present("watchThenChallenge"), Preference: openbindings.Present[int64](1),
 			},
-			"watchTyped.main":   {Operation: "watchTyped", Source: "mock", Selector: "streamBadSecond"},
-			"chat.main":         {Operation: "chat", Source: "mock", Selector: "chat"},
-			"uploadChunks.main": {Operation: "uploadChunks", Source: "mock", Selector: "uploadChunks"},
+			"watchTyped.main":   {Operation: "watchTyped", Source: "mock", Selector: openbindings.Present("streamBadSecond")},
+			"chat.main":         {Operation: "chat", Source: "mock", Selector: openbindings.Present("chat")},
+			"uploadChunks.main": {Operation: "uploadChunks", Source: "mock", Selector: openbindings.Present("uploadChunks")},
 		},
 	}
 }
@@ -1190,8 +1190,8 @@ func TestSelectBinding_FormatSkippedNamesTheGap(t *testing.T) {
 	iface := &openbindings.Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"listItems": {}},
-		Sources:      map[string]openbindings.Source{"api": {BindingSpec: "openapi@3.1.0", Location: "https://x.test/spec.json"}},
-		Bindings:     map[string]openbindings.BindingEntry{"listItems.api": {Operation: "listItems", Source: "api", Selector: "#/paths/~1items/get"}},
+		Sources:      map[string]openbindings.Source{"api": {BindingSpec: "openapi@3.1.0", Location: openbindings.Present("https://x.test/spec.json")}},
+		Bindings:     map[string]openbindings.BindingEntry{"listItems.api": {Operation: "listItems", Source: "api", Selector: openbindings.Present("#/paths/~1items/get")}},
 	}
 	_, _, err := selectBinding(iface, "listItems", map[string]bool{"mock@1.0": true})
 	if !errors.Is(err, ErrBindingNotFound) {
@@ -1217,13 +1217,13 @@ func selectionTestInterface() *openbindings.Interface {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"op": {}},
 		Sources: map[string]openbindings.Source{
-			"a": {BindingSpec: "mock@1.0", Location: "https://a.test"},
-			"b": {BindingSpec: "mock@1.0", Location: "https://b.test"},
+			"a": {BindingSpec: "mock@1.0", Location: openbindings.Present("https://a.test")},
+			"b": {BindingSpec: "mock@1.0", Location: openbindings.Present("https://b.test")},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"op.declared":    {Operation: "op", Source: "a", Selector: "r1", Preference: pf(-5)},
-			"op.undeclared":  {Operation: "op", Source: "b", Selector: "r2"},
-			"op.undeclared2": {Operation: "op", Source: "b", Selector: "r3"},
+			"op.declared":    {Operation: "op", Source: "a", Selector: openbindings.Present("r1"), Preference: openbindings.Present[int64](-5)},
+			"op.undeclared":  {Operation: "op", Source: "b", Selector: openbindings.Present("r2")},
+			"op.undeclared2": {Operation: "op", Source: "b", Selector: openbindings.Present("r3")},
 		},
 	}
 }
@@ -1237,8 +1237,8 @@ func TestSelectBinding_RefusesAmbiguityWithoutInventedPolicy(t *testing.T) {
 	// Preference, deprecation, and lexicographic order remain metadata, not
 	// implicit authority to choose.
 	entry := iface.Bindings["op.declared"]
-	entry.Deprecated = true
-	entry.Preference = pf(1000)
+	entry.Deprecated = openbindings.Present(true)
+	entry.Preference = openbindings.Present[int64](1000)
 	iface.Bindings["op.declared"] = entry
 	if _, _, err := selectBinding(iface, "op", nil); !errors.Is(err, ErrBindingSelectionRequired) {
 		t.Fatalf("metadata must not resolve ambiguity, got %v", err)
@@ -1306,7 +1306,7 @@ func TestInvoke_SelectionOverrideViaConfiguration(t *testing.T) {
 	mock := &mockBindingInvoker{}
 	op := newOpInvoker(mock, nil)
 	iface := opTestInterface()
-	iface.Bindings["ping.alt"] = openbindings.BindingEntry{Operation: "ping", Source: "mock", Selector: "ping", Preference: pf(-1)}
+	iface.Bindings["ping.alt"] = openbindings.BindingEntry{Operation: "ping", Source: "mock", Selector: openbindings.Present("ping"), Preference: openbindings.Present[int64](-1)}
 
 	op.BindingSelector = nil
 	if _, err := drainOutputs(t, Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"))); codeOf(t, err) != ErrCodeBindingSelectionRequired {

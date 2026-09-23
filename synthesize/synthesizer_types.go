@@ -52,9 +52,9 @@ func SynthesisSkeleton(in *SynthesizeInput) (openbindings.Interface, error) {
 	}
 	iface := openbindings.Interface{
 		OpenBindings: version,
-		Name:         name,
-		Version:      contractVersion,
-		Description:  description,
+		Name:         openbindings.NonZero(name),
+		Version:      openbindings.NonZero(contractVersion),
+		Description:  openbindings.NonZero(description),
 		Operations:   map[string]openbindings.Operation{},
 	}
 	if _, err := iface.Validate(); err != nil {
@@ -79,13 +79,13 @@ func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defau
 		iface.OpenBindings = in.OpenBindingsVersion
 	}
 	if in.Name != "" {
-		iface.Name = in.Name
+		iface.Name = openbindings.NonZero(in.Name)
 	}
 	if in.Version != "" {
-		iface.Version = in.Version
+		iface.Version = openbindings.NonZero(in.Version)
 	}
 	if in.Description != "" {
-		iface.Description = in.Description
+		iface.Description = openbindings.NonZero(in.Description)
 	}
 
 	entry, ok := iface.Sources[defaultSourceName]
@@ -94,10 +94,10 @@ func FinalizeSynthesis(iface *openbindings.Interface, in *SynthesizeInput, defau
 	}
 	entry.BindingSpec = bindingSpec
 	if src.OutputLocation != "" {
-		entry.Location = src.OutputLocation
+		entry.Location = openbindings.NonZero(src.OutputLocation)
 	}
 	if src.Description != "" {
-		entry.Description = src.Description
+		entry.Description = openbindings.NonZero(src.Description)
 	}
 	outputName := defaultSourceName
 	if src.Name != "" {

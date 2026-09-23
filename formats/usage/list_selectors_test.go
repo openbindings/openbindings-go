@@ -94,7 +94,7 @@ arg "<pattern>" help="Search pattern"
 			found = true
 			var description string
 			if selector.Operation != nil {
-				description = selector.Operation.Description
+				description = openbindings.Value(selector.Operation.Description)
 			}
 			if description != "Search for patterns" {
 				t.Errorf("root description = %q, want %q", description, "Search for patterns")
@@ -155,7 +155,7 @@ cmd "farewell" help="Say goodbye"
 
 	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createSelectors[b.Selector] = true
+		createSelectors[openbindings.Value(b.Selector)] = true
 	}
 
 	synthesizer := NewSynthesizer()

@@ -16,8 +16,8 @@ func TestFinalizeSynthesisAppliesSharedAuthoringDirectives(t *testing.T) {
 	iface := openbindings.Interface{
 		OpenBindings: openbindings.MaxTestedVersion,
 		Operations:   map[string]openbindings.Operation{"run": {}},
-		Sources:      map[string]openbindings.Source{"default": {BindingSpec: "example.spec@1", Location: "https://old.example/spec"}},
-		Bindings:     map[string]openbindings.BindingEntry{"run.default": {Operation: "run", Source: "default", Selector: "run"}},
+		Sources:      map[string]openbindings.Source{"default": {BindingSpec: "example.spec@1", Location: openbindings.Present("https://old.example/spec")}},
+		Bindings:     map[string]openbindings.BindingEntry{"run.default": {Operation: "run", Source: "default", Selector: openbindings.Present("run")}},
 	}
 	in := &SynthesizeInput{
 		OpenBindingsVersion: openbindings.MaxTestedVersion,
@@ -34,11 +34,11 @@ func TestFinalizeSynthesisAppliesSharedAuthoringDirectives(t *testing.T) {
 	if err := FinalizeSynthesis(&iface, in, "default", "example.spec@1"); err != nil {
 		t.Fatal(err)
 	}
-	if iface.Name != "contract" || iface.Version != "v1" || iface.Description != "interface description" {
+	if (iface.Name == nil || *iface.Name != "contract") || (iface.Version == nil || *iface.Version != "v1") || (iface.Description == nil || *iface.Description != "interface description") {
 		t.Fatalf("interface overrides were not applied: %+v", iface)
 	}
 	source, ok := iface.Sources["artifact"]
-	if !ok || source.Location != "https://published.example/spec" || source.Description != "source description" {
+	if !ok || (source.Location == nil || *source.Location != "https://published.example/spec") || (source.Description == nil || *source.Description != "source description") {
 		t.Fatalf("source directives were not applied: %+v", iface.Sources)
 	}
 	if iface.Bindings["run.default"].Source != "artifact" {

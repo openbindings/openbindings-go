@@ -28,11 +28,11 @@ func TestOperationInvokerSelectionUsesAuthoritativeSupport(t *testing.T) {
 		Sources: map[string]openbindings.Source{
 			"hidden": {
 				BindingSpec: "example.hidden@1",
-				Location:    "https://example.test/source",
+				Location:    openbindings.Present("https://example.test/source"),
 			},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"ping.hidden": {Operation: "ping", Source: "hidden", Selector: "ping"},
+			"ping.hidden": {Operation: "ping", Source: "hidden", Selector: openbindings.Present("ping")},
 		},
 	}
 

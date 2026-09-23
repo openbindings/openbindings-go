@@ -375,10 +375,10 @@ func (e *OperationInvoker) PreflightOperation(ctx context.Context, obi *openbind
 	return e.PreflightBinding(ctx, &BindingInvocationArgs{
 		Source: InvocationSource{
 			BindingSpec: source.BindingSpec,
-			Location:    source.Location,
+			Location:    sourceLocation(source.Location),
 			Content:     source.Content,
 		},
-		Selector:    binding.Selector,
+		Selector:    contractSelector(binding.Selector),
 		Binding:     binding,
 		Context:     cfg.context,
 		Interface:   obi,
@@ -453,10 +453,10 @@ func (e *OperationInvoker) runCompiled(
 		a := &BindingInvocationArgs{
 			Source: InvocationSource{
 				BindingSpec: source.BindingSpec,
-				Location:    source.Location,
+				Location:    sourceLocation(source.Location),
 				Content:     source.Content,
 			},
-			Selector:    binding.Selector,
+			Selector:    contractSelector(binding.Selector),
 			Binding:     binding,
 			Context:     contextData,
 			Interface:   iface,
@@ -470,7 +470,7 @@ func (e *OperationInvoker) runCompiled(
 			InvokedAs:   invokedAs,
 			BindingKey:  bindingKey,
 			BindingSpec: source.BindingSpec,
-			Selector:    binding.Selector,
+			Selector:    contractSelector(binding.Selector),
 		}
 		if inv := e.invoker.findInvoker(source.BindingSpec); inv != nil {
 			stampSite(site, inv)
@@ -977,7 +977,7 @@ func evaluateTransform(ctx context.Context, eval TransformEvaluator, transforms 
 	expr, ok := tor.Resolve(transforms)
 	if !ok {
 		if tor.IsRef() {
-			return nil, fmt.Errorf("%w: %q", ErrTransformRefNotFound, tor.Ref)
+			return nil, fmt.Errorf("%w: %q", ErrTransformRefNotFound, tor.Reference.Ref)
 		}
 		return nil, fmt.Errorf("openbindings: invalid transform: neither ref nor inline")
 	}
