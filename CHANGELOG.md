@@ -6,6 +6,18 @@
 
 ### Fixed
 
+- **One operation's evidence no longer depends on another's, and the same
+  bytes give the same report.** The library shared state across the
+  operations of a document, and listed the members `additionalProperties:
+  false` rejects in map order: one document gave four different OBI-D-11
+  reports over 200 runs.
+- **Validating a document takes time in proportion to it.** Each schema was
+  processed on a copy of the library's bookkeeping for the whole document, so
+  an ordinary document compiled in quadratic time. ValidateDocument on
+  Stripe's API (612 operations, 1,537 schemas) takes about 1 s, from 5.5 s;
+  a 1.1 MB document whose schemas all reference one another, 3.3 s from 37
+  s, the rest being the library's own compile. Payload validation is
+  unchanged, a few microseconds.
 - **The model encodes only what it would decode back unchanged.** A member
   carried as raw JSON (an example value, source content, or an
   `Extensions`/`Unknown` entry) holding what decoding refuses (an escaped
@@ -288,6 +300,50 @@
 
 ### Changed
 
+- **Operation schemas reach the schema library as a bundle, and core
+  resolves every reference** (breaking, pre-1.0). The OBI document is no
+  longer handed to the library whole, with root members named like schema
+  keywords withheld. Core resolves each reference with the one resolver
+  OBI-D-16 uses, and gives the library a JSON Schema 2020-12 bundle (§9.3)
+  holding copies of the schemas an operation's graph uses; a resource that
+  declares `$id` keeps it, and the library resolves within it as it does any
+  schema. The answers that change:
+  - **Strict 2020-12.** `dependencies`, `$recursiveRef`, and
+    `$recursiveAnchor` constrain nothing, though the library would evaluate
+    them in a 2020-12 schema. An `$id` or anchor inside `definitions` or
+    `dependencies` declares nothing: an absolute reference to such an `$id`
+    points outside the document, so its examples are outside OBI-D-11 and a
+    document can go from non-conformant to conformant, and a plain-name
+    reference to such an anchor violates OBI-D-16. OBI-D-05 and OBI-D-16 no
+    longer judge references inside those entries (a relative `$ref`, a
+    malformed or percent-encoded one, a relative `$id`, `$dynamicRef`,
+    `$dynamicAnchor`, a fragment that resolves nowhere); OBI-D-06, OBI-D-07,
+    and OBI-D-17 still follow the meta-schema into them.
+  - **RFC 3986.** A reference under a base whose path is not hierarchical
+    resolves as the RFC says: `b` against `urn:x:y` is `urn:b`, where the
+    library's reading kept `urn:x:y`. A graph holding such a relative
+    reference gets no verdict, since the library resolves it otherwise.
+  - **References into the document root resolve,** whatever the member is
+    named: `#/$defs/a` or `#/dependencies/d` names that location, and gets a
+    verdict. A same-document fragment inside a resource whose `$id` resolves
+    to no URI also gets one.
+  - **No verdict** where the library would answer wrongly or the spec does
+    not decide: a schema reached outside the schema positions that declares
+    `$id`, `$anchor`, or `$dynamicAnchor` (only schema positions declare
+    them, §7); a `$dynamicRef` applied to property names, which the library
+    checks without the dynamic scope; a cycle of references that never
+    advances, under `if` or `not` too, where the library answered as if it
+    were an ordinary failure; and a graph holding a `$dynamicRef` in a
+    document whose schemas declare `$dynamicAnchor` outside every resource
+    (OBI-D-05).
+  - **A resource is given to the library whole.** The library compiles a
+    whole resource when any part of it is used, so a part of an `$id`
+    resource the graph does not reach, referencing a resource outside the
+    document or holding a number beyond the numeric limits, leaves the graph
+    without a verdict. 335d530 read the first as reaching outside, and
+    skipped the examples.
+  - An `$id` that names a meta-schema the library carries names the schema
+    the document embeds, as before.
 - **The version API states the supported set and the version documents
   declare** (breaking, pre-1.0). `MinSupportedVersion`, `MaxTestedVersion`,
   and `SupportedRange` are removed: they named a tested range, which §8.1

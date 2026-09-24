@@ -314,7 +314,10 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // complete: a graph that reaches a resource the document does not embed, has
 // a reference that does not resolve, or holds a schema that is not
 // well-formed yields a *SchemaGraphUnavailableError, even where no value
-// would exercise that part of it. A JSON Schema meta-schema is outside the
+// would exercise that part of it. The schema library is given the schemas the
+// graph uses as a JSON Schema 2020-12 bundle, never the OBI document itself,
+// and evaluates strictly as 2020-12: dependencies, $recursiveRef, and
+// $recursiveAnchor constrain nothing. A JSON Schema meta-schema is outside the
 // document but available: the schema library carries it. A document is
 // interpreted only under a supported version: one declaring a well-formed
 // version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
