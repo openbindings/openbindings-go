@@ -345,3 +345,49 @@ func TestDocumentModel_RetainsNoPartOfTheInput(t *testing.T) {
 		t.Fatalf("decoded members alias the input: %s %s %s", source.Content, source.Unknown["later"], source.Extensions["x-note"])
 	}
 }
+
+// The model encodes only what it would decode back unchanged: a member it
+// carries as raw JSON holding what decoding refuses fails encoding, where
+// encoding/json would write it out or alter it.
+func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
+	deep := json.RawMessage(strings.Repeat("[", 10001) + strings.Repeat("]", 10001))
+	for name, raw := range map[string]json.RawMessage{
+		"an escaped lone surrogate": json.RawMessage(`"\ud800"`),
+		"a repeated name":           json.RawMessage(`{"a":1,"a":2}`),
+		"invalid UTF-8":             json.RawMessage("\"\xff\""),
+		"no JSON value":             json.RawMessage(`{"a":}`),
+		"nesting past the decoder":  deep,
+	} {
+		for position, value := range map[string]any{
+			"example input":     OperationExample{Input: raw},
+			"source content":    Source{BindingSpec: "x@1", Content: raw},
+			"an extension":      Operation{LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": raw}}},
+			"an unknown member": BindingEntry{Operation: "a", Source: "s", LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"extra": raw}}},
+		} {
+			if encoded, err := json.Marshal(value); err == nil {
+				t.Errorf("%s in %s encoded as %s", name, position, encoded)
+			}
+		}
+	}
+	encoded, err := json.Marshal(Operation{LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": nil}}})
+	if err != nil || string(encoded) != `{"x-a":null}` {
+		t.Fatalf("a nil entry is a present null: %s, %v", encoded, err)
+	}
+}
+
+// Validation of a host object judges the document it encodes, so an object
+// the model cannot encode exactly is not validated: an escaped lone surrogate
+// the encoding would have replaced with U+FFFD no longer passes a const of
+// U+FFFD.
+func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
+	iface := Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
+		Input:    map[string]any{"const": "\ufffd"},
+		Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"\ud800"`)}},
+	}}}
+	if report, err := iface.Validate(ValidateOptions{}); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
+		t.Fatalf("want an encoding error and no report, got %v, %+v", err, report)
+	}
+	if _, err := CompileOperationSchema(&iface, "op", "input"); err == nil || errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("want an encoding error, got %v", err)
+	}
+}

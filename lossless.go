@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +34,9 @@ import (
 // UTF-8, a duplicate member name in any object, and a string escaping a lone
 // UTF-16 surrogate, which a Go string cannot hold and encoding/json would
 // replace with U+FFFD. Members are matched by exact name, never case-folded.
+// Encoding refuses the same in the members the model carries as raw JSON (an
+// example value, source content, and the members LosslessFields keeps), so
+// the model encodes only what it would decode back unchanged.
 
 // LosslessFields is embedded in every OBI-defined object type to carry the
 // members its typed fields do not: Extensions holds `x-` members (§12) and
@@ -40,7 +45,8 @@ import (
 //
 // An entry whose name is a typed member's name is never encoded: the typed
 // field alone states that member, so a nil field is absent whatever these maps
-// hold.
+// hold. Every other entry must hold JSON decoding would accept, or encoding
+// fails; a nil entry encodes as null.
 type LosslessFields struct {
 	// Extensions holds `x-` members. An entry whose name lacks the prefix is
 	// encoded all the same, and decodes into Unknown.
@@ -297,6 +303,9 @@ func preferenceValue(token string) (int64, bool) {
 // encodeObject encodes an OBI-defined object: typed, the method-less
 // counterpart of its type, and the members its lossless fields carry.
 func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
+	if err := verifyRawMembers(typed, lossless); err != nil {
+		return nil, err
+	}
 	data, err := json.Marshal(typed)
 	if err != nil {
 		return nil, err
@@ -317,6 +326,40 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 		}
 	}
 	return json.Marshal(members)
+}
+
+// verifyRawMembers refuses a member an OBI-defined object carries as raw JSON,
+// and would encode, holding what decoding refuses: bytes that are not one
+// JSON value of valid UTF-8, a repeated member name, an escaped lone UTF-16
+// surrogate, or nesting deeper than the decoder reads. encoding/json would
+// write such bytes out, or alter them, and the document they made would not
+// be the one the model holds.
+func verifyRawMembers(typed any, lossless LosslessFields) error {
+	value := reflect.ValueOf(typed)
+	table := membersOf(value.Type())
+	for _, field := range table.fields {
+		if field.class != memberRaw {
+			continue
+		}
+		if raw := value.Field(field.index).Interface().(json.RawMessage); len(raw) > 0 {
+			if err := verifyExactJSON(raw); err != nil {
+				return fmt.Errorf("%s: %w", field.name, err)
+			}
+		}
+	}
+	for _, carried := range []map[string]json.RawMessage{lossless.Extensions, lossless.Unknown} {
+		for _, name := range slices.Sorted(maps.Keys(carried)) {
+			// An entry named like a typed member is never encoded, and a nil
+			// entry encodes as a present null.
+			if table.typed[name] || carried[name] == nil {
+				continue
+			}
+			if err := verifyExactJSON(carried[name]); err != nil {
+				return fmt.Errorf("member %s: %w", strconv.Quote(name), err)
+			}
+		}
+	}
+	return nil
 }
 
 // rejectNullElements refuses a null element in an array or object of

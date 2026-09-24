@@ -24,7 +24,7 @@ import (
 func ParseDocument(data []byte) (*Interface, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
-		if refusal := declaredVersionRefusal(declaredVersionOf(data)); refusal != nil {
+		if refusal := inputVersionRefusal(data); refusal != nil {
 			return nil, refusal
 		}
 		if errors.Is(err, errNestingLimit) {

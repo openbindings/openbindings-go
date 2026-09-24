@@ -108,8 +108,9 @@ func TestVerifyExactJSON_WorkIsLinear(t *testing.T) {
 }
 
 // The exact scan walks with its own stack. It finds exactly what a recursive
-// walk of the same input finds: the first repeated name and the first lone
-// surrogate, at the same locations.
+// walk of the same input finds: the first repeated name and, before it, the
+// first lone surrogate, at the same locations. (The recursive walk stops at
+// the repeat; the scan reads on.)
 func FuzzExactScan(f *testing.F) {
 	for _, seed := range []string{`{}`, `[]`, `{"a":[1,{"b":2,"b":3}]}`, `[[],[{}],{"\ud800":1}]`, `{"a":{"x":"\udc00"},"a":2}`, `[0,"\ud800",[1,2,{"c":{"c":1,"c":2}}]]`, `"x"`, `{"":{"":[{"":1,"":2}]}}`} {
 		f.Add(seed)
@@ -119,11 +120,17 @@ func FuzzExactScan(f *testing.F) {
 		if !utf8.Valid(b) || !json.Valid(b) {
 			return
 		}
-		var scan exactScan
-		got := scan.run(b)
+		scan := exactScan{b: b}
+		if err := scan.run(); err != nil {
+			t.Fatalf("%s: valid JSON refused: %v", input, err)
+		}
+		var got error
+		if scan.repeat != nil {
+			got = scan.repeat
+		}
 		var want recursiveScan
 		_, wantErr := want.value(b, skipJSONSpace(b, 0), nil)
-		if fmt.Sprint(got) != fmt.Sprint(wantErr) || fmt.Sprint(scan.lone) != fmt.Sprint(want.lone) {
+		if fmt.Sprint(got) != fmt.Sprint(wantErr) || wantErr == nil && fmt.Sprint(scan.lone) != fmt.Sprint(want.lone) {
 			t.Fatalf("%s: scan %v / %v, recursive walk %v / %v", input, got, scan.lone, wantErr, want.lone)
 		}
 	})
@@ -177,5 +184,54 @@ func (s *recursiveScan) value(b []byte, i int, tokens []string) (int, error) {
 		return end, nil
 	default:
 		return jsonValueEnd(b, i), nil
+	}
+}
+
+// The exact scan accepts exactly what encoding/json accepts as one JSON value,
+// wherever encoding/json can read it, and needs nothing from encoding/json
+// to decide (it reads deeper input in full).
+func FuzzExactScanValidity(f *testing.F) {
+	for _, seed := range []string{`{}`, ` [1, 2.5e-3, -0, true, false, null] `, `{"a":"\u00e9\n"}`, `01`, `[1,]`, `{"a" 1}`, `"\x"`, `"\u12"`, `1.`, `-`, `1e+`, `tru`, `nul`, `{"a":1}{}`, `[`, `"\ud800\udc00"`, "\"\x01\""} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		b := []byte(input)
+		if !utf8.Valid(b) || strings.Count(input, "[")+strings.Count(input, "{") >= jsonNestingLimit {
+			return
+		}
+		scan := exactScan{b: b}
+		if err := scan.run(); (err == nil) != json.Valid(b) {
+			t.Fatalf("%q: scan %v, encoding/json valid %v", input, err, json.Valid(b))
+		}
+	})
+}
+
+// A syntax error is worded as encoding/json words its own, at any depth.
+func TestExactScan_SyntaxErrors(t *testing.T) {
+	for input, want := range map[string]string{
+		``:              "unexpected end of JSON input",
+		`   `:           "unexpected end of JSON input",
+		`{"a":1`:        "unexpected end of JSON input",
+		`x`:             "invalid character 'x' looking for beginning of value",
+		`01`:            "invalid character '1' after top-level value",
+		`[1,]`:          "invalid character ']' looking for beginning of value",
+		`[1 2]`:         "invalid character '2' after array element",
+		`{"a" 1}`:       "invalid character '1' after object key",
+		`{"a":1 "b":2}`: "invalid character '\"' after object key:value pair",
+		`{1:2}`:         "invalid character '1' looking for beginning of object key string",
+		`{"a":1,}`:      "invalid character '}' looking for beginning of object key string",
+		"\"\x01\"":      "invalid character '\\x01' in string literal",
+		`"\x"`:          "invalid character 'x' in string escape code",
+		`"\u12x4"`:      "invalid character 'x' in \\u hexadecimal character escape",
+		`-x`:            "invalid character 'x' in numeric literal",
+		`1.x`:           "invalid character 'x' after decimal point in numeric literal",
+		`1ex`:           "invalid character 'x' in exponent of numeric literal",
+		`trux`:          "invalid character 'x' in literal true (expecting 'e')",
+		`{} []`:         "invalid character '[' after top-level value",
+	} {
+		scan := exactScan{b: []byte(input)}
+		if err := scan.run(); err == nil || err.Error() != want {
+			t.Errorf("%q: got %v, want %q", input, err, want)
+		}
 	}
 }

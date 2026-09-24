@@ -666,9 +666,9 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 }
 
 // The version is read from exactly one JSON value whose root object has one
-// openbindings member, as the decoder reads it, at any depth and after any
-// leading byte-order mark.
-func FuzzDeclaredVersionOf(f *testing.F) {
+// openbindings member holding a string, at any depth and after any leading
+// byte-order mark.
+func FuzzDeclaredVersion(f *testing.F) {
 	for _, seed := range []string{`{"openbindings":"0.9.0"}`, `{"openbindings":"0.9.0","openbindings":"0.9.0"}`, `{"a":[{"openbindings":"0.9.0"}],"openbindings":"1.0.0"}`,
 		`{"openbindings":"0.9.0"} {}`, `{"openbindings":"0.9.0",}`, `{"\u006fpenbindings":"0.9.0"}`, `[{"openbindings":"0.9.0"}]`, `{"openbindings":{"a":1}}`, `{"openbindings":"0.9.0"`} {
 		f.Add([]byte(seed))
@@ -677,8 +677,8 @@ func FuzzDeclaredVersionOf(f *testing.F) {
 		if bytes.Count(data, []byte("["))+bytes.Count(data, []byte("{")) >= 10000 {
 			return // past the depth json.Valid reads, the reference below does not apply
 		}
-		got, _ := declaredVersionOf(data).(map[string]any)
-		want := map[string]any(nil)
+		got, gotDeclared := declaredVersion(data)
+		want, wantDeclared := "", false
 		if data := bytes.TrimPrefix(data, byteOrderMark); json.Valid(data) { // splitObject reads valid JSON only
 			if entries, err := splitObject(data); err == nil {
 				var declared []json.RawMessage
@@ -687,19 +687,14 @@ func FuzzDeclaredVersionOf(f *testing.F) {
 						declared = append(declared, entry.value)
 					}
 				}
-				var version any
-				if len(declared) == 1 && unmarshalJSON(declared[0], &version) == nil {
-					want = map[string]any{"openbindings": version}
+				if len(declared) == 1 && declared[0][0] == '"' {
+					want, _ = exactString(declared[0])
+					wantDeclared = true
 				}
 			}
 		}
-		if (got == nil) != (want == nil) {
-			t.Fatalf("%q: read %v, want %v", data, got, want)
-		}
-		gotVersion, gotString := got["openbindings"].(string)
-		wantVersion, wantString := want["openbindings"].(string)
-		if gotString != wantString || gotVersion != wantVersion {
-			t.Fatalf("%q: read %q, want %q", data, gotVersion, wantVersion)
+		if got != want || gotDeclared != wantDeclared {
+			t.Fatalf("%q: read %q, %v; want %q, %v", data, got, gotDeclared, want, wantDeclared)
 		}
 	})
 }

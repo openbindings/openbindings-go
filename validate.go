@@ -1,11 +1,9 @@
 package openbindings
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -34,10 +32,7 @@ type ValidateOptions struct {
 // The rules judge the document the host object encodes, exactly as
 // ValidateDocument judges bytes. OBI-D-01 is always inconclusive here,
 // because it is decided on the exact input bytes, which a host object no
-// longer carries; ValidateDocument decides it. A raw member (an example
-// value, source content, or a kept member) is judged as encoding/json decodes
-// it: bytes the exact decoder refuses, such as an escaped lone surrogate or a
-// repeated name, are not checked here.
+// longer carries; ValidateDocument decides it.
 //
 // The error is a *ValidationError listing every established violation, so
 // `if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil`
@@ -51,7 +46,9 @@ type ValidateOptions struct {
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (OBI-T-04). A host
-// object that cannot be encoded returns that error and no report.
+// object that cannot be encoded returns that error and no report, as does
+// one holding, in a member the model carries as raw JSON, bytes decoding
+// would refuse: the model encodes only what it would decode back unchanged.
 func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
@@ -90,15 +87,15 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 	var c ruleChecks
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
-		if refusal := declaredVersionRefusal(declaredVersionOf(data)); refusal != nil {
+		if refusal := inputVersionRefusal(data); refusal != nil {
 			return nil, ValidationReport{}, refusal
 		}
 		var lone *loneSurrogateError
 		switch {
 		case errors.Is(err, errNestingLimit):
-			// OBI-D-01 is decided on the input as read a token at a time; the
-			// other rules read the decoded document, which meets a resource
-			// limit and is no evidence either way (§10.5).
+			// OBI-D-01 is decided on the input, which the exact scan reads at
+			// any depth; the other rules read the decoded document, which
+			// meets a resource limit and is no evidence either way (§10.5).
 			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-D-01")
 		case errors.As(err, &lone):
 			// OBI-D-01 is decided: the input is UTF-8 JSON with no repeated
@@ -162,57 +159,16 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 	}
 }
 
-// declaredVersionOf reads the version input declares from its bytes, for input
-// OBI-D-01 refuses or the decoder cannot read: the version decision precedes
-// interpreting a document under this version's rules, OBI-D-01 included
-// (§10.1). The version is read only where it is established: the input,
-// after any leading byte-order mark, is one JSON value, and its root object
-// has exactly one openbindings member. The returned view is nil otherwise.
-// The input is read a token at a time, which holds however deeply it nests.
-func declaredVersionOf(data []byte) any {
-	// A leading byte-order mark breaks OBI-D-01 but not the reading of the
-	// version, which precedes that rule (RFC 8259 §8.1 lets a parser ignore
-	// one).
-	decoder := json.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, byteOrderMark)))
-	decoder.UseNumber()
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+// inputVersionRefusal applies OBI-T-04 to the version input declares, read
+// from its bytes (see declaredVersion), for input OBI-D-01 refuses or the
+// decoder cannot read: the version decision precedes interpreting a document
+// under this version's rules, OBI-D-01 included (§10.1).
+func inputVersionRefusal(data []byte) *VersionRefusalError {
+	version, declared := declaredVersion(data)
+	if !declared {
 		return nil
 	}
-	var declared []json.Token
-	for decoder.More() {
-		name, err := decoder.Token()
-		if err != nil {
-			return nil
-		}
-		value, err := decoder.Token()
-		if err != nil {
-			return nil
-		}
-		if _, opens := value.(json.Delim); opens {
-			for depth := 1; depth > 0; {
-				token, err := decoder.Token()
-				if err != nil {
-					return nil
-				}
-				switch token {
-				case json.Delim('{'), json.Delim('['):
-					depth++
-				case json.Delim('}'), json.Delim(']'):
-					depth--
-				}
-			}
-		}
-		if name == "openbindings" {
-			declared = append(declared, value)
-		}
-	}
-	if _, err := decoder.Token(); err != nil { // the root's closing brace
-		return nil
-	}
-	if _, err := decoder.Token(); err != io.EOF || len(declared) != 1 {
-		return nil
-	}
-	return map[string]any{"openbindings": declared[0]}
+	return versionRefusalOf(version)
 }
 
 // declaredVersionRefusal applies OBI-T-04 to the version a document's generic

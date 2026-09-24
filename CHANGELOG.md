@@ -6,6 +6,25 @@
 
 ### Fixed
 
+- **The model encodes only what it would decode back unchanged.** A member
+  carried as raw JSON (an example value, source content, or an
+  `Extensions`/`Unknown` entry) holding what decoding refuses (an escaped
+  lone UTF-16 surrogate, a repeated member name, invalid UTF-8, or nesting
+  deeper than the decoder reads) now fails `MarshalJSON`, where encoding/json
+  wrote it out or altered it. `Interface.Validate` and the contract API judge
+  a host object's encoding, so such an object returned a verdict on a
+  different document: an example `"\ud800"` passed a `const` of U+FFFD. They
+  now return the encoding error and no report. A nil `Extensions` or
+  `Unknown` entry still encodes as `null`.
+- **OBI-D-01 no longer depends on how encoding/json reads deep input.** One
+  scan of the input checks JSON syntax, repeated names, lone surrogates, and
+  the declared version, at any depth and with its own stack. Under
+  encoding/json built on its v2 implementation (`GOEXPERIMENT=jsonv2`),
+  valid input nested past 10,000 levels was an OBI-D-01 violation and a
+  deeply nested unsupported version was not refused; neither depends on
+  encoding/json now. A syntax error is worded as encoding/json words its own
+  (for example "invalid character '1' after top-level value"), at any depth.
+  The single pass is also about a third faster than the two it replaces.
 - **An `$id` of `""` or `"#"` declares no resource**, as the schema library
   reads it. Inside an embedded resource it was taken for a second resource
   with the same URI, so every reference to the resource was ambiguous: a
@@ -14,9 +33,6 @@
 - **OBI-D-16 is violated when an ambiguous reference resolves nowhere.** A
   reference to a URI that more than one schema declares names no one schema
   and stays inconclusive, unless its fragment resolves within none of them.
-- **Syntax errors in deeply nested input read as encoding/json's do**
-  ("unexpected end of JSON input", "invalid character ']' after top-level
-  value"), not "EOF" or "more than one value".
 - **An absolute URI names the resource it resolves to.** A `$id` or `$ref`
   holding dot segments (`https://example.com/x/../a`) was compared as
   written, while the schema library removes them (RFC 3986 §5.2.4). A
@@ -25,11 +41,10 @@
   conformant, validation of a value reported the graph unavailable, and a
   fragment that resolves nowhere in the resource satisfied OBI-D-16.
 - **OBI-D-01 is decided at any depth.** Input nested deeper than
-  encoding/json reads (10,000 levels) is read a token at a time, so a
-  repeated name, a syntax error, or trailing data anywhere in it violates
-  OBI-D-01. Input that satisfies OBI-D-01 still cannot be decoded, so every
-  other rule is inconclusive. The duplicate and lone-surrogate scan keeps its
-  own stack rather than recursing.
+  encoding/json reads (10,000 levels) is read in full, so a repeated name, a
+  syntax error, or trailing data anywhere in it violates OBI-D-01. Input that
+  satisfies OBI-D-01 still cannot be decoded, so every other rule is
+  inconclusive.
 - **A leading byte-order mark does not hide the declared version.** A
   BOM-prefixed document declaring an unsupported version is refused
   (OBI-T-04), as one with invalid UTF-8 already was, rather than judged
@@ -66,9 +81,9 @@
   preference with the same check, whose work no longer grows with the
   exponent.
 - **An unsupported version is refused however deeply the input nests.** The
-  declared version is read a token at a time, so input nested past the
-  decoder's 10,000 levels is refused under OBI-T-04 rather than reported
-  conformance-undetermined.
+  declared version is read by a scan with no depth limit, so input nested
+  past the decoder's 10,000 levels is refused under OBI-T-04 rather than
+  reported conformance-undetermined.
 - **A repeated member name is located.** The OBI-D-01 finding is at the
   object that repeats it. A leading byte-order mark is named as such.
 - **The same document gets the same findings on every run.** The URI the

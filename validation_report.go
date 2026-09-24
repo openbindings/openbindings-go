@@ -90,7 +90,10 @@ type ValidationReport struct {
 	Violated     []string
 	Inconclusive []string
 	// Findings locate every established violation and every undecided check,
-	// in the order the validator encountered them.
+	// in the order the validator encountered them. A report is as large as
+	// what it reports: each finding's Path is as long as its location is
+	// deep, so a deeply nested document with a finding at every level makes a
+	// report that grows with the square of its depth. Findings are not capped.
 	Findings []Finding
 	// Diagnostics are advisory and never affect Conclusion.
 	Diagnostics []Diagnostic

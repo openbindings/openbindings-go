@@ -2,7 +2,6 @@ package openbindings
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,11 +14,18 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
-// errNestingLimit is the error for input nested deeper than encoding/json
-// reads (10000 levels). Such input is checked for OBI-D-01 in full, but the
-// document model and the generic view cannot be decoded from it: a resource
-// limit met, which is no evidence about any other rule (§10.5).
-var errNestingLimit = errors.New("nested deeper than the decoder reads (10000 levels)")
+// jsonNestingLimit is how deeply encoding/json nests the values it decodes.
+// Input nesting deeper is read in full for OBI-D-01, but the document model
+// and the generic view cannot be decoded from it.
+const jsonNestingLimit = 10000
+
+// errNestingLimit is the error for input nested deeper than jsonNestingLimit:
+// a resource limit met, which is no evidence about any rule but OBI-D-01
+// (§10.5).
+var errNestingLimit = fmt.Errorf("nested deeper than the decoder reads (%d levels)", jsonNestingLimit)
+
+// errUnexpectedEnd is the syntax error for input that ends inside a value.
+var errUnexpectedEnd = errors.New("unexpected end of JSON input")
 
 // loneSurrogateError reports a string escape of an isolated UTF-16 surrogate
 // (a lone \uD800, say). RFC 8259 admits it, so it breaks no document rule,
@@ -62,9 +68,9 @@ var byteOrderMark = []byte("\xef\xbb\xbf")
 // which OBI-D-01 requires; and that no string escapes a lone UTF-16
 // surrogate, which the document model cannot carry. encoding/json replaces
 // invalid UTF-8 and lone surrogates and keeps only the last of repeated names.
-// A duplicate name is reported before a lone surrogate, and both before
-// nesting deeper than the decoder reads: the first breaks OBI-D-01, the
-// others only exceed what the SDK can carry.
+// A syntax error is reported before a repeated name, which is reported before
+// a lone surrogate, and all before nesting deeper than the decoder reads: the
+// first two break OBI-D-01, the others only exceed what the SDK can carry.
 func verifyExactJSON(b []byte) error {
 	if !utf8.Valid(b) {
 		return errors.New("not valid UTF-8")
@@ -72,82 +78,58 @@ func verifyExactJSON(b []byte) error {
 	if bytes.HasPrefix(b, byteOrderMark) {
 		return errors.New("begins with a byte-order mark")
 	}
-	tooDeep := false
-	if !json.Valid(b) {
-		var discard any
-		err := json.Unmarshal(b, &discard)
-		var syntax *json.SyntaxError
-		if err == nil || !errors.As(err, &syntax) || !strings.Contains(syntax.Error(), "exceeded max depth") {
-			return cmp.Or(err, errors.New("not valid JSON")) // the decoder's error locates the syntax error
-		}
-		// encoding/json stops at its nesting limit before reading the rest;
-		// reading a token at a time has none.
-		if err := validJSONStream(b); err != nil {
-			return err
-		}
-		tooDeep = true
-	}
-	var scan exactScan
-	if err := scan.run(b); err != nil {
+	scan := exactScan{b: b}
+	if err := scan.run(); err != nil {
 		return err
 	}
 	switch {
+	case scan.repeat != nil:
+		return scan.repeat
 	case scan.lone != nil:
 		return scan.lone
-	case tooDeep:
+	case scan.deepest > jsonNestingLimit:
 		return errNestingLimit
 	}
 	return nil
 }
 
-// validJSONStream reports whether b is exactly one JSON value, reading it a
-// token at a time, which holds however deeply it nests. Its errors read as
-// encoding/json's do for input of ordinary depth.
-func validJSONStream(b []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(b))
-	decoder.UseNumber()
-	for depth := 0; ; {
-		token, err := decoder.Token()
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return errors.New("unexpected end of JSON input")
-		}
-		if err != nil {
-			return err
-		}
-		switch token {
-		case json.Delim('{'), json.Delim('['):
-			depth++
-		case json.Delim('}'), json.Delim(']'):
-			depth--
-		}
-		if depth == 0 {
-			break
-		}
+// declaredVersion reads the version a document declares from its bytes,
+// before any other rule is decided (§10.1): the value of the root object's
+// openbindings member, when the input, after any leading byte-order mark, is
+// one JSON value whose root object has exactly one such member, holding a
+// string. It reads input of any depth, and input that repeats a member name,
+// holds invalid UTF-8, or holds a lone surrogate.
+func declaredVersion(data []byte) (string, bool) {
+	scan := exactScan{b: bytes.TrimPrefix(data, byteOrderMark), readVersion: true}
+	if scan.run() != nil || len(scan.versions) != 1 || scan.versions[0][0] != '"' {
+		return "", false
 	}
-	if end := skipJSONSpace(b, int(decoder.InputOffset())); end < len(b) {
-		return fmt.Errorf("invalid character %s after top-level value", quoteByte(b[end]))
-	}
-	return nil
+	version, _ := exactString(scan.versions[0])
+	return version, true
 }
 
-// quoteByte quotes a byte as encoding/json's syntax errors do.
-func quoteByte(c byte) string {
-	if c == '\'' {
-		return `'\''`
-	}
-	if c == '"' {
-		return `'"'`
-	}
-	s := strconv.Quote(string(c))
-	return "'" + s[1:len(s)-1] + "'"
-}
-
-// exactScan walks valid JSON for repeated member names and lone surrogates.
-// It keeps its own stack rather than recursing, so input of any depth is
-// walked in constant stack space.
+// exactScan reads JSON a byte at a time, keeping its own stack rather than
+// recursing, so input of any depth is read in constant stack space. It checks
+// that the input is one JSON value (RFC 8259), and records what decoding into
+// Go values would lose: the first repeated member name and the first escaped
+// lone surrogate, in document order.
 type exactScan struct {
-	path []scanStep          // where the value being walked lies
-	lone *loneSurrogateError // the first lone surrogate, in document order
+	b []byte
+
+	// open holds, for each object or array the scan is inside, the names
+	// the object has had so far; nil for an array.
+	open    []map[string]struct{}
+	deepest int
+	path    []scanStep // where the value being read lies
+
+	repeat *duplicateNameError
+	lone   *loneSurrogateError
+
+	// With readVersion, versions holds the raw value of every member of the
+	// root object named openbindings.
+	readVersion bool
+	versions    [][]byte
+	versionAt   int // where the root member's value being read begins; -1 when none
 }
 
 // scanStep is one reference token of the scan's path: a member name, or an
@@ -169,89 +151,272 @@ func (s *exactScan) location() string {
 	return jsonpointer.Format(tokens...)
 }
 
-// run walks the JSON value in b, which is valid JSON, and returns an error
-// at the first object that repeats a member name.
-func (s *exactScan) run(b []byte) error {
-	// open holds, for each object or array the walk is inside, the names an
-	// object has had so far; nil for an array.
-	var open []map[string]struct{}
+// run reads the input as one JSON value and returns the first syntax error.
+func (s *exactScan) run() error {
+	b := s.b
+	s.versionAt = -1
 	i := skipJSONSpace(b, 0)
+values:
 	for {
-		// b[i] begins a value.
-		switch b[i] {
-		case '{':
-			open = append(open, map[string]struct{}{})
-			i = skipJSONSpace(b, i+1)
-			if b[i] != '}' {
-				// An object's first member repeats no name.
-				i, _ = s.member(b, i, open[len(open)-1])
-				continue
-			}
-			open = open[:len(open)-1]
-			i++
-		case '[':
-			open = append(open, nil)
-			s.path = append(s.path, scanStep{index: 0})
-			i = skipJSONSpace(b, i+1)
-			if b[i] != ']' {
-				continue
-			}
-			open = open[:len(open)-1]
-			s.path = s.path[:len(s.path)-1]
-			i++
-		case '"':
-			end := jsonValueEnd(b, i)
-			if _, lone := exactString(b[i:end]); lone && s.lone == nil {
-				s.lone = &loneSurrogateError{location: s.location()}
-			}
-			i = end
-		default:
-			i = jsonValueEnd(b, i)
+		// A value begins at b[i].
+		if i >= len(b) {
+			return errUnexpectedEnd
 		}
-		// A value has ended at b[i]; close every container it completes.
-		for {
-			if len(open) == 0 {
-				return nil
-			}
-			i = skipJSONSpace(b, i)
-			names := open[len(open)-1]
-			step := &s.path[len(s.path)-1]
-			if b[i] == ',' {
-				i = skipJSONSpace(b, i+1)
-				if names == nil {
-					step.index++
-					break
-				}
-				s.path = s.path[:len(s.path)-1]
-				var err error
-				if i, err = s.member(b, i, names); err != nil {
-					return err
-				}
+		var err error
+		switch c := b[i]; {
+		case c == '{':
+			s.enter(map[string]struct{}{})
+			if i = skipJSONSpace(b, i+1); i < len(b) && b[i] == '}' {
+				s.open = s.open[:len(s.open)-1]
+				i++
 				break
 			}
-			// b[i] closes the container.
-			open = open[:len(open)-1]
-			s.path = s.path[:len(s.path)-1]
-			i++
+			if i, err = s.member(i); err != nil {
+				return err
+			}
+			continue values
+		case c == '[':
+			s.enter(nil)
+			s.path = append(s.path, scanStep{index: 0})
+			if i = skipJSONSpace(b, i+1); i < len(b) && b[i] == ']' {
+				s.open = s.open[:len(s.open)-1]
+				s.path = s.path[:len(s.path)-1]
+				i++
+				break
+			}
+			continue values
+		case c == '"':
+			var lone bool
+			if i, lone, err = stringEnd(b, i); err != nil {
+				return err
+			}
+			if lone && s.lone == nil {
+				s.lone = &loneSurrogateError{location: s.location()}
+			}
+		case c == '-' || '0' <= c && c <= '9':
+			if i, err = numberEnd(b, i); err != nil {
+				return err
+			}
+		case c == 't':
+			i, err = literalEnd(b, i, "true")
+		case c == 'f':
+			i, err = literalEnd(b, i, "false")
+		case c == 'n':
+			i, err = literalEnd(b, i, "null")
+		default:
+			return syntaxError(c, "looking for beginning of value")
+		}
+		if err != nil {
+			return err
+		}
+		// A value has ended just before b[i]; close every container it
+		// completes.
+		for {
+			if len(s.open) == 0 {
+				if i = skipJSONSpace(b, i); i < len(b) {
+					return syntaxError(b[i], "after top-level value")
+				}
+				return nil
+			}
+			if len(s.open) == 1 && s.versionAt >= 0 {
+				s.versions = append(s.versions, b[s.versionAt:i])
+				s.versionAt = -1
+			}
+			if i = skipJSONSpace(b, i); i >= len(b) {
+				return errUnexpectedEnd
+			}
+			names := s.open[len(s.open)-1]
+			switch {
+			case b[i] == ',' && names == nil:
+				s.path[len(s.path)-1].index++
+				i = skipJSONSpace(b, i+1)
+				continue values
+			case b[i] == ',':
+				s.path = s.path[:len(s.path)-1]
+				if i, err = s.member(skipJSONSpace(b, i+1)); err != nil {
+					return err
+				}
+				continue values
+			case b[i] == ']' && names == nil, b[i] == '}' && names != nil:
+				s.open = s.open[:len(s.open)-1]
+				s.path = s.path[:len(s.path)-1]
+				i++
+			case names == nil:
+				return syntaxError(b[i], "after array element")
+			default:
+				return syntaxError(b[i], "after object key:value pair")
+			}
 		}
 	}
 }
 
-// member reads the member name at b[i] of an object that has had names so
-// far, and returns the index of the member's value, with the name on the
-// scan's path.
-func (s *exactScan) member(b []byte, i int, names map[string]struct{}) (int, error) {
-	nameEnd := jsonValueEnd(b, i)
+// enter opens an object, with the names it has had, or an array, with nil.
+func (s *exactScan) enter(names map[string]struct{}) {
+	s.open = append(s.open, names)
+	s.deepest = max(s.deepest, len(s.open))
+}
+
+// member reads the member name at b[i] of the innermost object and the colon
+// after it, and returns the index where the member's value begins, with the
+// name on the scan's path.
+func (s *exactScan) member(i int) (int, error) {
+	b := s.b
+	if i >= len(b) {
+		return 0, errUnexpectedEnd
+	}
+	if b[i] != '"' {
+		return 0, syntaxError(b[i], "looking for beginning of object key string")
+	}
+	nameEnd, _, err := stringEnd(b, i)
+	if err != nil {
+		return 0, err
+	}
 	name, lone := exactString(b[i:nameEnd])
 	if lone && s.lone == nil {
 		s.lone = &loneSurrogateError{location: s.location(), name: true}
 	}
-	if _, repeated := names[name]; repeated {
-		return 0, &duplicateNameError{location: s.location(), name: name}
+	names := s.open[len(s.open)-1]
+	if _, repeated := names[name]; repeated && s.repeat == nil {
+		s.repeat = &duplicateNameError{location: s.location(), name: name}
 	}
 	names[name] = struct{}{}
 	s.path = append(s.path, scanStep{name: name, index: -1})
-	return skipJSONSpace(b, skipJSONSpace(b, nameEnd)+1), nil
+	if i = skipJSONSpace(b, nameEnd); i >= len(b) {
+		return 0, errUnexpectedEnd
+	}
+	if b[i] != ':' {
+		return 0, syntaxError(b[i], "after object key")
+	}
+	i = skipJSONSpace(b, i+1)
+	if s.readVersion && len(s.open) == 1 && name == "openbindings" {
+		s.versionAt = i
+	}
+	return i, nil
+}
+
+// stringEnd reads the string token at b[i] and returns the index just past
+// it, and whether it escapes a lone UTF-16 surrogate, pairing escapes exactly
+// as exactString does.
+func stringEnd(b []byte, i int) (end int, lone bool, err error) {
+	for i++; i < len(b); i++ {
+		switch c := b[i]; {
+		case c == '"':
+			return i + 1, lone, nil
+		case c < 0x20:
+			return 0, false, syntaxError(c, "in string literal")
+		case c == '\\':
+			if i++; i >= len(b) {
+				return 0, false, errUnexpectedEnd
+			}
+			switch b[i] {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+			case 'u':
+				unit, err := hexEscape(b, i+1)
+				if err != nil {
+					return 0, false, err
+				}
+				i += 4
+				if !utf16.IsSurrogate(rune(unit)) {
+					continue
+				}
+				if unit < 0xdc00 && i+6 < len(b) && b[i+1] == '\\' && b[i+2] == 'u' {
+					if low, err := hexEscape(b, i+3); err == nil && low >= 0xdc00 && low <= 0xdfff {
+						i += 6
+						continue
+					}
+				}
+				lone = true
+			default:
+				return 0, false, syntaxError(b[i], "in string escape code")
+			}
+		}
+	}
+	return 0, false, errUnexpectedEnd
+}
+
+// hexEscape reads the four hexadecimal digits of a \u escape at b[i].
+func hexEscape(b []byte, i int) (uint16, error) {
+	for k := i; k < i+4; k++ {
+		if k >= len(b) {
+			return 0, errUnexpectedEnd
+		}
+		if c := b[k]; !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
+			return 0, syntaxError(c, "in \\u hexadecimal character escape")
+		}
+	}
+	return hexUnit(b[i : i+4]), nil
+}
+
+// numberEnd reads the number token at b[i] (RFC 8259 §6) and returns the
+// index just past it.
+func numberEnd(b []byte, i int) (int, error) {
+	digits := func(i int, context string) (int, error) {
+		if i >= len(b) {
+			return 0, errUnexpectedEnd
+		}
+		if b[i] < '0' || b[i] > '9' {
+			return 0, syntaxError(b[i], context)
+		}
+		for i < len(b) && '0' <= b[i] && b[i] <= '9' {
+			i++
+		}
+		return i, nil
+	}
+	if b[i] == '-' {
+		i++
+	}
+	var err error
+	if i < len(b) && b[i] == '0' {
+		i++
+	} else if i, err = digits(i, "in numeric literal"); err != nil {
+		return 0, err
+	}
+	if i < len(b) && b[i] == '.' {
+		if i, err = digits(i+1, "after decimal point in numeric literal"); err != nil {
+			return 0, err
+		}
+	}
+	if i < len(b) && (b[i] == 'e' || b[i] == 'E') {
+		if i++; i < len(b) && (b[i] == '+' || b[i] == '-') {
+			i++
+		}
+		if i, err = digits(i, "in exponent of numeric literal"); err != nil {
+			return 0, err
+		}
+	}
+	return i, nil
+}
+
+// literalEnd reads the literal token at b[i] and returns the index just
+// past it.
+func literalEnd(b []byte, i int, literal string) (int, error) {
+	for k := 1; k < len(literal); k++ {
+		if i+k >= len(b) {
+			return 0, errUnexpectedEnd
+		}
+		if b[i+k] != literal[k] {
+			return 0, syntaxError(b[i+k], fmt.Sprintf("in literal %s (expecting %s)", literal, quoteByte(literal[k])))
+		}
+	}
+	return i + len(literal), nil
+}
+
+// syntaxError is a syntax error at the byte c, worded as encoding/json words
+// its own.
+func syntaxError(c byte, context string) error {
+	return fmt.Errorf("invalid character %s %s", quoteByte(c), context)
+}
+
+// quoteByte quotes a byte as encoding/json's syntax errors do.
+func quoteByte(c byte) string {
+	if c == '\'' {
+		return `'\''`
+	}
+	if c == '"' {
+		return `'"'`
+	}
+	s := strconv.Quote(string(c))
+	return "'" + s[1:len(s)-1] + "'"
 }
 
 // exactString decodes a JSON string token of valid JSON exactly: an escape of
