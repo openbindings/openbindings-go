@@ -101,9 +101,9 @@ func TestValidateDocument_WellFormednessWithNumbersBeyondTheLimits(t *testing.T)
 }
 
 // A value holding a number beyond the numeric limits is validated as a
-// stand-in where the schema graph tells numbers apart only by type and
-// equality; where it compares them otherwise, no verdict is reached. The same
-// holds of an example (OBI-D-11).
+// stand-in where what the library compiles compares no number by order or
+// divisibility, holds none in const or enum, and reaches no meta-schema;
+// otherwise no verdict is reached. The same holds of an example (OBI-D-11).
 func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 	for _, tc := range []struct {
 		input, value, want string

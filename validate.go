@@ -39,9 +39,12 @@ type ValidateOptions struct {
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
 // conformant or conformance undetermined. OBI-D-13 is inconclusive for a
-// document with bindings, because only each binding's governing binding
-// specification decides it, and OBI-D-18 is inconclusive for a document with
-// transforms unless options gives a transform parser.
+// document with bindings, and OBI-D-05 for a location that is neither
+// relative nor a well-formed URI, because only the governing binding
+// specification decides them. OBI-D-18 is inconclusive for a document with
+// transforms unless options gives a transform parser, and OBI-D-17 for the
+// subschemas a schema nests deeper than 256 levels, where the meta-schema
+// check meets a resource limit (§10.5).
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (OBI-T-04). A host

@@ -357,10 +357,16 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // resource.
 //
 // The schema graph statically reachable from the operation's schema must be
-// complete: a graph that reaches a resource the document does not embed, has
-// a reference that does not resolve, or holds a schema that is not
-// well-formed yields a *SchemaGraphUnavailableError, even where no value
-// would exercise that part of it. The schema library is given the schemas the
+// available, well-formed, and evaluable, even where no value would exercise
+// part of it; otherwise a *SchemaGraphUnavailableError says why. A graph is
+// unavailable when it reaches a resource the document does not embed, has a
+// reference that does not resolve, or holds a schema that is not well-formed.
+// It cannot be evaluated here when it meets one of this SDK's limits (§10.5):
+// a schema nesting subschemas deeper than 256 levels, a number beyond the
+// numeric limits of schema evaluation where the schema library reads one (a
+// comparison or count keyword's value, or const or enum), a pattern Go's
+// regexp cannot compile, or a cycle of references that never advances into
+// the value. The schema library is given the schemas the
 // graph uses as a JSON Schema 2020-12 bundle, never the OBI document itself,
 // and evaluates strictly as 2020-12: dependencies, $recursiveRef, and
 // $recursiveAnchor constrain nothing. A JSON Schema meta-schema is outside the
@@ -368,9 +374,10 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // interpreted only under a supported version: one declaring a well-formed
 // version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
 // no valid version returns an error (OBI-D-12). Any other error means nothing
-// was compiled: there is no interface, the name resolves to no one operation
-// (wrapping ErrOperationNotFound), the operation specifies no schema at that
-// position, or the interface cannot be encoded.
+// was compiled: there is no interface, the position is neither "input" nor
+// "output", the name resolves to no one operation (wrapping
+// ErrOperationNotFound), the operation specifies no schema at that position,
+// or the interface cannot be encoded.
 func CompileOperationSchema(i *Interface, operation, position string) (*CompiledSchema, error) {
 	if i == nil {
 		return nil, errors.New("openbindings: interface is nil")
@@ -420,8 +427,8 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 // compile once with CompileOperationSchema and use CompiledSchema.Validate.
 //
 // A nil error means the value validates. A *SchemaValidationError is an
-// established mismatch; a *SchemaGraphUnavailableError means the schema's
-// graph could not be fully resolved, so no verdict was reached. Any other
+// established mismatch; a *SchemaGraphUnavailableError means no verdict was
+// reached (see CompileOperationSchema and CompiledSchema.Validate). Any other
 // error means nothing was validated: see CompileOperationSchema.
 func ValidateOperationInput(value any, iface *Interface, operationName string) error {
 	compiled, err := CompileOperationSchema(iface, operationName, "input")
@@ -443,7 +450,9 @@ func ValidateOperationOutput(value any, iface *Interface, operationName string) 
 
 // SchemaGraphUnavailableError reports that no verdict was reached because the
 // governing schema's complete statically reachable graph was not available,
-// well-formed, and evaluable. It is distinct from a mismatch, as OBI-T-16
+// well-formed, and evaluable, or, from CompiledSchema.Validate, because the
+// value holds a number this SDK cannot check against that graph or the
+// schema was not compiled. It is distinct from a mismatch, as OBI-T-16
 // requires of validation against an operation's contract.
 //
 // Callers can use errors.As rather than parsing diagnostic text. Cause remains

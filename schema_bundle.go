@@ -303,8 +303,8 @@ func numberRead(schema any) (string, error) {
 }
 
 // numberComparison states the first place in a schema, at location at, that
-// tells numbers apart by more than type and equality, or returns "": a
-// comparison keyword, or a const or enum holding a number. Only where there
+// compares a number by order or divisibility (a comparison keyword) or holds
+// one in const or enum, or returns "". Only where there
 // is none is a value's stand-in (schemacompiler.Substitute) validated as the
 // number it stands for would be.
 func numberComparison(schema any, at string) string {
