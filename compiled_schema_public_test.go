@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	ob "github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func TestCompiledSchemaPublicErrorDomain(t *testing.T) {
@@ -19,10 +18,11 @@ func TestCompiledSchemaPublicErrorDomain(t *testing.T) {
 	if err = validator.Validate(-1); !errors.As(err, &mismatch) {
 		t.Fatalf("missing public mismatch type: %v", err)
 	}
-	var capability *jsonvalue.CapabilityError
+	// A number beyond the numeric limits reaches no verdict: it is neither a
+	// mismatch nor a success.
 	err = validator.Validate(json.Number("1e10001"))
-	if !errors.As(err, &capability) || errors.As(err, &mismatch) {
-		t.Fatalf("capability is not a mismatch: %v", err)
+	if !errors.As(err, new(*ob.SchemaGraphUnavailableError)) || errors.As(err, &mismatch) {
+		t.Fatalf("a limit met is no verdict, not a mismatch: %v", err)
 	}
 	if err = validator.Validate(1); err != nil {
 		t.Fatal(err)

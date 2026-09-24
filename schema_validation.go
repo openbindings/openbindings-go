@@ -2,29 +2,16 @@ package openbindings
 
 import (
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
-	neturl "net/url"
-	"sort"
+	"slices"
 	"strings"
 
-	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
-	"github.com/openbindings/openbindings-go/jsonvalue"
-	"golang.org/x/text/language"
-	"golang.org/x/text/message"
+	"github.com/openbindings/openbindings-go/internal/jsonpointer"
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
-
-// kindPrinter renders jsonschema/v6 ErrorKind values. The kinds implement
-// LocalizedString(*message.Printer), not String(), so formatting them with
-// %v would print the raw struct (e.g. `&{[customer]}` for a missing
-// required property). The formatted text remains local validation evidence;
-// abstract invocation failures carry only ERR_VALIDATION_FAILED.
-var kindPrinter = message.NewPrinter(language.English)
-
-func kindString(k jsonschema.ErrorKind) string {
-	return k.LocalizedString(kindPrinter)
-}
 
 // openbindingsSchemaJSON is the OBI document schema (openbindings.schema.json),
 // embedded at build time. Synced from the spec repo via scripts/sync-schema.sh.
@@ -32,15 +19,14 @@ func kindString(k jsonschema.ErrorKind) string {
 //go:embed openbindings.schema.json
 var openbindingsSchemaJSON []byte
 
-// compiledOBISchema is the embedded OBI document schema, compiled once at init.
-// Used by Validate() to enforce OBI-D-02 (the document validates against
-// openbindings.schema.json).
+// compiledOBISchema is the embedded OBI document schema, compiled once at
+// init, for OBI-D-02 (the document validates against openbindings.schema.json).
 var compiledOBISchema *jsonschema.Schema
 
 // compiledMetaSchema is the JSON Schema 2020-12 meta-schema, compiled once at
 // init from the validator library's locally embedded copy (never fetched from
-// the network, per OBI-D-17's validation note). Used by Validate() to
-// enforce OBI-D-17 (every schema in the document is well-formed).
+// the network, per OBI-D-17's validation note), for OBI-D-17 (every schema in
+// the document is well-formed).
 var compiledMetaSchema *jsonschema.Schema
 
 func init() {
@@ -48,7 +34,7 @@ func init() {
 	if err := json.Unmarshal(openbindingsSchemaJSON, &doc); err != nil {
 		panic(fmt.Sprintf("openbindings: embedded openbindings.schema.json is not valid JSON: %v", err))
 	}
-	c := exactCountCompiler()
+	c := schemacompiler.New()
 	if err := c.AddResource("openbindings:///schema", doc); err != nil {
 		panic(fmt.Sprintf("openbindings: cannot register OBI schema: %v", err))
 	}
@@ -58,8 +44,7 @@ func init() {
 	}
 	compiledOBISchema = s
 
-	mc := exactCountCompiler()
-	meta, err := mc.Compile(draft202012URI)
+	meta, err := schemacompiler.New().Compile(draft202012URI)
 	if err != nil {
 		panic(fmt.Sprintf("openbindings: cannot compile embedded 2020-12 meta-schema: %v", err))
 	}
@@ -72,8 +57,15 @@ func init() {
 // meta-schemas (which cover subschemas recursively). The check is
 // deliberately narrow, mirroring §5.2: unknown keywords, unparseable
 // `pattern` values, and unresolvable `$ref` targets all pass — they surface
-// when the schema is used, not here.
-func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema JSONSchema, knownValid map[string]bool) {
+// when the schema is used, not here. knownValid remembers schemas already
+// found well-formed, by their encoding.
+//
+// The meta-schema validator's work grows faster than linearly with a
+// schema's depth, so a schema holding a number beyond the numeric limits of
+// schema evaluation, or nesting subschemas deeper than schemaDepthLimit, meets
+// a resource limit and leaves the rule inconclusive there (§10.5), as it does
+// for an operation's schema graph.
+func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
 	case bool:
 		// Boolean schemas are always well-formed.
@@ -82,33 +74,143 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema JSONSchem
 		if key != "" && knownValid[key] {
 			return
 		}
+		if at, err := schemacompiler.NumericLimit(v); err != nil {
+			c.inconclusive("OBI-D-17", prefix+at, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+			return
+		}
+		if schemaDepth(v) > schemaDepthLimit {
+			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: it nests subschemas deeper than %d levels", schemaDepthLimit))
+			return
+		}
 		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
-			for _, line := range splitSchemaError(verr) {
-				c.violated("OBI-D-17", prefix, "not a well-formed JSON Schema 2020-12 schema: "+line)
+			problems, mismatch := schemacompiler.Outcome(verr)
+			if !mismatch {
+				c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", verr))
+				return
 			}
-		} else {
-			if key != "" {
-				knownValid[key] = true
+			for _, problem := range problems {
+				c.violated("OBI-D-17", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
 			}
+		} else if key != "" {
+			knownValid[key] = true
 		}
 	default:
 		c.violated("OBI-D-17", prefix, fmt.Sprintf("a schema is a JSON Schema 2020-12 object or boolean; got %s", jsonTypeName(v)))
 	}
 }
 
-// validateAgainstOBISchema records OBI-D-02 evidence: whether the document
-// validates against openbindings.schema.json. doc is a generic JSON value
-// (map[string]any/[]any/scalars); without one the rule is left inconclusive.
-func validateAgainstOBISchema(c *ruleChecks, doc any) {
-	if doc == nil {
-		c.inconclusive("OBI-D-02", "", "no generic view of the document could be produced to validate against the document schema")
-		return
-	}
-	if verr := compiledOBISchema.Validate(doc); verr != nil {
-		for _, line := range splitSchemaError(verr) {
-			c.violated("OBI-D-02", "", "schema validation: "+line)
+// numericMembers are the members of an OBI document the document schema does
+// numeric work on, as reference tokens where "*" is every entry of a map: a
+// binding's preference, held to its integer range (§5.3), and the items of an
+// operation's aliases and of a dependency's bindingSpecs, which uniqueItems
+// compares as numbers when they are numbers.
+// TestDocumentSchema_NumericWorkIsOnNumericMembers holds this list to the
+// embedded schema.
+var numericMembers = [][]string{
+	{"bindings", "*", "preference"},
+	{"operations", "*", "aliases"},
+	{"dependencies", "*", "bindingSpecs"},
+}
+
+// validateAgainstOBISchema records OBI-D-02 evidence: whether the document's
+// generic view validates against openbindings.schema.json.
+//
+// The schema library is not handed a number beyond the numeric limits of
+// schema evaluation where the document schema does numeric work
+// (numericMembers). A member holding one is set aside, and the rest of the
+// document is still checked: a preference is decided here exactly, and an
+// array is left inconclusive.
+func validateAgainstOBISchema(c *ruleChecks, view any) {
+	var setAside [][]string
+	for _, pattern := range numericMembers {
+		for _, member := range membersAt(view, pattern, nil) {
+			at, err := schemacompiler.NumericLimit(member.value)
+			if err == nil {
+				continue
+			}
+			path := jsonpointer.Format(member.tokens...)
+			if member.tokens[len(member.tokens)-1] == "preference" {
+				inRange := false
+				if number, isNumber := member.value.(json.Number); isNumber {
+					_, inRange = preferenceValue(string(number))
+				}
+				if !inRange {
+					c.violated("OBI-D-02", path, fmt.Sprintf("does not validate against the document schema: a preference is an integer from -%d through %d", maxPreference, maxPreference))
+				}
+			} else {
+				c.inconclusive("OBI-D-02", path, fmt.Sprintf("could not be checked against the document schema: it holds, at %q, %v", at, err))
+			}
+			setAside = append(setAside, member.tokens)
 		}
 	}
+	if verr := compiledOBISchema.Validate(withoutMembers(view, setAside)); verr != nil {
+		problems, mismatch := schemacompiler.Outcome(verr)
+		if !mismatch {
+			// An exceeded resource limit is not evidence of violation (§10.5).
+			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
+			return
+		}
+		for _, problem := range problems {
+			c.violated("OBI-D-02", jsonpointer.Format(problem.Location...), "does not validate against the document schema: "+problem.Message)
+		}
+	}
+}
+
+// member is a member of a document's generic view and where it is.
+type member struct {
+	tokens []string
+	value  any
+}
+
+// membersAt returns the members of view that pattern names, where "*" is
+// every entry of an object, in sorted order. at is the reference tokens of
+// view itself.
+func membersAt(view any, pattern, at []string) []member {
+	if len(pattern) == 0 {
+		return []member{{tokens: at, value: view}}
+	}
+	object, _ := view.(map[string]any)
+	names := []string{pattern[0]}
+	if pattern[0] == "*" {
+		names = sortedKeys(object)
+	}
+	var out []member
+	for _, name := range names {
+		if value, present := object[name]; present {
+			out = append(out, membersAt(value, pattern[1:], append(slices.Clip(at), name))...)
+		}
+	}
+	return out
+}
+
+// withoutMembers returns view without the members at each of paths, copying
+// each object on the way to them once, so view itself is not changed and the
+// work is linear in the objects copied.
+func withoutMembers(view any, paths [][]string) any {
+	if len(paths) == 0 {
+		return view
+	}
+	object, _ := view.(map[string]any)
+	removed := map[string]bool{}
+	within := map[string][][]string{}
+	for _, tokens := range paths {
+		if len(tokens) == 1 {
+			removed[tokens[0]] = true
+		} else {
+			within[tokens[0]] = append(within[tokens[0]], tokens[1:])
+		}
+	}
+	copied := make(map[string]any, len(object))
+	for name, value := range object {
+		switch {
+		case removed[name]:
+		case within[name] != nil:
+			copied[name] = withoutMembers(value, within[name])
+		default:
+			copied[name] = value
+		}
+	}
+	return copied
 }
 
 func metaSchemaCacheKey(schema map[string]any) string {
@@ -127,573 +229,144 @@ func metaSchemaCacheKey(schema map[string]any) string {
 // The rule's scope is decided per schema position. A graph that reaches an
 // external resource puts that position's examples outside the rule, so they
 // are neither checked nor reported (§5.1 lets a tool check them as evidence,
-// never as non-conformance). A graph whose reach this validator cannot
-// establish, or a schema it cannot compile, leaves the rule inconclusive there:
-// neither is evidence that the examples conform.
-func checkExamples(c *ruleChecks, i Interface, view func() any) {
-	opKeys := make([]string, 0, len(i.Operations))
-	for k, op := range i.Operations {
-		if len(op.Examples) > 0 {
-			opKeys = append(opKeys, k)
-		}
-	}
-	if len(opKeys) == 0 {
-		return
-	}
-	sort.Strings(opKeys)
-	resources := embeddedSchemaResources(i)
-	for _, opKey := range opKeys {
-		op := i.Operations[opKey]
-		exKeys := make([]string, 0, len(op.Examples))
-		for ek := range op.Examples {
-			exKeys = append(exKeys, ek)
-		}
-		sort.Strings(exKeys)
+// never as non-conformance). A graph that cannot be evaluated (an
+// unresolvable reference, an ill-formed schema, or a failure to compile or
+// evaluate it) leaves the rule inconclusive there: none of that is evidence
+// that the examples conform. Operations and examples that are not objects
+// hold no example values.
+func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas documentSchemas) {
+	contracts := newOperationContracts(view, schemas)
+	for _, opKey := range sortedKeys(operations) {
+		operation, _ := operations[opKey].(map[string]any)
+		examples, _ := operation["examples"].(map[string]any)
 		for _, position := range []string{"input", "output"} {
-			schema := op.Input
-			if position == "output" {
-				schema = op.Output
-			}
-			if schema == nil {
+			if _, specified := operation[position]; !specified {
 				continue
 			}
 			var provided []string
-			for _, ek := range exKeys {
-				ex := op.Examples[ek]
-				if (position == "input" && ex.HasInput()) || (position == "output" && ex.HasOutput()) {
-					provided = append(provided, ek)
+			for _, exampleKey := range sortedKeys(examples) {
+				if example, ok := examples[exampleKey].(map[string]any); ok && hasKey(example, position) {
+					provided = append(provided, exampleKey)
 				}
 			}
 			if len(provided) == 0 {
 				continue
 			}
-			path := fmt.Sprintf("operations[%q].%s", opKey, position)
-			switch schemaGraphLocality(schema, view, resources) {
-			case graphReachesExternal:
-				continue
-			case graphUndecided:
-				c.inconclusive("OBI-D-11", path, "the reach of this schema's graph could not be established, so its examples were not checked")
+			path := jsonpointer.Format("operations", opKey, position)
+			compiled, outside, err := contracts.compile(opKey, position)
+			if outside != "" {
+				// The graph reaches outside the document.
 				continue
 			}
-			compiled, err := CompileOperationSchema(&i, opKey, position)
 			if err != nil {
-				c.inconclusive("OBI-D-11", path, fmt.Sprintf("the schema could not be compiled, so its examples were not checked: %v", err))
+				c.inconclusive("OBI-D-11", path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", err))
 				continue
 			}
-			for _, ek := range provided {
-				ex := op.Examples[ek]
-				value := ex.Input
-				if position == "output" {
-					value = ex.Output
-				}
-				if verr := compiled.Validate(value); verr != nil {
-					for _, line := range splitSchemaError(verr) {
-						c.violated("OBI-D-11", fmt.Sprintf("operations[%q].examples[%q].%s", opKey, ek, position), line)
+			for _, exampleKey := range provided {
+				examplePath := jsonpointer.Format("operations", opKey, "examples", exampleKey, position)
+				var mismatch *SchemaValidationError
+				switch err := compiled.Validate(examples[exampleKey].(map[string]any)[position]); {
+				case err == nil:
+				case errors.As(err, &mismatch):
+					for _, problem := range mismatch.Problems {
+						c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+position+" schema: "+problem.Message)
 					}
+				default:
+					c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
 				}
 			}
 		}
 	}
 }
 
-type graphLocality int
-
-const (
-	graphWithinDocument graphLocality = iota
-	graphUndecided
-	graphReachesExternal
-)
-
-// schemaGraphLocality decides whether the schema graph statically reachable
-// from root resolves entirely within the document (OBI-D-11's scope).
+// CompileOperationSchema compiles an operation's input or output schema, for
+// validating values against the operation's contract (OBI-T-16). The
+// operation is named by any of its identifiers, its key or an alias
+// (OBI-T-12). The OBI document is the resolution root of same-document
+// references (§7), and only the schemas the document holds are schemas: an
+// unknown document member never acts as a schema keyword or declares a
+// resource.
 //
-// It follows same-document JSON Pointer references at OBI positions through
-// the document view, and absolute references into schema resources the
-// document embeds by $id. An absolute reference to anything else reaches an
-// external resource. A reference this walk cannot follow (a plain-name
-// fragment, a pointer that does not resolve, a fragment into an embedded
-// resource) leaves the reach undecided rather than guessed. Reaching an
-// external resource dominates: such a graph is outside the rule whatever else
-// it holds.
-func schemaGraphLocality(root any, view func() any, resources map[string]any) graphLocality {
-	result := graphWithinDocument
-	visitedPointers := map[string]bool{}
-	visitedResources := map[string]bool{}
-	undecided := func() {
-		if result == graphWithinDocument {
-			result = graphUndecided
-		}
-	}
-	var walk func(node any, base *neturl.URL)
-	follow := func(ref string, base *neturl.URL) {
-		if base == nil && strings.HasPrefix(ref, "#") {
-			pointer := strings.TrimPrefix(ref, "#")
-			if pointer != "" && !strings.HasPrefix(pointer, "/") {
-				undecided()
-				return
-			}
-			if visitedPointers[pointer] {
-				return
-			}
-			visitedPointers[pointer] = true
-			doc := view()
-			if doc == nil {
-				undecided()
-				return
-			}
-			target, ok := resolveDocPointer(doc, pointer)
-			if !ok {
-				undecided()
-				return
-			}
-			walk(target, nil)
-			return
-		}
-		if base != nil && strings.HasPrefix(ref, "#") {
-			// A fragment inside an embedded resource resolves within that
-			// resource, whose whole subtree the walk already covers.
-			return
-		}
-		parsed, err := neturl.Parse(ref)
-		if err != nil {
-			undecided()
-			return
-		}
-		if base != nil {
-			parsed = base.ResolveReference(parsed)
-		}
-		if !parsed.IsAbs() {
-			undecided()
-			return
-		}
-		fragment := parsed.Fragment
-		parsed.Fragment = ""
-		parsed.RawFragment = ""
-		resourceID := parsed.String()
-		resource, embedded := resources[resourceID]
-		if !embedded {
-			result = graphReachesExternal
-			return
-		}
-		if fragment != "" {
-			undecided()
-			return
-		}
-		if visitedResources[resourceID] {
-			return
-		}
-		visitedResources[resourceID] = true
-		walk(resource, parsed)
-	}
-	walk = func(node any, base *neturl.URL) {
-		if result == graphReachesExternal {
-			return
-		}
-		object, ok := node.(map[string]any)
-		if !ok {
-			return
-		}
-		if rawID, ok := object["$id"].(string); ok {
-			if parsed, err := neturl.Parse(rawID); err == nil {
-				if base != nil {
-					parsed = base.ResolveReference(parsed)
-				}
-				if parsed.IsAbs() {
-					parsed.Fragment = ""
-					parsed.RawFragment = ""
-					base = parsed
-				}
-			}
-		}
-		if ref, ok := object["$ref"].(string); ok {
-			follow(ref, base)
-		}
-		for keyword, child := range object {
-			switch {
-			case schemaMapKeywords[keyword]:
-				if entries, ok := child.(map[string]any); ok {
-					for _, entry := range entries {
-						walk(entry, base)
-					}
-				}
-			case singleSchemaKeywords[keyword]:
-				walk(child, base)
-			case arraySchemaKeywords[keyword]:
-				if entries, ok := child.([]any); ok {
-					for _, entry := range entries {
-						walk(entry, base)
-					}
-				}
-			}
-		}
-	}
-	walk(root, nil)
-	return result
-}
-
-// embeddedSchemaResources maps the absolute URI of every schema resource the
-// document embeds by $id to that resource, nested resources included.
-func embeddedSchemaResources(i Interface) map[string]any {
-	resources := map[string]any{}
-	var visit func(node any, base *neturl.URL)
-	visit = func(node any, base *neturl.URL) {
-		object, ok := node.(map[string]any)
-		if !ok {
-			return
-		}
-		if rawID, ok := object["$id"].(string); ok {
-			if parsed, err := neturl.Parse(rawID); err == nil {
-				if base != nil {
-					parsed = base.ResolveReference(parsed)
-				}
-				if parsed.IsAbs() {
-					parsed.Fragment = ""
-					parsed.RawFragment = ""
-					resources[parsed.String()] = object
-					base = parsed
-				}
-			}
-		}
-		for keyword, child := range object {
-			switch {
-			case schemaMapKeywords[keyword]:
-				if entries, ok := child.(map[string]any); ok {
-					for _, entry := range entries {
-						visit(entry, base)
-					}
-				}
-			case singleSchemaKeywords[keyword]:
-				visit(child, base)
-			case arraySchemaKeywords[keyword]:
-				if entries, ok := child.([]any); ok {
-					for _, entry := range entries {
-						visit(entry, base)
-					}
-				}
-			}
-		}
-	}
-	for _, schema := range i.Schemas {
-		visit(schema, nil)
-	}
-	for _, operation := range i.Operations {
-		visit(operation.Input, nil)
-		visit(operation.Output, nil)
-	}
-	return resources
-}
-
-// buildSchemaDefs deep-copies the document's schemas map and rewrites
-// `$ref: "#/schemas/X"` → `$ref: "#/$defs/X"` so cross-schema refs
-// resolve inside the compound schema we compile per example.
-func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
-	if len(schemas) == 0 {
-		return nil
-	}
-	defs := make(map[string]any, len(schemas))
-	for name, sch := range schemas {
-		switch v := sch.(type) {
-		case map[string]any:
-			defs[name] = rewriteSchemaRefs(deepCopyJSON(v))
-		default:
-			// Boolean schemas carry no refs to rewrite; anything else is
-			// malformed (OBI-D-17's concern) and surfaces at compile time.
-			defs[name] = v
-		}
-	}
-	return defs
-}
-
-// compileExampleSchema builds a compound JSON Schema rooted at an isolated
-// schema, with a named schema map exposed under $defs, then compiles it. It
-// cannot preserve arbitrary references into an OBI document because it does
-// not receive that document; interface-aware callers use
-// CompileOperationSchema instead.
-func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema.Schema, error) {
-	var root any
-	switch v := opSchema.(type) {
-	case map[string]any:
-		copied := deepCopyJSON(v)
-		rootMap := copied.(map[string]any)
-		rewriteSchemaRefs(rootMap)
-		if len(defs) > 0 {
-			if existing, has := rootMap["$defs"]; has {
-				if existingMap, isMap := existing.(map[string]any); isMap {
-					for k, dv := range defs {
-						if _, present := existingMap[k]; !present {
-							existingMap[k] = dv
-						}
-					}
-				}
-			} else {
-				rootMap["$defs"] = defs
-			}
-		}
-		root = rootMap
-	case bool:
-		// Boolean schemas reference nothing; compile the boolean directly.
-		root = v
-	default:
-		return nil, fmt.Errorf("operation schema must be a JSON Schema object or boolean")
-	}
-	c := exactCountCompiler()
-	const url = "openbindings:///example-schema"
-	if err := c.AddResource(url, root); err != nil {
-		return nil, err
-	}
-	return c.Compile(url)
-}
-
-// CompileOperationSchema compiles an operation's input/output schema at its
-// canonical fragment inside the complete OBI document. The document, not an
-// extracted schema object, is the resolution root for same-document references
-// (OBI-D-16 / OBI-T-16).
-func CompileOperationSchema(i *Interface, operationName, position string) (*CompiledSchema, error) {
+// The schema graph statically reachable from the operation's schema must be
+// complete: a graph that reaches a resource the document does not embed, has
+// a reference that does not resolve, or holds a schema that is not
+// well-formed yields a *SchemaGraphUnavailableError, even where no value
+// would exercise that part of it. A JSON Schema meta-schema is outside the
+// document but available: the schema library carries it. A document is
+// interpreted only under a supported version: one declaring a well-formed
+// version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
+// no valid version returns an error (OBI-D-12). Any other error means nothing
+// was compiled: there is no interface, the name resolves to no one operation
+// (wrapping ErrOperationNotFound), the operation specifies no schema at that
+// position, or the interface cannot be encoded.
+func CompileOperationSchema(i *Interface, operation, position string) (*CompiledSchema, error) {
 	if i == nil {
-		return nil, fmt.Errorf("interface is nil")
+		return nil, errors.New("openbindings: interface is nil")
 	}
-	op, ok := i.Operations[operationName]
+	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
+		return nil, refusal
+	}
+	if !IsValidSemver(i.OpenBindings) {
+		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-12), so it is not interpreted", i.OpenBindings)
+	}
+	key, target, ok := ResolveOperation(i, operation)
 	if !ok {
-		return nil, fmt.Errorf("operation %q is not defined", operationName)
+		return nil, fmt.Errorf("%w: %q", ErrOperationNotFound, operation)
 	}
-	var target JSONSchema
+	var schema JSONSchema
 	switch position {
 	case "input":
-		target = op.Input
+		schema = target.Input
 	case "output":
-		target = op.Output
+		schema = target.Output
 	default:
-		return nil, fmt.Errorf("unknown operation schema position %q", position)
+		return nil, fmt.Errorf("openbindings: unknown operation schema position %q", position)
 	}
-	if target == nil {
-		return nil, fmt.Errorf("operation %q has no %s schema", operationName, position)
+	if schema == nil {
+		return nil, fmt.Errorf("openbindings: operation %q specifies no %s schema", key, position)
 	}
-
-	data, err := json.Marshal(i)
-	if err != nil {
-		return nil, fmt.Errorf("marshal OBI document for schema compilation: %w", err)
-	}
-	var document map[string]any
-	if err := jsonvalue.Unmarshal(data, &document); err != nil {
-		return nil, fmt.Errorf("decode OBI document for schema compilation: %w", err)
-	}
-	// The OBI root is a resolution container, not a schema. Unknown fields are
-	// ignored by Core and must not accidentally act as schema-control keywords
-	// when the generic backend indexes the container.
-	delete(document, "$id")
-	delete(document, "$schema")
-	delete(document, "$anchor")
-	delete(document, "$dynamicAnchor")
-
-	c := exactCountCompiler()
-	const url = "openbindings:///document"
-	if err := registerInterfaceSchemaResources(c, i); err != nil {
-		return nil, err
-	}
-	if err := c.AddResource(url, document); err != nil {
-		return nil, err
-	}
-	escape := strings.NewReplacer("~", "~0", "/", "~1").Replace
-	fragment := "#/operations/" + escape(operationName) + "/" + position
-	compiled, err := c.Compile(url + fragment)
+	view, err := documentView(*i)
 	if err != nil {
 		return nil, err
 	}
-	return &CompiledSchema{backend: compiled}, nil
+	compiled, _, err := newOperationContracts(view, collectDocumentSchemas(view)).compile(key, position)
+	if err != nil {
+		return nil, &SchemaGraphUnavailableError{Cause: err}
+	}
+	return compiled, nil
 }
 
-// registerInterfaceSchemaResources makes absolute `$id` resources embedded at
-// Core-defined schema positions visible to the generic JSON Schema compiler.
-// OBI's `schemas` and `operations` fields are intentionally not JSON Schema
-// keywords, so a backend cannot discover those resources merely by compiling
-// the OBI document container.
-func registerInterfaceSchemaResources(c *jsonschema.Compiler, i *Interface) error {
-	seen := map[string]bool{}
-	var visit func(any, *neturl.URL) error
-	visit = func(node any, base *neturl.URL) error {
-		object, ok := node.(map[string]any)
-		if !ok {
-			return nil
-		}
-		currentBase := base
-		if rawID, ok := object["$id"].(string); ok {
-			parsed, err := neturl.Parse(rawID)
-			if err != nil {
-				return fmt.Errorf("parse embedded schema $id %q: %w", rawID, err)
-			}
-			if base != nil {
-				parsed = base.ResolveReference(parsed)
-			}
-			if !parsed.IsAbs() {
-				return fmt.Errorf("embedded schema $id %q has no absolute base", rawID)
-			}
-			resourceID := parsed.String()
-			if !seen[resourceID] {
-				if err := c.AddResource(resourceID, object); err != nil {
-					return fmt.Errorf("register embedded schema resource %q: %w", resourceID, err)
-				}
-				seen[resourceID] = true
-			}
-			// The compiler traverses this registered resource's recognized schema
-			// positions and discovers any nested `$id` resources itself.
-			return nil
-		}
-
-		for keyword, child := range object {
-			switch {
-			case schemaMapKeywords[keyword]:
-				if entries, ok := child.(map[string]any); ok {
-					for _, entry := range entries {
-						if err := visit(entry, currentBase); err != nil {
-							return err
-						}
-					}
-				}
-			case singleSchemaKeywords[keyword]:
-				if err := visit(child, currentBase); err != nil {
-					return err
-				}
-			case arraySchemaKeywords[keyword]:
-				if entries, ok := child.([]any); ok {
-					for _, entry := range entries {
-						if err := visit(entry, currentBase); err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-		return nil
-	}
-	for _, schema := range i.Schemas {
-		if err := visit(schema, nil); err != nil {
-			return err
-		}
-	}
-	for _, operation := range i.Operations {
-		if err := visit(operation.Input, nil); err != nil {
-			return err
-		}
-		if err := visit(operation.Output, nil); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func rewriteSchemaRefs(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		if ref, ok := t["$ref"].(string); ok && strings.HasPrefix(ref, "#/schemas/") {
-			t["$ref"] = "#/$defs/" + strings.TrimPrefix(ref, "#/schemas/")
-		}
-		for _, child := range t {
-			rewriteSchemaRefs(child)
-		}
-	case []any:
-		for _, child := range t {
-			rewriteSchemaRefs(child)
-		}
-	}
-	return v
-}
-
-func deepCopyJSON(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, child := range t {
-			out[k] = deepCopyJSON(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, child := range t {
-			out[i] = deepCopyJSON(child)
-		}
-		return out
-	case []string:
-		out := make([]any, len(t))
-		for i, s := range t {
-			out[i] = s
-		}
-		return out
-	default:
-		return v
-	}
-}
-
-func splitSchemaError(err error) []string {
-	if err == nil {
-		return nil
-	}
-	if ve, ok := err.(*jsonschema.ValidationError); ok {
-		return flattenValidationError(ve, "")
-	}
-	return []string{err.Error()}
-}
-
-func flattenValidationError(ve *jsonschema.ValidationError, prefix string) []string {
-	if ve == nil {
-		return nil
-	}
-	var out []string
-	if len(ve.Causes) == 0 {
-		out = append(out, fmt.Sprintf("%s%s", prefix, summarizeValidationError(ve)))
-		return out
-	}
-	for _, c := range ve.Causes {
-		out = append(out, flattenValidationError(c, prefix)...)
-	}
-	return out
-}
-
-func summarizeValidationError(ve *jsonschema.ValidationError) string {
-	loc := ""
-	if len(ve.InstanceLocation) > 0 {
-		loc = "/" + strings.Join(ve.InstanceLocation, "/") + ": "
-	}
-	return loc + kindString(ve.ErrorKind)
-}
-
-// ValidateAgainstSchema validates a value against an operation-level JSON
-// Schema, resolving #/schemas/ references against the interface's named
-// schema pool. This is the same compilation and validation the operation
-// invoker applies to outputs under OBI-T-16, exported so tools can enforce
-// or test wire conformance on values they carry themselves.
-func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSONSchema) error {
-	compiled, err := compileExampleSchema(schema, buildSchemaDefs(schemas))
-	return validateCompiledSchema(value, compiled, err)
-}
-
-// ValidateOperationInput validates a value against an operation input schema
-// with the complete OBI document retained as the same-document `$ref` root.
+// ValidateOperationInput validates a value against an operation's input
+// schema, with the complete OBI document as the resolution root (OBI-T-16).
+// It compiles the document's schemas on every call; to validate many values,
+// compile once with CompileOperationSchema and use CompiledSchema.Validate.
+//
+// A nil error means the value validates. A *SchemaValidationError is an
+// established mismatch; a *SchemaGraphUnavailableError means the schema's
+// graph could not be fully resolved, so no verdict was reached. Any other
+// error means nothing was validated: see CompileOperationSchema.
 func ValidateOperationInput(value any, iface *Interface, operationName string) error {
 	compiled, err := CompileOperationSchema(iface, operationName, "input")
-	return validateCompiledSchema(value, compiled, err)
+	if err != nil {
+		return err
+	}
+	return compiled.Validate(value)
 }
 
-// ValidateOperationOutput validates a value against an operation output schema
-// with the complete OBI document retained as the same-document `$ref` root.
+// ValidateOperationOutput validates a value against an operation's output
+// schema, as ValidateOperationInput does against its input schema.
 func ValidateOperationOutput(value any, iface *Interface, operationName string) error {
 	compiled, err := CompileOperationSchema(iface, operationName, "output")
-	return validateCompiledSchema(value, compiled, err)
-}
-
-func validateCompiledSchema(value any, compiled interface{ Validate(any) error }, err error) error {
 	if err != nil {
-		return &SchemaGraphUnavailableError{Cause: err}
+		return err
 	}
-	if verr := compiled.Validate(value); verr != nil {
-		return projectSchemaValidationError(verr)
-	}
-	return nil
+	return compiled.Validate(value)
 }
 
-// SchemaGraphUnavailableError reports that a value verdict could not be
-// reached because the governing operation schema's complete statically
-// reachable graph was not available, well-formed, and evaluable. It is
-// distinct from an instance mismatch, as required by OBI-T-16.
+// SchemaGraphUnavailableError reports that no verdict was reached because the
+// governing schema's complete statically reachable graph was not available,
+// well-formed, and evaluable. It is distinct from a mismatch, as OBI-T-16
+// requires of validation against an operation's contract.
 //
 // Callers can use errors.As rather than parsing diagnostic text. Cause remains
 // available through errors.Unwrap for validator-specific diagnostics.
@@ -703,9 +376,9 @@ type SchemaGraphUnavailableError struct {
 
 func (e *SchemaGraphUnavailableError) Error() string {
 	if e == nil || e.Cause == nil {
-		return "openbindings: schema compilation failed"
+		return "openbindings: schema graph unavailable"
 	}
-	return fmt.Sprintf("openbindings: schema compilation failed: %v", e.Cause)
+	return fmt.Sprintf("openbindings: schema graph unavailable: %v", e.Cause)
 }
 
 func (e *SchemaGraphUnavailableError) Unwrap() error {
@@ -715,25 +388,60 @@ func (e *SchemaGraphUnavailableError) Unwrap() error {
 	return e.Cause
 }
 
-// SchemaValidationError is an established instance mismatch. Use errors.As to
-// distinguish it from a capability refusal or unavailable schema graph without
-// depending on the private backend. It renders readable per-leaf diagnostics.
+// SchemaValidationError is an established mismatch between a value and a
+// schema. Use errors.As to distinguish it from a *SchemaGraphUnavailableError,
+// where no verdict was reached; OBI-T-16 requires the two outcomes to stay
+// distinct when a value is validated against an operation's contract. Cause
+// is the validator's own error.
 type SchemaValidationError struct {
-	lines []string
-	cause error
+	Problems []SchemaProblem
+	Cause    error
 }
 
-func (e *SchemaValidationError) Error() string { return strings.Join(e.lines, "; ") }
-func (e *SchemaValidationError) Unwrap() error { return e.cause }
+// SchemaProblem is one failed constraint of a mismatch. Path locates it in the
+// validated value as an RFC 6901 JSON Pointer; the empty pointer is the whole
+// value.
+type SchemaProblem struct {
+	Path    string
+	Message string
+}
 
-func projectSchemaValidationError(err error) error {
-	var projected *SchemaValidationError
-	if errors.As(err, &projected) {
-		return err
+func (e *SchemaValidationError) Error() string {
+	if e == nil || len(e.Problems) == 0 {
+		return "openbindings: the value does not validate against the schema"
 	}
-	var mismatch *jsonschema.ValidationError
-	if errors.As(err, &mismatch) {
-		return &SchemaValidationError{lines: splitSchemaError(mismatch), cause: err}
+	lines := make([]string, len(e.Problems))
+	for i, problem := range e.Problems {
+		if problem.Path == "" {
+			lines[i] = problem.Message
+		} else {
+			lines[i] = problem.Path + ": " + problem.Message
+		}
 	}
-	return err
+	return strings.Join(lines, "; ")
+}
+
+func (e *SchemaValidationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// schemaValidationError projects a backend validation error onto the SDK's
+// outcomes: a *SchemaValidationError for an established mismatch, and a
+// *SchemaGraphUnavailableError for anything that reached no verdict.
+func schemaValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	problems, mismatch := schemacompiler.Outcome(err)
+	if !mismatch {
+		return &SchemaGraphUnavailableError{Cause: err}
+	}
+	out := &SchemaValidationError{Problems: make([]SchemaProblem, len(problems)), Cause: err}
+	for i, problem := range problems {
+		out.Problems[i] = SchemaProblem{Path: jsonpointer.Format(problem.Location...), Message: problem.Message}
+	}
+	return out
 }

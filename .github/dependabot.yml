@@ -1,16 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: "gomod"
-    directories:
-      - "/"
-      - "/formats/asyncapi"
-      - "/formats/connect"
-      - "/formats/graphql"
-      - "/formats/grpc"
-      - "/formats/mcp"
-      - "/formats/openapi"
-      - "/formats/operationgraph"
-      - "/formats/usage"
+    directory: "/"
     schedule:
       interval: "weekly"
     groups:

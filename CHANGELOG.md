@@ -6,6 +6,233 @@
 
 ### Fixed
 
+- **The model encodes only what it would decode back unchanged.** A member
+  carried as raw JSON (an example value, source content, or an
+  `Extensions`/`Unknown` entry) holding what decoding refuses (an escaped
+  lone UTF-16 surrogate, a repeated member name, invalid UTF-8, or nesting
+  deeper than the decoder reads) now fails `MarshalJSON`, where encoding/json
+  wrote it out or altered it. `Interface.Validate` and the contract API judge
+  a host object's encoding, so such an object returned a verdict on a
+  different document: an example `"\ud800"` passed a `const` of U+FFFD. They
+  now return the encoding error and no report. A nil `Extensions` or
+  `Unknown` entry still encodes as `null`.
+- **OBI-D-01 no longer depends on how encoding/json reads deep input.** One
+  scan of the input checks JSON syntax, repeated names, lone surrogates, and
+  the declared version, at any depth and with its own stack. Under
+  encoding/json built on its v2 implementation (`GOEXPERIMENT=jsonv2`),
+  valid input nested past 10,000 levels was an OBI-D-01 violation and a
+  deeply nested unsupported version was not refused; neither depends on
+  encoding/json now. A syntax error is worded as encoding/json words its own
+  (for example "invalid character '1' after top-level value"), at any depth.
+  The single pass is also about a third faster than the two it replaces.
+- **An `$id` of `""` or `"#"` declares no resource**, as the schema library
+  reads it. Inside an embedded resource it was taken for a second resource
+  with the same URI, so every reference to the resource was ambiguous: a
+  violating example left OBI-D-11 inconclusive and validation reported the
+  graph unavailable.
+- **OBI-D-16 is violated when an ambiguous reference resolves nowhere.** A
+  reference to a URI that more than one schema declares names no one schema
+  and stays inconclusive, unless its fragment resolves within none of them.
+- **An absolute URI names the resource it resolves to.** A `$id` or `$ref`
+  holding dot segments (`https://example.com/x/../a`) was compared as
+  written, while the schema library removes them (RFC 3986 §5.2.4). A
+  reference to the embedded schema by the other spelling was read as
+  external: a violating example was skipped and the document concluded
+  conformant, validation of a value reported the graph unavailable, and a
+  fragment that resolves nowhere in the resource satisfied OBI-D-16.
+- **OBI-D-01 is decided at any depth.** Input nested deeper than
+  encoding/json reads (10,000 levels) is read in full, so a repeated name, a
+  syntax error, or trailing data anywhere in it violates OBI-D-01. Input that
+  satisfies OBI-D-01 still cannot be decoded, so every other rule is
+  inconclusive.
+- **A leading byte-order mark does not hide the declared version.** A
+  BOM-prefixed document declaring an unsupported version is refused
+  (OBI-T-04), as one with invalid UTF-8 already was, rather than judged
+  under 0.2's OBI-D-01.
+- **OBI-D-16 resolves a malformed same-document fragment.** A `$ref` of
+  `#/schemas/Missing Thing` violates OBI-D-05 and, resolving nowhere, now
+  OBI-D-16 as well; it satisfied OBI-D-16.
+- **Validation no longer does quadratic work in three places on hostile
+  input.** Setting members aside for OBI-D-02 copied the document once per
+  member (232 KB allocated 5 GB); collecting schema resources and walking
+  schemas for OBI-D-05/06/07/16 copied the path at every node (62 KB
+  allocated 640 MB); and every anchor reference re-walked its resource
+  (232 KB took 3.3 s). Each now does one pass, and an anchor's location is
+  spelled out only when a reference resolves to it. A chain of thousands of
+  nested `$id` resources still costs time quadratic in its depth, as does a
+  report with a finding at every level of a deeply nested schema. OBI-D-17
+  is inconclusive for a schema nesting subschemas deeper than 256 levels,
+  the limit compilation applies, since the meta-schema validator's work
+  grows faster than linearly with that depth; data inside a schema (`const`,
+  `default`, and the like) does not count toward either limit.
+- **A document with a large number in its aliases no longer crashes
+  validation.** An operation's `aliases` or a dependency's `bindingSpecs`
+  holding more than 20 items, one of them a number beyond the numeric limits
+  of schema evaluation, made `ParseDocument` and `ValidateDocument` panic
+  inside the schema library, whose `uniqueItems` compares items as numbers.
+  Every member the document schema does numeric work on is now checked
+  (`preference`, `aliases`, `bindingSpecs`), and a test holds that list to
+  the embedded schema.
+- **A number beyond the limits in one member no longer hides the rest of
+  OBI-D-02.** The member is set aside and the rest of the document is still
+  checked. A `preference` is decided exactly, however it is spelled: `1e10001`
+  violates its range, and `1.` followed by 5,000 zeros is 1. An array holding
+  such a number is inconclusive at its location. The typed model decodes a
+  preference with the same check, whose work no longer grows with the
+  exponent.
+- **An unsupported version is refused however deeply the input nests.** The
+  declared version is read by a scan with no depth limit, so input nested
+  past the decoder's 10,000 levels is refused under OBI-T-04 rather than
+  reported conformance-undetermined.
+- **A repeated member name is located.** The OBI-D-01 finding is at the
+  object that repeats it. A leading byte-order mark is named as such.
+- **The same document gets the same findings on every run.** The URI the
+  schema library is given for the document is derived from the document's
+  content rather than drawn at random, and messages locate a schema by its
+  JSON Pointer in the document rather than by that URI.
+- **Checking for repeated names and lone surrogates is linear in the
+  input.** It copied a value's location for every value, so deep and wide
+  input cost depth times width: a 2 MB document took 16 seconds to parse.
+- **Resource limits cover what the schema library reaches, and nothing
+  else.** OBI-D-02 holds only the members the document schema does numeric
+  work on to the numeric limits of schema evaluation. An operation's schema is held to them, and to a nesting depth
+  of 256, over the values the library can reach from it: its schema and,
+  transitively, what the references in them name. A large number in an
+  unrelated extension or in source content no longer leaves every operation
+  unavailable and OBI-D-02 inconclusive, and a schema nested thousands of
+  levels deep no longer takes seconds to compile. A finding about a limit
+  names the offending value's location.
+- **`ParseDocument` refuses what it cannot check.** A document holding a
+  number beyond the limits parsed without its document schema applied, so a
+  missing `operations` member went unreported. It now returns an error when
+  the document schema could not be applied. An OBI-D-01 violation is a
+  `*ValidationError` like every other violation.
+- **Input nested deeper than the decoder reads is inconclusive** (§10.5), not
+  an OBI-D-01 violation.
+- **A reached pattern Go's regexp cannot compile no longer stops
+  compilation.** The graph is still resolved, so a graph that reaches
+  outside the document is outside OBI-D-11 whatever patterns it holds; one
+  that does not leaves the operation unavailable, as before.
+- **Operation-schema conclusions are deterministic.** The compiled graph is
+  inspected in full, and its first problem in sorted order reported, so a
+  document no longer concludes differently from run to run.
+- **Locations are percent-encoded as the schema library reads them.** A
+  property name with a space escaped the dialect checks, and an operation key
+  holding `%` compiled another operation's schema.
+- **OBI-D-11 compiles a document once.** Every operation's schema shares one
+  compilation of the document and its embedded resources; a document with
+  hundreds of operations and `$id` schemas took seconds.
+- **Validation keeps no state that grows with its input.** Only URIs that
+  name a meta-schema the library carries are remembered.
+- **OBI-D-17 is violated beside OBI-D-06 and OBI-D-07.** Its definition
+  includes §5.2's dialect constraints.
+- **OBI-D-05 stops at a schema resource's boundary.** A schema that declares
+  its own `$id` is a schema resource whose references, nested `$id`s, and
+  dynamic pair are its internal business, resolved per JSON Schema exactly as
+  for an externally fetched schema (§7). A relative or malformed `$ref`
+  inside one was an OBI-D-05 violation; OBI-D-05 now judges only the
+  resource's own `$id`, which must be an absolute, well-formed URI
+  (`https://[::1` is not). A same-document fragment whose pointer has an
+  invalid escape (`#/$defs/~2`) is not a JSON Pointer: it violates OBI-D-05
+  and no longer resolves for OBI-D-16.
+- **`ParseDocument` refuses an unsupported version before applying the
+  schema.** It judged a `0.3.0` document against the 0.2 document schema
+  and reported it non-conformant; it now returns the `*VersionRefusalError`
+  (OBI-T-04), as `ValidateDocument` already did. Its schema violations are
+  built by the same rule checks as validation, so their text matches.
+- **A version with surrounding whitespace is not SemVer.** `IsValidSemver`,
+  `IsSupportedVersion`, and OBI-D-12 no longer trim, so `" 0.2.0"` violates
+  OBI-D-12.
+- **One defect is one finding.** Checks that restated the embedded document
+  schema are gone, so OBI-D-02 has one owner. An `anyOf` or `oneOf` that no
+  alternative satisfies is one finding at its own location that says what
+  each alternative lacked; a source with neither `location` nor `content`
+  was three findings.
+- **Schema compilation never reads local files.** The schema backend's
+  default loader read `file:` references from disk, so a document could make
+  validation read the validating machine's files and a verdict could depend
+  on that machine. Every external reference now leaves the schema graph
+  unavailable (`*SchemaGraphUnavailableError`), as `http(s)` references
+  already did (§7, OBI-T-16). The JSON Schema meta-schemas are built in and
+  still resolve.
+- **Operation contracts compile against the document's content, not its
+  root.** The whole OBI was compiled as a JSON Schema, so its unknown members
+  acted as schema keywords: a root `$defs` supplied embedded resources, and a
+  root `"type": 5` made every operation's graph unavailable (OBI-T-02, §7).
+  The schema library is now given the document without the root members
+  named like a JSON Schema 2020-12 keyword, which it would read as keywords
+  there (the OBI's own `dependencies` and `description` among them, so a
+  dependency entry is never read as a schema). Every other member stays at
+  the location it holds, so a same-document reference means what its author
+  wrote. Every resource the document embeds by `$id`, nested ones included,
+  resolves by it, one whose `$id` is a meta-schema's URI too, and sets the
+  base of the locations inside it, so a same-document pointer into a
+  resource's interior resolves the references there against that resource.
+  An `$id` two schemas declare leaves only the graphs that reach it
+  unavailable. Each compilation gives the document a URI unique to it, so no
+  `$id` collides with the document itself.
+- **Operation-contract validation needs a complete graph** (§5.2, OBI-T-16).
+  `CompileOperationSchema`, `ValidateOperationInput`, and
+  `ValidateOperationOutput` report the graph unavailable when what the
+  schema library compiles reaches a resource outside the document other
+  than a built-in meta-schema, a reference that does not resolve, a schema
+  the 2020-12 meta-schemas refuse, another `$schema`, or a `$vocabulary`. An
+  unreferenced definition stays outside the graph. A cycle of references
+  that never advances into the value is unavailable wherever it sits, not a
+  mismatch or a pass. They refuse an unsupported version
+  (OBI-T-04), refuse to interpret a document declaring no valid version
+  (OBI-D-12), and resolve an operation by key or alias (OBI-T-12). A value
+  outside the JSON value domain (a Go struct, a `map[string]int`) is refused
+  as such, not reported as a mismatch.
+- **A name several operations carry resolves to none of them.** In a
+  document violating OBI-D-04, `ResolveOperation` preferred a key match and
+  otherwise picked an alias match at random (OBI-T-12).
+- **The document rules no longer depend on typed decoding.** When the typed
+  model could not decode a document, `ValidateDocument` reported every
+  remaining rule inconclusive, OBI-D-02 and OBI-D-12 included although both
+  were decided, and missed violations it could establish, such as an
+  OBI-D-17 `"input": null` or an OBI-D-08 dangling operation. Every rule now
+  judges the document's JSON, literally on the values present: a value
+  that fails a rule's predicate violates it (an operation reference that is
+  a number names no operation key), and one outside the rule's domain gives
+  it nothing to judge. `Interface.Validate` judges the
+  encoding of the host object the same way. A resource limit met while
+  checking a rule leaves it inconclusive, never violated (§10.5).
+- **OBI-D-05 follows RFC 3986's grammar.** A character screen plus `net/url`
+  passed `#/a[0]` and a second `#` in a fragment, and refused a
+  percent-encoded host. A URI-form reference is now checked against the
+  URI-reference grammar; an empty location is relative in form. The
+  named-transform `$ref` clause is now checked. `dependencies` subschemas,
+  which the 2020-12 meta-schema describes and the backend applies, are
+  walked like `definitions`.
+- **OBI-D-16 covers absolute references into embedded resources.** An
+  absolute `$ref` matching an embedded schema's `$id` is in the rule's
+  scope; one that does not resolve within that resource was reported
+  conformant. OBI-D-16 now judges every same-document fragment, one whose
+  spelling OBI-D-05 refuses included, and a reference to an anchor two
+  schemas declare is inconclusive. OBI-D-10 decodes a percent-encoded
+  transform reference before resolving it.
+- **An oversized version is refused.** A version whose numbers exceed a
+  machine integer failed to parse and was interpreted under 0.2 rules;
+  SemVer bounds no number, so versions now compare exactly at any size. The
+  version is read and refused before OBI-D-01 judges the bytes, whenever a
+  JSON decoder can read it (§10.1).
+- **OBI-D-11 follows a fragment into an embedded resource.** An example
+  behind `https://example.com/t#/$defs/S`, into a schema the document embeds
+  by that `$id`, was left unchecked; it is now validated, as is one behind a
+  plain-name anchor.
+- **OBI-T-02 diagnoses the transform `$ref` object.** Its unknown members
+  are now reported like those of every other OBI-defined object.
+- **A document schema finding about a map key is located at the key**, not
+  at the whole document.
+- **A present empty `selector` no longer runs a Usage root command.** An
+  absent selector addresses the root command and USAGE-D-03 refuses `""`,
+  but invocation received both as `""` and ran the root.
+- **Synthesized documents state no empty optional collection.** The exact
+  model made synthesizers emit the empty `bindings` and `dependencies` maps
+  their skeletons start with; `synthesize.FinalizeSynthesis` now omits empty
+  optional collections. A dependency's `bindingSpecs` is left as authored.
+
 - **`canonicaljson` refuses numbers it cannot carry exactly.** A JSON number
   whose exact value is not representable in IEEE 754 binary64 (for example
   `9007199254740993`, or a decimal with more precision than a double holds)
@@ -61,6 +288,171 @@
 
 ### Changed
 
+- **The version API states the supported set and the version documents
+  declare** (breaking, pre-1.0). `MinSupportedVersion`, `MaxTestedVersion`,
+  and `SupportedRange` are removed: they named a tested range, which §8.1
+  does not define, and did three jobs under one name. `SupportedVersions`
+  (`0.2.x`) states the versions this SDK supports, and `IsSupportedVersion`
+  still decides membership. `AuthoringVersion` (`0.2.0`) is the version a
+  document written with this SDK declares: the lowest version sufficient for
+  what the document model carries, as §8.1 asks of documents, where
+  `MaxTestedVersion` would have moved with every tested patch. A prerelease
+  is supported only when named explicitly (§8.1); it was inferred from the
+  tested range, which would have admitted `0.2.1-rc.1` once the range reached
+  0.2.1. None is named, so what the SDK accepts is unchanged, and a refusal
+  of a version outside the line names the line (`0.2.x`).
+- **Core's tests use only core.** The operation-contract witnesses from the
+  interfaces repository's comparison corpus are checked in `schemaprofile`,
+  which owns that profile, and the `canonicaljson` example is in
+  `canonicaljson`. The core package documentation no longer lists the
+  packages built on it.
+- **Core depends on no other package of the SDK.** It used `jsonvalue` for
+  four helpers, and so compiled that package's invocation, schema-comparison
+  and binding-specification helpers, `internal/value`, `internal/jstring`,
+  and the private copy of encoding/json. Core now keeps its number checks
+  beside its use of the JSON Schema library and encodes with encoding/json:
+  a host object holding an empty `json.Number` is validated as the `0`
+  `json.Marshal` writes for it.
+- **The document model does not carry lone UTF-16 surrogates** (breaking,
+  pre-1.0). A string escaping an isolated surrogate (`"\uD800"`) is RFC 8259
+  JSON, so it breaks no document rule, but a Go string cannot hold it and
+  encoding/json replaces it with U+FFFD. The model kept it through a private
+  copy of encoding/json that stored it as WTF-8, which the JSON Schema
+  library then counted as three characters, reporting false OBI-D-11
+  violations. Core now decodes with encoding/json and detects the escape:
+  decoding refuses such a document, `ParseDocument` refuses it naming where
+  the string is, and `ValidateDocument` decides OBI-D-01 and leaves every
+  other rule inconclusive. Member names are still compared exactly, so
+  `"\uD800"` and `"\uFFFD"` are two names. The TypeScript SDK, whose strings
+  are UTF-16, carries such strings; the difference is an accepted divergence.
+- **`ValidationError` carries findings** (breaking, pre-1.0). `Problems
+  []string` is replaced by `Findings []Finding`, each naming its rule and
+  location; the message is unchanged apart from saying "non-conformant
+  document". `ErrOperationNotFound` reads "no one operation is named", which
+  covers an ambiguous name too, and a version refusal names the release line
+  the SDK supports (0.2.x) rather than the tested version.
+- **Validation takes the transform parser it is given** (breaking, pre-1.0).
+  Core defines the two capabilities the specification names over the pinned
+  transform language (§5.5), and carries neither: `TransformParser` decides
+  whether an expression is in the language, and `TransformEvaluator`
+  evaluates one with an input and the context bindings a binding
+  specification defines (§5.5 clause 5). One implementation of the language
+  usually provides both, and an application gives the same one to every
+  layer that parses or evaluates transforms, so the expression validation
+  accepts is the expression that runs. `Interface.Validate` and
+  `ValidateDocument` take a `ValidateOptions`, whose `Transforms` field is a
+  `TransformParser`. OBI-D-18 is decided by that parser; without one it is
+  inconclusive at every expression, as §10.2 provides for a validator
+  without a parser, so a document with transforms is
+  conformance-undetermined rather than conformant. Core no longer imports
+  the JSONata syntax package. `ErrTransformNoResult` marks an expression
+  that yields no result (JSONata's undefined), and `ErrTransformUndecided`
+  one that could not be decided (the implementation's own limits, not the
+  expression): from `Parse` it leaves OBI-D-18 inconclusive rather than
+  violated.
+- **The JSON Schema library is an ordinary dependency** (behavior changes in
+  rare cases). Core validated with a private, patched copy of
+  `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3; it now requires the
+  published module and uses it as documented, and the copy, its patch, and
+  the scripts that maintained them are gone. Where the library differs from
+  what the patches did, the library's behavior stands: patterns use Go's
+  `regexp`, so an ECMAScript-only pattern such as a lookahead leaves the
+  graph unavailable; the pre-2019 `dependencies` and `$recursiveRef` are
+  evaluated in 2020-12 schemas; counts beyond the largest Go `int` are not
+  corrected; and a document schema finding about a map key can name the
+  wrong parent map, because v6.0.3 reuses that location's storage. Two
+  library behaviors are corrected through its public options instead:
+  `format` never rejects a value, in any draft (the library otherwise
+  enforces it under draft-07 and earlier, which a reference to their
+  meta-schemas reaches, with no option to stop), and the graph an operation
+  schema reaches is walked by core itself, so a `then` or `else` no `if`
+  selects counts, as §5.2 has it, though the library does not compile it. A number beyond the numeric limits of schema
+  evaluation (4096 characters, an exponent within ±10000) in a value, a
+  schema, or the document leaves that check without a verdict instead of
+  reaching the library, where v6.0.3 dereferences nil. The
+  `github.com/dlclark/regexp2/v2` dependency is gone.
+
+- **The document model is exact** (breaking, pre-1.0). Decoding matched
+  member names without regard to case, so `"OPERATION"` beside `"operation"`
+  replaced the binding's operation, and it accepted duplicate member names.
+  Re-encoding a decoded document dropped members whose value is a Go zero value
+  (`deprecated: false`, empty strings, empty arrays and maps) and every
+  member of a transform's `$ref` object besides `$ref`, extensions included.
+  So `Interface.Validate()` missed violations its bytes carry, such as a
+  present empty `location`, and a present empty `selector` became an absent
+  one, which a binding specification can give a different meaning (§5.3).
+  Now an optional member is absent exactly when its Go value is nil:
+  optional strings and booleans are pointers (`Name`, `Version`,
+  `Description`, `Deprecated`, `Source.Location`, `BindingEntry.Selector`),
+  set with `Present` and read with `Value` where absence and the zero value
+  mean the same; optional collections encode `omitzero`, so nil is absent
+  and empty is present. Example values are `json.RawMessage`, where `null` is
+  a present value, like `Source.Content`; `InputPresent`, `OutputPresent`,
+  `HasInput`, `HasOutput`, and `Source.ContentPresent` are gone.
+  `BindingEntry.Preference` is an exact `*int64`. `TransformOrRef` is a
+  sealed union of `InlineTransform` and `*TransformReference`, which keeps
+  the `$ref` object's other members, so `{"$ref": ""}` stays an object and
+  no transform holds both forms; `IsRef` is gone. Members are matched by
+  exact name, and a case variant is an unknown member. A document the model
+  cannot carry exactly fails decoding instead of being altered: invalid
+  UTF-8, a duplicate member name, JSON null where null is not a value
+  (members, map entries other than `schemas`, and array elements), a missing required string
+  member, or a preference that is not an integer number in range (`"7"` is
+  not). A typed field alone states its member: an `Unknown` or `Extensions`
+  entry of the same name is never encoded. `ValidateDocument` still judges
+  such a document in full. `PreparedBindingDescriptor.Selector` keeps
+  selector presence; compare descriptors with the new `Equal`.
+- **Invocation carries selector presence** (breaking, pre-1.0).
+  `invoke.BindingInvocationArgs.Selector`, `InvokeSite.Selector`, and the
+  realization records' `Selector` are `*string`, nil when the binding has no
+  selector, and each format invoker applies its binding specification's
+  rule for both cases. The JSON encoding of `BindingInvocationArgs` is the
+  binding-invoker (0.1) contract's input, which requires a selector string,
+  so it writes an absent selector as `""`. The interface-synthesizer (0.2)
+  coverage and source-inspector (0.1) target records require one too;
+  `synthesize.ContractSelector` is that projection. `BindingInvocationArgs`
+  gains `HookSite`, the consultation site the format invokers each built.
+  `PreparedDependencyDescriptor.BindingSpecsPresent` is gone: a present
+  `bindingSpecs` holds at least one identifier (§5.6), so nil is absence.
+  `httpdiscovery.VersionRefusalError` is gone: discovery reports a refused
+  version with the core's `*openbindings.VersionRefusalError`.
+
+- **Finding and diagnostic paths are JSON Pointers** (breaking, pre-1.0).
+  `Finding.Path` and `Diagnostic.Path` are RFC 6901 pointers into the
+  document, such as `/bindings/createTask/operation`; the empty pointer is
+  the whole document, and a missing member is reported at the object that
+  lacks it. Schema-derived findings (OBI-D-02, OBI-D-11, OBI-D-17) now carry
+  the location the schema check reports instead of an empty path, down to
+  the offending keyword or example member. Key and alias findings point at
+  the entry. `ValidationError` problems use the same paths.
+- **Standalone schema validation moved to `schemavalidate`** (breaking,
+  pre-1.0). `ValidateAgainstSchema` took a pool of named schemas and
+  rewrote `#/schemas/X` into the schema's own `$defs`, where a same-named
+  local entry won, so it could validate a value against the wrong schema.
+  `schemavalidate.Validate(value, schema)` takes only the schema, which is
+  its own resolution root as JSON Schema defines. Validating against a
+  standalone schema is not a Core capability, so it lives outside the root
+  package. A schema at a position of an OBI resolves against the whole
+  document (§7):
+  `ValidateOperationInput` and `ValidateOperationOutput` do that. They and
+  `CompileOperationSchema` now return a plain error when there is nothing to
+  validate against (no such operation, or no schema at that position),
+  distinct from `*SchemaGraphUnavailableError`. `SchemaValidationError`
+  exposes its `Problems`, each a `SchemaProblem` with the JSON Pointer path
+  into the value and the message, and its `Cause`.
+- **Some root exports without a Core role are gone** (breaking, pre-1.0).
+  `FormatValidationErrors` had no callers; `IsOBInterface`, a shape probe
+  for fetched responses, is now `acquire.LooksLikeOBI`, beside the
+  retrieval it serves;
+  `PreparedInterface.Prepared` returned its receiver;
+  `synthesize.RepresentedCoverageEntries` had no callers and wrote an
+  absent selector as an empty `sourceRef`, which the interface-synthesizer
+  contract refuses; and
+  `AllOperationIdentifiers` had no callers; `ErrDependencyNotFound` moved
+  to `invoke`, which returns it; and
+  `IsUnsupportedPrerelease`, one step of the OBI-T-04 refusal, is private,
+  `IsSupportedVersion` being the refusal's oracle.
+
 - **Non-Core helpers moved out of the Go root package.** Binding
   implementation support types and exact-match checking moved to
   `bindingsupport`, and generic JSON helpers moved to `jsonvalue`. Import those
@@ -78,7 +470,7 @@
   which. `ValidateDocument` validates the exact input bytes instead of
   parsing first, so input that is not a JSON document is reported as a
   violation of OBI-D-01 rather than returned as a parse error, and it returns
-  the decoded document whenever the bytes decode. A version outside the
+  the decoded document whenever the document model can carry it exactly. A version outside the
   supported set is a `*VersionRefusalError` from `Validate`,
   `ValidateDocument`, and `ParseDocument` alike, returned with no report,
   because a refused document is not interpreted under this version's rules
@@ -226,8 +618,7 @@
   optional `Dependencies` map of `DependencyEntry` values. Each entry names an
   exact canonical local operation key and may constrain acceptable exact,
   opaque binding specifications with an unordered non-empty `BindingSpecs`
-  any-of list. `LookupDependency` resolves an exact dependency key and its
-  operation without alias fallback. Lossless JSON, strict unknown-field
+  any-of list. Lossless JSON, strict unknown-field
   validation, the derived schema, and the complete OBI-D-19 Core corpus cover
   the new shape. A dependency is a consumption declaration, not a provider
   address, binding, liveness/readiness claim, or routing policy.
@@ -490,10 +881,9 @@
   `0.2.99`, etc. — the versions `Validate`/`ParseDocument` actually process —
   and continues to report `false` for a different major, a pre-1.0 different
   minor, and unsupported prereleases. The oracle now shares the single refusal
-  predicate the validation paths use, so it cannot drift from them.
-  `MinSupportedVersion`/`MaxTestedVersion`/`SupportedRange()` are unchanged and
-  remain the maintainer-*tested* range — a distinct, narrower notion (a version
-  can be accepted without being inside the tested range).
+  predicate the validation paths use, so it cannot drift from them. The
+  tested-range constants were later removed; see the `SupportedVersions`
+  entry.
 
 - **Added `ErrCodeUnavailable` (`ERR_UNAVAILABLE`) to the open code space.**
   Binding implementations decide when their governing rules use it. The
@@ -631,12 +1021,43 @@
 
 ### Removed
 
+- **Everything outside the core** (breaking, pre-1.0). The module now carries
+  only what the core specification defines: the root package and the two
+  internal packages it uses (`internal/jsonpointer`,
+  `internal/schemacompiler`). Removed: `invoke` and `invoke/jsonata`,
+  `synthesize` and `synthesize/synthesisscenarios`, `httpdiscovery`,
+  `acquire`, `bindingsupport`, `compare`, `schemaprofile`, `schemavalidate`,
+  `canonicaljson`, `jsonvalue`, `processorscenarios`, `sdk`, their internal
+  packages (`jstring`, `location`, `obishape`, `value`, `valueio`, the
+  vendored JSON codec), the eight `formats/*` modules, and the documents and
+  scripts that served them. Each layer is to be rebuilt on this core from its
+  own authority. The removed code is preserved on the `legacy/pre-core-rebuild`
+  branch at `aceb788`, where every module built and passed; the published
+  `v0.1.0` and `formats/*/v0.1.0` tags are unaffected. The root module no
+  longer requires `github.com/openbindings/jsonata/go` or `golang.org/x/net`.
+  Entries elsewhere in this working draft that describe removed packages
+  record the preserved line, not this module.
+
+- **`PreparedInterface` and root helpers without a Core role** (breaking,
+  pre-1.0). `PrepareInterface`, `PreparedInterface`, and its operation,
+  dependency, and binding descriptors were a validated, indexed snapshot for
+  the composition runtime; the specification defines nothing like it and the
+  package never used it. `SchemaObjectForm` served schema comparison. The
+  version-line predicates `IsHigherMajorOrPre1MinorThanMaxTested` and
+  `IsLowerThanMinSupported` are private: `IsSupportedVersion` is the
+  OBI-T-04 acceptance predicate. `LookupDependency` and
+  `ResolvedDependency` are gone: a dependency is two map lookups,
+  `iface.Dependencies[key]` and then `iface.Operations[dependency.Operation]`. `invoke`, the `sdk` facade, and the README's
+  dependency-composition example still use `PrepareInterface` and are
+  reconnected separately.
+
 - **`WithRejectUnknownTypedFields` and the exported `ValidateOption`**
   (breaking, pre-1.0). OBI-T-02 requires every processor to ignore unknown
   fields; the option turned them into rejections. Unknown non-`x-` fields
   are now always surfaced as OBI-T-02 diagnostics in a `ValidationReport`,
   which is what the rule asks for, and never affect validation.
-  `Interface.Validate` and `PrepareInterface` no longer take options.
+  The option is gone; `ValidateOptions` carries only capabilities validation
+  does not have itself.
 
 - **The local provider is gone: `PrepareLocalProvider`, `PrepareLocalProviderOptions`,
   `LocalBindingImplementation`, `LocalImplementationOption`, `LocalUnary`,
@@ -661,7 +1082,6 @@
   (unused; the SDK never resolves relative references, per OBI-D-05) and
   `ECMARegexpEngine` (dead; the engine lives in `internal/schemacompiler`)
   are gone, and the root module no longer depends on
-  `github.com/santhosh-tekuri/jsonschema/v6` or
   `github.com/dlclark/regexp2` v1. `WellKnownPath` moved from the root
   package to `synthesize` (same value; documented against the HTTP
   Discovery companion specification). ob re-exports `WellKnownPath` and

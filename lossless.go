@@ -1,78 +1,393 @@
 package openbindings
 
 import (
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
 
-// splitLossless separates unknown fields into:
-// - extensions: keys starting with "x-"
-// - unknown: all other keys not in known
-func splitLossless(raw map[string]json.RawMessage, known map[string]struct{}) (extensions, unknown map[string]json.RawMessage) {
-	for k, v := range raw {
-		if _, ok := known[k]; ok {
+// The typed model decodes an OBI-defined object only if re-encoding it
+// reproduces every member. Each object type decodes through decodeObject and
+// encodes through encodeObject, which read its typed members from the Go
+// struct: a member's JSON name is its field's json tag, and what the member
+// can carry follows from the field's Go type.
+//
+//   - A string field is a required member; its zero value would re-encode as
+//     a present empty string, so a missing member fails decoding.
+//   - A json.RawMessage field carries any JSON value exactly, null included.
+//   - Every other field refuses null, which a nil pointer, an absent schema,
+//     or a Go zero value would re-encode as absence or as a different value.
+//     String collections also refuse null elements.
+//   - A *int64 field holds an integer in the §5.3 preference range, in any
+//     number spelling.
+//
+// Decoding also refuses input the model's Go values cannot carry: invalid
+// UTF-8, a duplicate member name in any object, and a string escaping a lone
+// UTF-16 surrogate, which a Go string cannot hold and encoding/json would
+// replace with U+FFFD. Members are matched by exact name, never case-folded.
+// Encoding refuses the same in the members the model carries as raw JSON (an
+// example value, source content, and the members LosslessFields keeps), so
+// the model encodes only what it would decode back unchanged.
+
+// LosslessFields is embedded in every OBI-defined object type to carry the
+// members its typed fields do not: Extensions holds `x-` members (§12) and
+// Unknown every other one (OBI-T-02). Decoding fills both; encoding writes
+// them back beside the typed members.
+//
+// An entry whose name is a typed member's name is never encoded: the typed
+// field alone states that member, so a nil field is absent whatever these maps
+// hold. Every other entry must hold JSON decoding would accept, or encoding
+// fails; a nil entry encodes as null.
+type LosslessFields struct {
+	// Extensions holds `x-` members. An entry whose name lacks the prefix is
+	// encoded all the same, and decodes into Unknown.
+	Extensions map[string]json.RawMessage `json:"-"`
+
+	// Unknown holds every other member the type does not model.
+	Unknown map[string]json.RawMessage `json:"-"`
+}
+
+func (l *LosslessFields) setLossless(extensions, unknown map[string]json.RawMessage) {
+	l.Extensions, l.Unknown = extensions, unknown
+}
+
+// losslessObject is a pointer to an OBI-defined object type's method-less
+// counterpart, which decodeObject fills.
+type losslessObject interface {
+	setLossless(extensions, unknown map[string]json.RawMessage)
+}
+
+// memberClass is what a typed member can carry, from its field's Go type.
+type memberClass int
+
+const (
+	memberValue     memberClass = iota // refuses null
+	memberRequired                     // a string: required, refuses null
+	memberRaw                          // json.RawMessage: any value, null included
+	memberStrings                      // []string or map[string]string: no null elements
+	memberObjects                      // a map of OBI-defined objects
+	memberInteger                      // *int64: an exact preference-range integer
+	memberTransform                    // TransformOrRef
+)
+
+type memberField struct {
+	name  string
+	index int
+	class memberClass
+}
+
+type memberTable struct {
+	fields []memberField
+	typed  map[string]bool
+}
+
+var (
+	memberTables        sync.Map // reflect.Type -> *memberTable
+	rawMessageType      = reflect.TypeFor[json.RawMessage]()
+	int64PointerType    = reflect.TypeFor[*int64]()
+	transformType       = reflect.TypeFor[TransformOrRef]()
+	verifiedDecoderType = reflect.TypeFor[verifiedDecoder]()
+	errNotJSONObject    = errors.New("not a JSON object")
+	errNullJSONObject   = errors.New("null is not an object")
+)
+
+// membersOf returns the typed members of an OBI-defined object type's
+// method-less counterpart, in field order.
+func membersOf(t reflect.Type) *memberTable {
+	if cached, ok := memberTables.Load(t); ok {
+		return cached.(*memberTable)
+	}
+	table := &memberTable{typed: map[string]bool{}}
+	for i := range t.NumField() {
+		field := t.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if field.Anonymous || name == "" || name == "-" {
 			continue
 		}
-		if strings.HasPrefix(k, "x-") {
+		table.fields = append(table.fields, memberField{name: name, index: i, class: classifyMember(field.Type)})
+		table.typed[name] = true
+	}
+	memberTables.Store(t, table)
+	return table
+}
+
+func classifyMember(t reflect.Type) memberClass {
+	switch {
+	case t == rawMessageType:
+		return memberRaw
+	case t.Kind() == reflect.String:
+		return memberRequired
+	case t == int64PointerType:
+		return memberInteger
+	case t == transformType:
+		return memberTransform
+	case (t.Kind() == reflect.Slice || t.Kind() == reflect.Map) && t.Elem().Kind() == reflect.String:
+		return memberStrings
+	case t.Kind() == reflect.Map && reflect.PointerTo(t.Elem()).Implements(verifiedDecoderType):
+		return memberObjects
+	default:
+		return memberValue
+	}
+}
+
+// verifiedDecoder is an OBI-defined object type, which decodes itself from
+// input verifyExactJSON has accepted.
+type verifiedDecoder interface {
+	decodeVerified(b []byte) error
+}
+
+// decodeExact is every OBI-defined object's UnmarshalJSON: it verifies its
+// input once, then decodes it and every object nested in it.
+func decodeExact(b []byte, what string, target verifiedDecoder) error {
+	if err := verifyExactJSON(b); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return target.decodeVerified(b)
+}
+
+// decodeObject decodes the OBI-defined object b, which verifyExactJSON has
+// accepted, into target, replacing its contents. what names the object in
+// errors. The model retains no part of b: members it carries as raw JSON are
+// copied.
+func decodeObject(b []byte, what string, target losslessObject) error {
+	entries, err := splitObject(b)
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	members := make(map[string]json.RawMessage, len(entries))
+	for _, entry := range entries {
+		members[entry.name] = entry.value
+	}
+	value := reflect.ValueOf(target).Elem()
+	value.SetZero()
+	table := membersOf(value.Type())
+	for _, field := range table.fields {
+		raw, present := members[field.name]
+		if !present {
+			if field.class == memberRequired {
+				return fmt.Errorf("%s: missing required member %q", what, field.name)
+			}
+			continue
+		}
+		if err := decodeMember(raw, field.class, value.Field(field.index)); err != nil {
+			return fmt.Errorf("%s: member %q: %w", what, field.name, err)
+		}
+	}
+	var extensions, unknown map[string]json.RawMessage
+	for name, raw := range members {
+		switch {
+		case table.typed[name]:
+		case strings.HasPrefix(name, "x-"):
 			if extensions == nil {
 				extensions = map[string]json.RawMessage{}
 			}
-			extensions[k] = v
-			continue
+			extensions[name] = bytes.Clone(raw)
+		default:
+			if unknown == nil {
+				unknown = map[string]json.RawMessage{}
+			}
+			unknown[name] = bytes.Clone(raw)
 		}
-		if unknown == nil {
-			unknown = map[string]json.RawMessage{}
+	}
+	target.setLossless(extensions, unknown)
+	return nil
+}
+
+func decodeMember(raw json.RawMessage, class memberClass, field reflect.Value) error {
+	if class == memberRaw {
+		field.Set(reflect.ValueOf(json.RawMessage(bytes.Clone(raw))))
+		return nil
+	}
+	if isJSONNull(raw) {
+		return errors.New("null, which this model cannot carry")
+	}
+	switch class {
+	case memberInteger:
+		value, err := exactPreference(raw)
+		if err != nil {
+			return err
 		}
-		unknown[k] = v
+		field.Set(reflect.ValueOf(&value))
+		return nil
+	case memberTransform:
+		transform, err := decodeTransform(raw)
+		if err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(&transform).Elem())
+		return nil
+	case memberObjects:
+		entries, err := splitObject(raw)
+		if err != nil {
+			return err
+		}
+		objects := reflect.MakeMapWithSize(field.Type(), len(entries))
+		for _, entry := range entries {
+			object := reflect.New(field.Type().Elem())
+			if err := object.Interface().(verifiedDecoder).decodeVerified(entry.value); err != nil {
+				return fmt.Errorf("entry %q: %w", entry.name, err)
+			}
+			objects.SetMapIndex(reflect.ValueOf(entry.name), object.Elem())
+		}
+		field.Set(objects)
+		return nil
+	case memberStrings:
+		if err := rejectNullElements(raw); err != nil {
+			return err
+		}
 	}
-	return extensions, unknown
+	return unmarshalJSON(raw, field.Addr().Interface())
 }
 
-// knownSet builds a map for constant-time known-field checks in lossless unmarshaling.
-func knownSet(keys ...string) map[string]struct{} {
-	if len(keys) == 0 {
-		return map[string]struct{}{}
+// exactPreference decodes a preference exactly: a JSON number denoting an
+// integer in the §5.3 range, in any spelling (1, 1.0, 1e3). A string, or a
+// number the model cannot carry exactly, fails decoding.
+func exactPreference(raw json.RawMessage) (int64, error) {
+	token := string(bytes.TrimSpace(raw))
+	if !schemacompiler.IsNumber(json.Number(token)) {
+		return 0, fmt.Errorf("%s is not a JSON number", token)
 	}
-	out := make(map[string]struct{}, len(keys))
-	for _, k := range keys {
-		out[k] = struct{}{}
+	value, ok := preferenceValue(token)
+	if !ok {
+		return 0, fmt.Errorf("%s is not an integer from -%d through %d", token, maxPreference, maxPreference)
 	}
-	return out
+	return value, nil
 }
 
-// marshalLossless merges unknown + extensions with the typed view such that known fields win.
-func marshalLossless(unknown, extensions map[string]json.RawMessage, typed any) ([]byte, error) {
-	return marshalLosslessWith(unknown, extensions, typed, nil)
+// preferenceValue decides exactly whether a JSON number token denotes an
+// integer in the §5.3 preference range, and returns it. Its work is linear in
+// the token whatever the exponent, where math/big would compute a power of
+// ten as large as the exponent.
+func preferenceValue(token string) (int64, bool) {
+	mantissa, exponent := token, "0"
+	if i := strings.IndexAny(token, "eE"); i >= 0 {
+		mantissa, exponent = token[:i], token[i+1:]
+	}
+	negative := strings.HasPrefix(mantissa, "-")
+	whole, fraction, _ := strings.Cut(strings.TrimPrefix(mantissa, "-"), ".")
+	significant := strings.TrimLeft(whole+fraction, "0")
+	if significant == "" {
+		return 0, true // zero, however it is written
+	}
+	// The value is ±digits × 10^scale, and digits ends in a nonzero digit.
+	digits := strings.TrimRight(significant, "0")
+	e, err := strconv.ParseInt(exponent, 10, 64)
+	if bound := int64(len(token)) + 17; err != nil || e > bound || e < -bound {
+		// No digit count offsets such an exponent: the value is below 1 or
+		// at least 10^17.
+		return 0, false
+	}
+	scale := e + int64(len(significant)-len(digits)) - int64(len(fraction))
+	if scale < 0 || int64(len(digits))+scale > 16 {
+		return 0, false // a fraction, or at least 10^16
+	}
+	value, _ := strconv.ParseInt(digits+strings.Repeat("0", int(scale)), 10, 64)
+	if value > maxPreference {
+		return 0, false
+	}
+	if negative {
+		value = -value
+	}
+	return value, true
 }
 
-// marshalLosslessWith is marshalLossless plus post-merge overrides that win
-// over both the lossless and the typed fields. Used where omitempty on a wire
-// struct cannot express a present-but-empty value (an explicit JSON null
-// example, an empty {} schema).
-func marshalLosslessWith(unknown, extensions map[string]json.RawMessage, typed any, overrides map[string]json.RawMessage) ([]byte, error) {
-	// Start from the lossless fields, then overwrite with the typed view so known fields win.
-	out := map[string]json.RawMessage{}
-	for k, v := range unknown {
-		out[k] = v
+// encodeObject encodes an OBI-defined object: typed, the method-less
+// counterpart of its type, and the members its lossless fields carry.
+func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
+	if err := verifyRawMembers(typed, lossless); err != nil {
+		return nil, err
 	}
-	for k, v := range extensions {
-		out[k] = v
-	}
-
-	knownBytes, err := json.Marshal(typed)
+	data, err := json.Marshal(typed)
 	if err != nil {
 		return nil, err
 	}
-	var known map[string]json.RawMessage
-	if err := json.Unmarshal(knownBytes, &known); err != nil {
+	if len(lossless.Extensions) == 0 && len(lossless.Unknown) == 0 {
+		return data, nil
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
 		return nil, err
 	}
-	for k, v := range known {
-		out[k] = v
+	typedNames := membersOf(reflect.TypeOf(typed)).typed
+	for _, carried := range []map[string]json.RawMessage{lossless.Unknown, lossless.Extensions} {
+		for name, raw := range carried {
+			if !typedNames[name] {
+				members[name] = raw
+			}
+		}
 	}
-	for k, v := range overrides {
-		out[k] = v
-	}
+	return json.Marshal(members)
+}
 
-	return json.Marshal(out)
+// verifyRawMembers refuses a member an OBI-defined object carries as raw JSON,
+// and would encode, holding what decoding refuses: bytes that are not one
+// JSON value of valid UTF-8, a repeated member name, an escaped lone UTF-16
+// surrogate, or nesting deeper than the decoder reads. encoding/json would
+// write such bytes out, or alter them, and the document they made would not
+// be the one the model holds.
+func verifyRawMembers(typed any, lossless LosslessFields) error {
+	value := reflect.ValueOf(typed)
+	table := membersOf(value.Type())
+	for _, field := range table.fields {
+		if field.class != memberRaw {
+			continue
+		}
+		if raw := value.Field(field.index).Interface().(json.RawMessage); len(raw) > 0 {
+			if err := verifyExactJSON(raw); err != nil {
+				return fmt.Errorf("%s: %w", field.name, err)
+			}
+		}
+	}
+	for _, carried := range []map[string]json.RawMessage{lossless.Extensions, lossless.Unknown} {
+		for _, name := range slices.Sorted(maps.Keys(carried)) {
+			// An entry named like a typed member is never encoded, and a nil
+			// entry encodes as a present null.
+			if table.typed[name] || carried[name] == nil {
+				continue
+			}
+			if err := verifyExactJSON(carried[name]); err != nil {
+				return fmt.Errorf("member %s: %w", strconv.Quote(name), err)
+			}
+		}
+	}
+	return nil
+}
+
+// rejectNullElements refuses a null element in an array or object of
+// strings, which a Go string would re-encode as "". A value of another JSON
+// type is left to the typed decode to reject.
+func rejectNullElements(value json.RawMessage) error {
+	trimmed := bytes.TrimSpace(value)
+	switch {
+	case len(trimmed) > 0 && trimmed[0] == '[':
+		var elements []json.RawMessage
+		if err := json.Unmarshal(trimmed, &elements); err != nil {
+			return err
+		}
+		for i, element := range elements {
+			if isJSONNull(element) {
+				return fmt.Errorf("element %d is null, which this model cannot carry", i)
+			}
+		}
+	case len(trimmed) > 0 && trimmed[0] == '{':
+		entries, err := splitObject(trimmed)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if isJSONNull(entry.value) {
+				return fmt.Errorf("entry %q is null, which this model cannot carry", entry.name)
+			}
+		}
+	}
+	return nil
 }

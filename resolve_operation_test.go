@@ -1,18 +1,17 @@
 package openbindings
 
 import (
-	"reflect"
 	"testing"
 )
 
 func TestResolveOperation_DirectKey(t *testing.T) {
 	iface := &Interface{
 		Operations: map[string]Operation{
-			"createTask": {Description: "native"},
+			"createTask": {Description: Present("native")},
 		},
 	}
 	key, op, ok := ResolveOperation(iface, "createTask")
-	if !ok || key != "createTask" || op.Description != "native" {
+	if !ok || key != "createTask" || (op.Description == nil || *op.Description != "native") {
 		t.Fatalf("direct key resolution failed: key=%q ok=%v op=%+v", key, ok, op)
 	}
 }
@@ -48,7 +47,7 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 	// matches are not privileged: OBI-D-04 guarantees a name belongs to one op.
 	iface := &Interface{
 		Operations: map[string]Operation{
-			"nativeThing": {Description: "native"},
+			"nativeThing": {Description: Present("native")},
 			"otherThing":  {Aliases: []string{"sharedContract.do"}},
 		},
 	}
@@ -60,16 +59,21 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 	}
 }
 
-func TestAllOperationIdentifiers(t *testing.T) {
-	iface := &Interface{
-		Operations: map[string]Operation{
-			"createTask": {Aliases: []string{"tasks.create", "addTask"}},
-			"listTasks":  {},
-		},
+// A name that several operations carry, in a document that violates
+// OBI-D-04, resolves to none of them: no match is privileged (OBI-T-12).
+func TestResolveOperation_AmbiguousNamesDoNotResolve(t *testing.T) {
+	iface := &Interface{Operations: map[string]Operation{
+		"a": {Aliases: []string{"shared"}},
+		"b": {Aliases: []string{"shared"}},
+		"c": {Aliases: []string{"d"}},
+		"d": {},
+	}}
+	for _, name := range []string{"shared", "d"} {
+		if key, _, ok := ResolveOperation(iface, name); ok {
+			t.Errorf("%q resolved to %q", name, key)
+		}
 	}
-	got := AllOperationIdentifiers(iface)
-	want := []string{"addTask", "createTask", "listTasks", "tasks.create"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("identifiers = %v, want %v", got, want)
+	if key, _, ok := ResolveOperation(iface, "c"); !ok || key != "c" {
+		t.Fatalf("an unambiguous key resolves: %q %v", key, ok)
 	}
 }

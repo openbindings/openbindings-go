@@ -2,61 +2,53 @@
 
 ## Workflow
 
-1. Branch from `main`: `git checkout -b <type>/<short-description>`.
+The branch changes land on is set by the project catalog
+(`openbindings/project`, `repositories.json`, `integrationRef`); for the 0.2
+preparation it is `release/0.2`.
+
+1. Branch from the integration ref: `git checkout -b <type>/<short-description> origin/release/0.2`.
    Types: `fix`, `feat`, `docs`, `chore`, `refactor`.
 2. Commit and push.
-3. `gh pr create --fill --base main`.
+3. `gh pr create --fill --base release/0.2`.
 4. Squash-merge when CI is green (`gh pr merge --squash --auto --delete-branch`).
 
-All changes land on `main` via squash-merged PRs. No direct commits to `main`.
+All changes land via squash-merged PRs. No direct commits to the integration
+ref.
 
 ## Working on this repo
 
-The repo is a multi-module workspace: the core SDK at the root plus one
-sub-module per format under `formats/`. `go.work` is gitignored, so bootstrap
-a local workspace once after cloning:
-
-```bash
-go work init . formats/*/
-ver=$(awk '/github.com\/openbindings\/openbindings-go v/ {print $NF}' formats/openapi/go.mod)
-go work edit -replace "github.com/openbindings/openbindings-go@${ver}=."
-```
-
-The version-pinned `replace` is required, not a nicety: the format modules
-require the core at a version that is not tagged yet, and module-graph
-loading still fetches that version's go.mod even under `go work use`
-("unknown revision" otherwise). CI constructs the same workspace per module
-row (see `.github/workflows/ci.yml`); the replace is harmless after the tag
-lands — it then maps the tagged version to your checkout.
-
-After a `go` directive bump in the modules, refresh an existing workspace
-with `go work use . formats/*/` (it re-syncs `go.work`'s own `go` line); a
-stale `go.work` fails loudly otherwise.
+The repository is a single Go module: the core SDK. It carries only what the
+core specification defines; see the README's "Scope, and the rebuild" for the
+layers removed on 2026-09-24 and the `legacy/pre-core-rebuild` branch that
+preserves them.
 
 ## Testing
 
 ```bash
-# Core SDK
 go test ./...
-
-# Each format sub-module
-for d in formats/*/; do (cd "$d" && go test ./...) || exit 1; done
 ```
+
+The core conformance corpus lives in the spec repository. Check it out
+alongside this one (at `../spec`), or point `OB_SPEC_CORPUS` at its
+`conformance` directory; without it the corpus tests skip. Set
+`OB_CORPUS_REQUIRED=1` to make a missing corpus fail instead, as CI does.
 
 ## Releasing
 
-See [RELEASING.md](RELEASING.md) for tags, ordering, changelog conventions,
-and the pre-1.0 version policy.
+See [RELEASING.md](RELEASING.md) for tags, changelog conventions, and the
+pre-1.0 version policy.
 
 ## Spec compatibility
 
-This SDK declares which spec versions it supports via:
+This SDK declares which spec versions it supports (§8.1) via:
 
-- `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion` (constants)
-- `openbindings.SupportedRange()` / `openbindings.IsSupportedVersion(v)`
+- `openbindings.SupportedVersions`, the supported set, and
+  `openbindings.IsSupportedVersion(v)`, which decides membership
+- `openbindings.AuthoringVersion`, the version a document written with the
+  SDK declares
 
-Located in `version.go`. When the spec bumps, update these constants in the
-same PR that adds support for the new version.
+Located in `version.go`. When the spec bumps, update them in the same PR that
+adds support for the new version.
 
 ## Broader context
 

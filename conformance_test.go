@@ -1,10 +1,12 @@
 package openbindings
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,30 +30,23 @@ type conformanceTest struct {
 	DocumentBase64       string          `json:"documentBase64,omitempty"`
 	Valid                bool            `json:"valid"`
 	Violates             []string        `json:"violates,omitempty"`
-	RequiresMaxTested    string          `json:"requiresMaxTested,omitempty"`
 	RequiresMinSupported string          `json:"requiresMinSupported,omitempty"`
 	RequiresSupports     string          `json:"requiresSupports,omitempty"`
 }
 
 // conformanceSkip evaluates a test's version-gate annotations against this
-// SDK's version constants. A non-empty result means the test must not be
+// SDK's support declaration. A non-empty result means the test must not be
 // administered to this SDK; the harness reports it via t.Skip. Skips are
-// never failures — they surface separately in the test output. An
-// annotation that fails to parse gates nothing (the test runs), matching
-// the annotations' pre-existing behavior.
+// never failures; they surface separately in the test output. An annotation
+// that fails to parse gates nothing (the test runs).
 func conformanceSkip(tt conformanceTest) (reason string, skip bool) {
-	if tt.RequiresMaxTested != "" {
-		higher, err := IsHigherMajorOrPre1MinorThanMaxTested(tt.RequiresMaxTested)
-		if err == nil && higher {
-			return fmt.Sprintf("requires MaxTested >= %s", tt.RequiresMaxTested), true
-		}
-	}
 	if tt.RequiresMinSupported != "" {
-		// Downward-refusal tests apply only when the SDK's minimum
-		// supported version is at or above the annotation's value.
-		lower, err := IsLowerThanMinSupported(tt.RequiresMinSupported)
-		if err == nil && !lower && tt.RequiresMinSupported != MinSupportedVersion {
-			return fmt.Sprintf("requires MinSupported >= %s", tt.RequiresMinSupported), true
+		// Downward-refusal tests apply only when the lowest version this SDK
+		// supports is at or above the annotation's value. The lowest is read
+		// from the declaration, SupportedVersions, not from the refusal code
+		// the test exercises.
+		if annotated, err := parseSemverStrict(tt.RequiresMinSupported); err == nil && compareSemver(lowestSupported(), annotated) < 0 {
+			return fmt.Sprintf("requires the lowest supported version to be at least %s", tt.RequiresMinSupported), true
 		}
 	}
 	if tt.RequiresSupports != "" {
@@ -146,12 +141,12 @@ func runConformanceDir(t *testing.T, dir string) {
 				iface, parseErr := ParseDocument(documentBytes)
 				var validateErr error
 				if parseErr == nil {
-					_, validateErr = iface.Validate()
+					_, validateErr = iface.Validate(ValidateOptions{})
 				}
 				actualValid := parseErr == nil && validateErr == nil
 
-				if actualValid != tt.Valid {
-					if tt.Valid {
+				if wantValid := tt.Valid || expectsOnlyCapabilityRules(tt); actualValid != wantValid {
+					if wantValid {
 						if parseErr != nil {
 							t.Errorf("expected valid, got parse error: %v", parseErr)
 						} else {
@@ -253,7 +248,7 @@ func testResolveOperationScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, _, err := ValidateDocument(scenario.Given.Document)
+	iface, _, err := ValidateDocument(scenario.Given.Document, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -297,7 +292,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, _, err := ValidateDocument(scenario.Given.Document)
+	iface, _, err := ValidateDocument(scenario.Given.Document, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -320,15 +315,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 		} else {
 			err = ValidateOperationInput(scenario.Given.Value, iface, operationKey)
 		}
-		if err != nil {
-			if slices.Contains(scenario.Expected.AllowedOutcomes, "resolver-error") {
-				outcome <- "resolver-error"
-			} else {
-				outcome <- "instance-mismatch"
-			}
-			return
-		}
-		outcome <- "valid"
+		outcome <- contractOutcome(err, "resolver-error")
 	}()
 	select {
 	case got := <-outcome:
@@ -356,7 +343,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, _, err := ValidateDocument(scenario.Given.Document)
+	iface, _, err := ValidateDocument(scenario.Given.Document, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -379,16 +366,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 		} else {
 			err = ValidateOperationInput(value, iface, operationKey)
 		}
-		if err == nil {
-			actual = append(actual, "valid")
-			continue
-		}
-		var unavailable *SchemaGraphUnavailableError
-		if errors.As(err, &unavailable) {
-			actual = append(actual, "graph-unavailable")
-		} else {
-			actual = append(actual, "instance-mismatch")
-		}
+		actual = append(actual, contractOutcome(err, "graph-unavailable"))
 	}
 	if !slices.Equal(actual, scenario.Expected.Results) {
 		t.Fatalf("results %v; expected %v", actual, scenario.Expected.Results)
@@ -435,25 +413,23 @@ func testConcludeConformanceScenario(t *testing.T, raw json.RawMessage) {
 // stays correct across version bumps.
 func TestConformanceRequiresSupportsGate(t *testing.T) {
 	// Always outside acceptance: the next major is refused pre- and
-	// post-1.0 alike. Always inside acceptance: a higher patch within the
-	// supported minor line is accepted per OBI-T-04 — note it lies ABOVE
-	// MaxTestedVersion, pinning that the gate is the acceptance predicate,
-	// not tested-range membership.
-	nextMajor := fmt.Sprintf("%d.0.0", maxTestedSemver.major+1)
-	higherPatch := fmt.Sprintf("%d.%d.%d",
-		maxTestedSemver.major, maxTestedSemver.minor, maxTestedSemver.patch+1)
+	// post-1.0 alike. Always inside acceptance: the authoring version, and a
+	// higher patch of the supported line.
+	authoring, _ := parseSemverStrict(AuthoringVersion)
+	nextMajor := successor(authoring.major) + ".0.0"
+	higherPatch := authoring.major + "." + authoring.minor + "." + successor(authoring.patch)
 
 	cases := []struct {
 		annotation string
 		wantSkip   bool
 	}{
-		{MinSupportedVersion, false}, // in range exactly → administer
-		{higherPatch, false},         // above MaxTested but accepted → administer
-		{nextMajor, true},            // refused major → skip
+		{AuthoringVersion, false}, // supported → administer
+		{higherPatch, false},      // supported → administer
+		{nextMajor, true},         // refused major → skip
 	}
-	if maxTestedSemver.major == 0 {
+	if authoring.major == "0" {
 		// While pre-1.0, the next minor is refused too.
-		nextMinor := fmt.Sprintf("0.%d.0", maxTestedSemver.minor+1)
+		nextMinor := "0." + successor(authoring.minor) + ".0"
 		cases = append(cases, struct {
 			annotation string
 			wantSkip   bool
@@ -500,6 +476,28 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 	runConformanceDir(t, dir)
 }
 
+// capabilityRules are the document rules whose checking takes a capability
+// the corpus run does not give validation: OBI-D-18 takes a transform parser,
+// and the SDK carries none. A validator without the capability leaves such a
+// rule inconclusive (§10.2), so the run expects it inconclusive wherever the
+// fixture expects it violated.
+var capabilityRules = map[string]bool{"OBI-D-18": true}
+
+// expectsOnlyCapabilityRules reports whether every violation a case expects
+// is of a capability rule, so that without the capability the case
+// establishes no violation.
+func expectsOnlyCapabilityRules(tt conformanceTest) bool {
+	if tt.Valid || len(tt.Violates) == 0 {
+		return false
+	}
+	for _, rule := range tt.Violates {
+		if !capabilityRules[rule] {
+			return false
+		}
+	}
+	return true
+}
+
 // assertReportAgreesWithFixture holds ValidateDocument's report to the
 // same fixture the gate is held to. A conforming case establishes no
 // violation (it may still be undetermined: inconclusive is not non-conformant).
@@ -507,7 +505,7 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 // document rule the fixture names recorded as violated.
 func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt conformanceTest) {
 	t.Helper()
-	_, report, err := ValidateDocument(documentBytes)
+	_, report, err := ValidateDocument(documentBytes, ValidateOptions{})
 	var refusal *VersionRefusalError
 	refused := errors.As(err, &refusal)
 	var violation *ValidationError
@@ -518,11 +516,16 @@ func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt confor
 	if (violation != nil) != (report.Conclusion == ConclusionNonConformant) {
 		t.Errorf("ValidateDocument error %v disagrees with its report's conclusion %s", err, report.Conclusion)
 	}
-	if tt.Valid {
+	if tt.Valid || expectsOnlyCapabilityRules(tt) {
 		if refused {
 			t.Errorf("ValidateDocument refused a conforming case: %v", err)
 		} else if report.Conclusion == ConclusionNonConformant {
 			t.Errorf("ValidateDocument established violations %v for a conforming case: %+v", report.Violated, report.Violations())
+		}
+		for _, rule := range tt.Violates {
+			if report.Evidence[rule] != EvidenceInconclusive {
+				t.Errorf("expected %s inconclusive without its capability; its evidence is %q", rule, report.Evidence[rule])
+			}
 		}
 		return
 	}
@@ -535,10 +538,58 @@ func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt confor
 			if !refused {
 				t.Errorf("expected an OBI-T-04 version refusal; report concluded %s", report.Conclusion)
 			}
+		case capabilityRules[rule] && !refused:
+			if report.Evidence[rule] != EvidenceInconclusive {
+				t.Errorf("expected %s inconclusive without its capability; its evidence is %q", rule, report.Evidence[rule])
+			}
 		case strings.HasPrefix(rule, "OBI-D-") && !refused:
 			if report.Evidence[rule] != EvidenceViolated {
 				t.Errorf("expected %s violated; its evidence is %q and the violations are %+v", rule, report.Evidence[rule], report.Violations())
 			}
+		}
+	}
+}
+
+// successor returns the SemVer numeric identifier one greater than n.
+func successor(n string) string {
+	value, _ := new(big.Int).SetString(n, 10)
+	return value.Add(value, big.NewInt(1)).String()
+}
+
+// lowestSupported is the lowest version SupportedVersions declares: the
+// first release of the supported line.
+func lowestSupported() semver {
+	return semver{major: supportedLine.major, minor: cmp.Or(supportedLine.minor, "0"), patch: "0"}
+}
+
+// contractOutcome names the outcome of validating a value against an
+// operation's contract in the corpus's terms, read from the error's type
+// alone: OBI-T-16 keeps a mismatch and an unavailable graph distinct, so what
+// a scenario allows never decides which one an error is. unavailable is the
+// scenario's name for an unavailable graph.
+func contractOutcome(err error, unavailable string) string {
+	var mismatch *SchemaValidationError
+	var graph *SchemaGraphUnavailableError
+	switch {
+	case err == nil:
+		return "valid"
+	case errors.As(err, &mismatch):
+		return "instance-mismatch"
+	case errors.As(err, &graph):
+		return unavailable
+	}
+	return fmt.Sprintf("an unexpected error: %v", err)
+}
+
+func TestContractOutcome(t *testing.T) {
+	for want, err := range map[string]error{
+		"valid":             nil,
+		"instance-mismatch": &SchemaValidationError{},
+		"resolver-error":    &SchemaGraphUnavailableError{},
+		"an unexpected error: operation not found": errors.New("operation not found"),
+	} {
+		if got := contractOutcome(err, "resolver-error"); got != want {
+			t.Errorf("%v: %q, want %q", err, got, want)
 		}
 	}
 }

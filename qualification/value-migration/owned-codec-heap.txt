@@ -1,5 +1,0 @@
-=== RUN   TestValueMigrationRetainedHeap
-    value_migration_heap_test.go:81: heap deltas bytes: queued=5609392 public-retained=4230344 after-retirement=-1045432 sampled-peak=12986856
---- PASS: TestValueMigrationRetainedHeap (0.09s)
-PASS
-ok  	github.com/openbindings/openbindings-go/invoke	0.367s

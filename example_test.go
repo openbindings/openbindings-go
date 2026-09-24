@@ -7,7 +7,6 @@ import (
 	"log"
 
 	"github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/canonicaljson"
 )
 
 func ExampleInterface_basic() {
@@ -26,8 +25,8 @@ func ExampleInterface_basic() {
 		log.Fatal(err)
 	}
 
-	fmt.Println(iface.Name)
-	fmt.Println(iface.Operations["getUser"].Description)
+	fmt.Println(openbindings.Value(iface.Name))
+	fmt.Println(openbindings.Value(iface.Operations["getUser"].Description))
 	// Output:
 	// Example API
 	// Get a user by ID
@@ -52,7 +51,7 @@ func ExampleInterface_Validate() {
 	}
 
 	// The error lists every violation established, so it gates on them.
-	if _, err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil {
 		fmt.Println("violation established:", err)
 		return
 	}
@@ -70,7 +69,7 @@ func ExampleValidateDocument() {
 
 	// ValidateDocument decides every document rule on the exact input bytes
 	// and reports the §10.5 conclusion.
-	_, report, err := openbindings.ValidateDocument(data)
+	_, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -92,7 +91,7 @@ func ExampleInterface_Validate_unknownFields() {
 	_ = json.Unmarshal(data, &iface)
 
 	// Unknown fields are ignored, never rejected (OBI-T-02)...
-	report, err := iface.Validate()
+	report, err := iface.Validate(openbindings.ValidateOptions{})
 	fmt.Println("violation established:", err != nil)
 
 	// ...but the report surfaces them as diagnostics so a typo is not silent.
@@ -104,7 +103,7 @@ func ExampleInterface_Validate_unknownFields() {
 	// OBI-T-02 unknown field ignored: unknownFeild; extensions use the x- prefix
 }
 
-func ExampleInterface_lossless() {
+func ExampleInterface_exact() {
 	data := []byte(`{
 		"openbindings": "0.2.0",
 		"x-custom": "preserved",
@@ -127,7 +126,7 @@ func ExampleInterface_lossless() {
 
 func ExampleOperation() {
 	op := openbindings.Operation{
-		Description: "Create a new user",
+		Description: openbindings.Present("Create a new user"),
 		Input: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -136,7 +135,7 @@ func ExampleOperation() {
 		},
 	}
 
-	fmt.Println(op.Description)
+	fmt.Println(openbindings.Value(op.Description))
 	fmt.Println(op.Input.(map[string]any)["type"])
 	// Output:
 	// Create a new user
@@ -146,26 +145,14 @@ func ExampleOperation() {
 func ExampleSource() {
 	bs := openbindings.Source{
 		BindingSpec: "openapi@3.1",
-		Location:    "https://api.example.com/openapi.yaml",
+		Location:    openbindings.Present("https://api.example.com/openapi.yaml"),
 	}
 
 	fmt.Println(bs.BindingSpec)
-	fmt.Println(bs.Location)
+	fmt.Println(*bs.Location)
 	// Output:
 	// openapi@3.1
 	// https://api.example.com/openapi.yaml
-}
-
-func Example_canonicaljson() {
-	data := map[string]any{
-		"z": 1,
-		"a": 2,
-		"m": 3,
-	}
-
-	out, _ := canonicaljson.Marshal(data)
-	fmt.Println(string(out))
-	// Output: {"a":2,"m":3,"z":1}
 }
 
 func ExampleTransform() {
@@ -179,15 +166,13 @@ func ExampleTransform() {
 			"toStripeInput": "{ charge_amount: amount * 100 }",
 		},
 		Sources: map[string]openbindings.Source{
-			"stripe": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
+			"stripe": {BindingSpec: "openapi@3.1", Location: openbindings.Present("https://api.example.com/stripe.json")},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"processPayment.stripe": {
-				Operation: "processPayment",
-				Source:    "stripe",
-				InputTransform: &openbindings.TransformOrRef{
-					Ref: "#/transforms/toStripeInput",
-				},
+				Operation:      "processPayment",
+				Source:         "stripe",
+				InputTransform: &openbindings.TransformReference{Ref: "#/transforms/toStripeInput"},
 			},
 		},
 	}
@@ -204,11 +189,10 @@ func ExampleTransform() {
 
 func ExampleTransformOrRef_inline() {
 	// An inline transform is a bare JSONata expression string.
-	tor := openbindings.TransformOrRef{Inline: "{ total: price * quantity }"}
+	tor := openbindings.InlineTransform("{ total: price * quantity }")
 
-	fmt.Println("IsRef:", tor.IsRef())
-	fmt.Println("Expression:", tor.Inline)
+	expression, _ := tor.Resolve(nil)
+	fmt.Println("Expression:", expression)
 	// Output:
-	// IsRef: false
 	// Expression: { total: price * quantity }
 }

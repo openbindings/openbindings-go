@@ -8,102 +8,30 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        module:
-          - .
-          - formats/openapi
-          - formats/asyncapi
-          - formats/graphql
-          - formats/grpc
-          - formats/connect
-          - formats/mcp
-          - formats/usage
-          - formats/operationgraph
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        if: matrix.module == 'formats/openapi'
-        with:
-          repository: openbindings/openapi-client
-          ref: main
-          path: openapi-client
-      - uses: actions/checkout@v7
-        if: matrix.module == 'formats/asyncapi'
-        with:
-          repository: openbindings/asyncapi-client
-          ref: main
-          path: asyncapi-client
-      # The conformance corpora are normative and live in the sibling spec and
-      # interfaces repos; without these checkouts the corpus gates skip
-      # silently (which is how the family + interface corpora went unverified
-      # on every PR). This pre-release integration branch tracks the matching
-      # non-default spec working branch. Every row needs the spec corpus (core
-      # + each family lane); only the root module runs the interface corpora
-      # (selection + comparison), so interfaces is checked out on that row only.
+      # The conformance corpora are normative and live in the sibling spec
+      # repo; without this checkout the corpus gates skip silently. This
+      # pre-release integration branch tracks the matching non-default spec
+      # working branch.
       - uses: actions/checkout@v7
         with:
           repository: openbindings/spec
           ref: release/0.2
           path: spec
-      - uses: actions/checkout@v7
-        if: matrix.module == '.'
-        with:
-          repository: openbindings/interfaces
-          path: interfaces
       - uses: actions/setup-go@v7
         with:
-          go-version-file: ${{ matrix.module }}/go.mod
+          go-version-file: go.mod
           cache: false
-      - name: workspace (resolve the untagged core from this checkout)
-        # Format modules require the core at a version that is not tagged
-        # yet. A CI-local go.work needs a version-pinned replace, not just
-        # `use`: module-graph loading still fetches the required version's
-        # go.mod, which does not exist anywhere ("unknown revision"). This
-        # mirrors the local-dev go.work's replace directives. Harmless
-        # post-tag (the replace maps the tagged version to this checkout).
-        if: matrix.module != '.'
-        run: |
-          if [ "${{ matrix.module }}" = "formats/openapi" ]; then
-            go work init . ${{ matrix.module }} openapi-client/go
-          elif [ "${{ matrix.module }}" = "formats/asyncapi" ]; then
-            go work init . ${{ matrix.module }} asyncapi-client/go
-          else
-            go work init . ${{ matrix.module }}
-          fi
-          ver=$(awk '/github.com\/openbindings\/openbindings-go v/ {print $NF}' ${{ matrix.module }}/go.mod)
-          go work edit -replace "github.com/openbindings/openbindings-go@${ver}=."
-          if [ "${{ matrix.module }}" = "formats/openapi" ]; then
-            go work edit -replace "github.com/openbindings/openapi-client/go@v0.1.0=./openapi-client/go"
-          elif [ "${{ matrix.module }}" = "formats/asyncapi" ]; then
-            go work edit -replace "github.com/openbindings/asyncapi-client/go@v0.1.0=./asyncapi-client/go"
-          fi
-      - name: vet ${{ matrix.module }}
-        working-directory: ${{ matrix.module }}
+      - name: vet
         run: go vet ./...
-      - name: test ${{ matrix.module }}
-        working-directory: ${{ matrix.module }}
+      - name: test
         # -short is safe here: no corpus/conformance harness is testing.Short-
         # gated, so every corpus suite runs. OB_CORPUS_REQUIRED flips every
         # corpus locator from skip-if-absent to fail-if-absent, so a mis-wired
         # path or a missing checkout turns CI red instead of silently green;
-        # local dev (flag unset) still skips. OB_INTERFACES_CORPUS is set only
-        # on the root row, the only module that runs the interface corpora.
+        # local dev (flag unset) still skips.
         run: go test -race -short ./...
         env:
           OB_SPEC_CORPUS: ${{ github.workspace }}/spec/conformance
-          OB_INTERFACES_CORPUS: ${{ matrix.module == '.' && format('{0}/interfaces/conformance', github.workspace) || '' }}
           OB_CORPUS_REQUIRED: "1"
-
-      - name: Stress accepted-output versus terminal race
-        if: matrix.module == '.'
-        # This regression is probabilistic by construction. Keep a dedicated
-        # Linux race-detector lane with substantially more schedules than the
-        # ordinary suite so an accepted EmitOutput can never silently vanish
-        # behind a racing terminal transition.
-        run: go test -race -run '^TestAcceptedEmitNeverLostUnderRacingTerminal$' -count=10 ./invoke
-
-      - name: Stress snapshot ownership and attempt retirement
-        if: matrix.module == '.'
-        run: go test -race -run '^(TestProducerReuseAfterAcceptedWriteAndEmit|TestAcceptedOutputDrainsAfterCaptureLimitFailure|TestTerminalDataIsIsolatedAndBounded|TestTransformPanicRetiresOwnedAttempt|TestLiveChallengeTerminalSurvivesStop)$' -count=10 ./invoke

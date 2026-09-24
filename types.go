@@ -1,11 +1,9 @@
 package openbindings
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
-	"strings"
-
-	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // JSONSchema holds a JSON Schema 2020-12 value in either of its two forms:
@@ -13,32 +11,16 @@ import (
 // boolean schemas at every schema position (`true` accepts every value,
 // `false` accepts none, `{}` is equivalent to `true`). It is intentionally
 // untyped beyond that to avoid coupling to any one JSON Schema library.
-// This preserves arbitrary keys/values structurally, but not raw JSON bytes
-// (use canonicaljson.Marshal if you need stable bytes).
+// This preserves arbitrary keys/values structurally, but not raw JSON bytes.
+// A decoded schema holds generic JSON values, with every number a
+// json.Number, so a number keeps its exact text.
 //
-// A nil JSONSchema means the schema is unspecified (the field is absent);
-// well-formedness of a present value is a document rule (OBI-D-17), enforced
-// by Validate rather than by this type.
+// As an operation's Input or Output, a nil JSONSchema means the schema is
+// unspecified (the member is absent). As an entry of Interface.Schemas, where
+// the entry itself says the member is present, nil is a JSON null, which is
+// not a schema: OBI-D-17 reports it. Well-formedness of a present value is a
+// document rule enforced by Validate rather than by this type.
 type JSONSchema any
-
-// SchemaObjectForm returns the object form of a schema value: an object
-// schema as itself, boolean `true` as `{}`, and boolean `false` as
-// `{"not": {}}` (the equivalent object spellings per JSON Schema 2020-12).
-// ok is false when v is neither an object nor a boolean — a malformed
-// schema value (an OBI-D-17 violation, reported by Validate).
-func SchemaObjectForm(v JSONSchema) (m map[string]any, ok bool) {
-	switch s := v.(type) {
-	case map[string]any:
-		return s, true
-	case bool:
-		if s {
-			return map[string]any{}, true
-		}
-		return map[string]any{"not": map[string]any{}}, true
-	default:
-		return nil, false
-	}
-}
 
 // jsonTypeName names the JSON type of a decoded value (null, boolean,
 // number, string, array, object) for diagnostics.
@@ -61,555 +43,317 @@ func jsonTypeName(v any) string {
 	}
 }
 
-// LosslessFields is embedded in every typed OpenBindings struct to preserve
-// JSON fields that the SDK does not (yet) model. Extensions holds keys starting
-// with "x-"; Unknown holds all other unrecognised keys. During marshaling,
-// typed fields always win over colliding Unknown/Extension entries.
-//
-// Each lossless type requires a parallel wire struct for encoding — when adding
-// fields to a typed struct, update both the public type and its wire counterpart.
-type LosslessFields struct {
-	// Extensions preserves `x-*` fields at the object level.
-	// It is populated by UnmarshalJSON and included by MarshalJSON.
-	Extensions map[string]json.RawMessage `json:"-"`
+// Present returns a pointer to v, for setting an optional member. The model
+// represents every optional member so that it is absent exactly when its Go
+// value is nil: Present("") is a present empty string, distinct from absence.
+func Present[T any](v T) *T { return &v }
 
-	// Unknown preserves other unknown fields (forward-compat).
-	// It is populated by UnmarshalJSON and included by MarshalJSON.
-	Unknown map[string]json.RawMessage `json:"-"`
+// Value returns the value of an optional member, or the zero value when the
+// member is absent. It suits a reader for whom absence and the zero value mean
+// the same thing, such as a description shown to a person; a reader for whom
+// they differ, as a binding specification's selector semantics do, tests for
+// nil instead.
+func Value[T any](member *T) T {
+	if member == nil {
+		var zero T
+		return zero
+	}
+	return *member
 }
 
-// Pre-computed known field sets for efficient lossless JSON unmarshaling.
-// These are computed once at package init to avoid repeated allocations.
-var (
-	knownOperationSet = knownSet(
-		"description", "deprecated", "tags", "aliases",
-		"idempotent", "input", "output", "examples",
-	)
-	knownOperationExampleSet = knownSet(
-		"description", "input", "output",
-	)
-	knownSourceSet = knownSet(
-		"bindingSpec", "location", "content", "description",
-	)
-	knownBindingEntrySet = knownSet(
-		"operation", "source", "selector", "preference", "description", "deprecated",
-		"inputTransform", "outputTransform",
-	)
-	knownDependencyEntrySet = knownSet(
-		"operation", "bindingSpecs",
-	)
-	knownInterfaceSet = knownSet(
-		"openbindings", "name", "version", "description",
-		"schemas", "operations", "dependencies",
-		"sources", "bindings", "transforms",
-	)
-)
-
-// OperationExample represents an example input/output pair for an operation.
-//
-// JSON null is a meaningful example value, distinct from an absent field
-// (OBI-D-11 validates an explicit null against the operation's schema; an
-// absent field is not validated). Because Go's `any` cannot distinguish the
-// two, InputPresent/OutputPresent record field presence: UnmarshalJSON
-// populates them, and MarshalJSON re-emits an explicit null for a present
-// field holding nil. When constructing examples in Go code, a non-nil
-// Input/Output already implies presence; set the booleans only to express
-// an explicit JSON null.
+// OperationExample is a named, author-supplied sample of an operation's
+// caller-facing values (§5.1). Input and Output are the example values as
+// JSON: nil when the member is absent, and the bytes `null` when the example
+// supplies the JSON value null, which OBI-D-11 validates like any other. An
+// empty, non-nil json.RawMessage holds no value and encodes as absent.
 type OperationExample struct {
-	Description string `json:"description,omitempty"`
-	Input       any    `json:"input,omitempty"`
-	Output      any    `json:"output,omitempty"`
-
-	// InputPresent reports whether the "input" field was present in the JSON,
-	// distinguishing an explicit null from an absent field.
-	InputPresent bool `json:"-"`
-	// OutputPresent reports whether the "output" field was present in the JSON,
-	// distinguishing an explicit null from an absent field.
-	OutputPresent bool `json:"-"`
+	Description *string         `json:"description,omitempty"`
+	Input       json.RawMessage `json:"input,omitempty"`
+	Output      json.RawMessage `json:"output,omitempty"`
 
 	LosslessFields
 }
 
-// HasInput reports whether the example provides an input value (including an
-// explicit JSON null).
-func (e OperationExample) HasInput() bool { return e.InputPresent || e.Input != nil }
+type operationExampleMembers OperationExample
 
-// HasOutput reports whether the example provides an output value (including an
-// explicit JSON null).
-func (e OperationExample) HasOutput() bool { return e.OutputPresent || e.Output != nil }
+func (e *OperationExample) UnmarshalJSON(b []byte) error { return decodeExact(b, "example", e) }
 
-type operationExampleWire struct {
-	Description string `json:"description,omitempty"`
-	Input       any    `json:"input,omitempty"`
-	Output      any    `json:"output,omitempty"`
-}
-
-func (e *OperationExample) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-
-	var w operationExampleWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-
-	*e = OperationExample{
-		Description: w.Description,
-		Input:       w.Input,
-		Output:      w.Output,
-	}
-	_, e.InputPresent = raw["input"]
-	_, e.OutputPresent = raw["output"]
-
-	e.Extensions, e.Unknown = splitLossless(raw, knownOperationExampleSet)
-	return nil
+func (e *OperationExample) decodeVerified(b []byte) error {
+	return decodeObject(b, "example", (*operationExampleMembers)(e))
 }
 
 func (e OperationExample) MarshalJSON() ([]byte, error) {
-	w := operationExampleWire{
-		Description: e.Description,
-		Input:       e.Input,
-		Output:      e.Output,
-	}
-	// omitempty drops nil Input/Output; re-emit explicit nulls for fields
-	// recorded as present so explicit-null examples round-trip.
-	var overrides map[string]json.RawMessage
-	if e.InputPresent && e.Input == nil {
-		overrides = map[string]json.RawMessage{"input": json.RawMessage("null")}
-	}
-	if e.OutputPresent && e.Output == nil {
-		if overrides == nil {
-			overrides = map[string]json.RawMessage{}
-		}
-		overrides["output"] = json.RawMessage("null")
-	}
-	return marshalLosslessWith(e.Unknown, e.Extensions, w, overrides)
+	return encodeObject(operationExampleMembers(e), e.LosslessFields)
 }
 
+// Operation is a protocol-independent capability contract (§5.1). Input and
+// Output are nil when the document specifies no contract at that boundary;
+// any schema value, including `{}` and the boolean schemas, is present.
 type Operation struct {
-	Description string   `json:"description,omitempty"`
-	Deprecated  bool     `json:"deprecated,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	Deprecated  *bool    `json:"deprecated,omitempty"`
+	Tags        []string `json:"tags,omitzero"`
 	// Aliases are additional names for this operation, equal in standing to its
 	// key. The key plus aliases form one flat, document-unique namespace; every
 	// name resolves to this operation (see ResolveOperation / OBI-T-12).
-	Aliases []string `json:"aliases,omitempty"`
+	Aliases []string `json:"aliases,omitzero"`
 
 	Idempotent *bool      `json:"idempotent,omitempty"`
 	Input      JSONSchema `json:"input,omitempty"`
 	Output     JSONSchema `json:"output,omitempty"`
 
-	// InputPresent and OutputPresent preserve authored member presence when a
-	// schema is explicit JSON null. Prepared contract identity distinguishes
-	// that spelling from an absent member even though both have a nil Go value.
-	InputPresent  bool `json:"-"`
-	OutputPresent bool `json:"-"`
-
 	// Examples contains named example input/output pairs.
-	Examples map[string]OperationExample `json:"examples,omitempty"`
+	Examples map[string]OperationExample `json:"examples,omitzero"`
 
 	LosslessFields
 }
 
-type operationWire struct {
-	Description string   `json:"description,omitempty"`
-	Deprecated  bool     `json:"deprecated,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Aliases     []string `json:"aliases,omitempty"`
+type operationMembers Operation
 
-	Idempotent *bool      `json:"idempotent,omitempty"`
-	Input      JSONSchema `json:"input,omitempty"`
-	Output     JSONSchema `json:"output,omitempty"`
+func (o *Operation) UnmarshalJSON(b []byte) error { return decodeExact(b, "operation", o) }
 
-	Examples map[string]OperationExample `json:"examples,omitempty"`
-}
-
-func (o *Operation) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-
-	var w operationWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-
-	*o = Operation{
-		Description: w.Description,
-		Deprecated:  w.Deprecated,
-		Tags:        w.Tags,
-		Aliases:     w.Aliases,
-		Idempotent:  w.Idempotent,
-		Input:       w.Input,
-		Output:      w.Output,
-		Examples:    w.Examples,
-	}
-	_, o.InputPresent = raw["input"]
-	_, o.OutputPresent = raw["output"]
-
-	o.Extensions, o.Unknown = splitLossless(raw, knownOperationSet)
-	return nil
+func (o *Operation) decodeVerified(b []byte) error {
+	return decodeObject(b, "operation", (*operationMembers)(o))
 }
 
 func (o Operation) MarshalJSON() ([]byte, error) {
-	w := operationWire{
-		Description: o.Description,
-		Deprecated:  o.Deprecated,
-		Tags:        o.Tags,
-		Aliases:     o.Aliases,
-		Idempotent:  o.Idempotent,
-		Input:       o.Input,
-		Output:      o.Output,
-		Examples:    o.Examples,
-	}
-	// The spec distinguishes an empty {} schema (accepts any value) and a
-	// boolean schema from an absent one (contract unspecified). JSONSchema
-	// is interface-typed, so omitempty drops only nil (absent) values —
-	// {}, true, and false all round-trip without special handling.
-	var overrides map[string]json.RawMessage
-	if o.InputPresent && o.Input == nil {
-		overrides = map[string]json.RawMessage{"input": json.RawMessage("null")}
-	}
-	if o.OutputPresent && o.Output == nil {
-		if overrides == nil {
-			overrides = map[string]json.RawMessage{}
-		}
-		overrides["output"] = json.RawMessage("null")
-	}
-	return marshalLosslessWith(o.Unknown, o.Extensions, w, overrides)
+	return encodeObject(operationMembers(o), o.LosslessFields)
 }
 
+// Source is a binding-specification-governed carrier or address (§5.4).
 type Source struct {
 	// BindingSpec is the binding-specification identifier governing this
-	// source — exact and opaque (core §6: never dereferenced, never
-	// range-matched).
+	// source: exact and opaque (§6: never dereferenced, never range-matched).
 	BindingSpec string `json:"bindingSpec"`
-	Location    string `json:"location,omitempty"`
-	// Content is the embedded source material: ANY JSON value, carried as
-	// raw JSON because member PRESENCE is distinct from value (core §7) —
-	// nil means the member is absent, a `null` literal is a PRESENT null.
-	// The core carries content opaquely; the governing binding specification
-	// determines which values are valid and how to interpret them.
+	// Location is the binding-specification-defined absolute address, nil
+	// when the member is absent.
+	Location *string `json:"location,omitempty"`
+	// Content is the embedded source-artifact representation: any JSON value,
+	// carried as raw JSON because member presence is distinct from value
+	// (§5.4). Nil means the member is absent; the bytes `null` are a present
+	// null. The core carries content opaquely; the governing binding
+	// specification determines which values are accepted and what they mean.
 	Content     json.RawMessage `json:"content,omitempty"`
-	Description string          `json:"description,omitempty"`
+	Description *string         `json:"description,omitempty"`
 
 	LosslessFields
 }
 
-// ContentPresent reports whether the content member is present at all —
-// including a present `null` (distinct from an absent member, core §7).
-func (s Source) ContentPresent() bool {
-	return s.Content != nil
-}
+type sourceMembers Source
 
-type sourceWire struct {
-	BindingSpec string          `json:"bindingSpec"`
-	Location    string          `json:"location,omitempty"`
-	Content     json.RawMessage `json:"content,omitempty"`
-	Description string          `json:"description,omitempty"`
-}
+func (s *Source) UnmarshalJSON(b []byte) error { return decodeExact(b, "source", s) }
 
-func (s *Source) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-
-	var w sourceWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-
-	*s = Source{
-		BindingSpec: w.BindingSpec,
-		Location:    w.Location,
-		Content:     w.Content,
-		Description: w.Description,
-	}
-
-	s.Extensions, s.Unknown = splitLossless(raw, knownSourceSet)
-	return nil
+func (s *Source) decodeVerified(b []byte) error {
+	return decodeObject(b, "source", (*sourceMembers)(s))
 }
 
 func (s Source) MarshalJSON() ([]byte, error) {
-	w := sourceWire{
-		BindingSpec: s.BindingSpec,
-		Location:    s.Location,
-		Content:     s.Content,
-		Description: s.Description,
-	}
-	return marshalLossless(s.Unknown, s.Extensions, w)
+	return encodeObject(sourceMembers(s), s.LosslessFields)
 }
 
-// Transform is a JSONata 2.1 expression string per OpenBindings v0.2 spec §5.5.
-// Tools that evaluate transforms MUST do so according to the JSONata 2.1
-// specification (OBI-T-10).
+// Transform is a JSONata expression string in the transform language §5.5
+// pins. Tools that evaluate transforms do so under that language contract
+// (OBI-T-10).
 type Transform = string
 
-// TransformOrRef represents either an inline JSONata transform expression or
-// a $ref to a named transform in the document's `transforms` map.
-//
-// Per the v0.2 spec §5.5, the inline form is a JSONata expression string;
-// the reference form is an object {"$ref": "#/transforms/<name>"} with no
-// additional properties.
-type TransformOrRef struct {
-	// Inline is the JSONata expression string when this is an inline transform.
-	// Empty when IsRef() returns true.
-	Inline string
+// TransformOrRef is a binding's inputTransform or outputTransform (§5.5): an
+// InlineTransform expression, or a *TransformReference naming an entry of the
+// document's transforms map. A nil TransformOrRef is an absent member. A
+// binding holding any other type that satisfies the interface, as one
+// embedding InlineTransform would, does not encode.
+type TransformOrRef interface {
+	// Resolve returns the JSONata expression the transform denotes: an inline
+	// expression itself, or the transforms entry a reference names. It
+	// reports false when a reference does not resolve.
+	Resolve(transforms map[string]Transform) (expression string, ok bool)
 
-	// Ref is the JSON Pointer reference (e.g., "#/transforms/myTransform")
-	// when this is a reference. Empty for inline transforms.
-	Ref string
+	transformOrRef()
 }
 
-// IsRef returns true if this is a reference to a named transform.
-func (t TransformOrRef) IsRef() bool {
-	return t.Ref != ""
-}
+// InlineTransform is a transform written in place, as a JSONata expression.
+type InlineTransform string
 
-// Resolve returns the JSONata expression string this transform refers to.
-// For inline transforms, returns the inline expression directly.
-// For references, looks up the named transform in the provided map.
-// Returns ("", false) if the reference cannot be resolved.
-func (t TransformOrRef) Resolve(transforms map[string]string) (string, bool) {
-	if !t.IsRef() {
-		return t.Inline, true
-	}
-	const prefix = "#/transforms/"
-	if !strings.HasPrefix(t.Ref, prefix) {
-		return "", false
-	}
-	name := strings.TrimPrefix(t.Ref, prefix)
-	if name == "" {
-		return "", false
-	}
-	expr, ok := transforms[name]
-	return expr, ok
-}
+// Resolve returns the expression itself.
+func (t InlineTransform) Resolve(map[string]Transform) (string, bool) { return string(t), true }
 
-func (t *TransformOrRef) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
-		*t = TransformOrRef{Inline: s}
-		return nil
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return fmt.Errorf("transform: must be a JSONata expression string or a $ref object: %w", err)
-	}
-	refRaw, ok := raw["$ref"]
-	if !ok {
-		return fmt.Errorf("transform: object form requires a $ref field")
-	}
-	var ref string
-	if err := json.Unmarshal(refRaw, &ref); err != nil {
-		return fmt.Errorf("transform.$ref: %w", err)
-	}
-	*t = TransformOrRef{Ref: ref}
-	return nil
-}
+func (InlineTransform) transformOrRef() {}
 
-func (t TransformOrRef) MarshalJSON() ([]byte, error) {
-	if !t.IsRef() {
-		return json.Marshal(t.Inline)
-	}
-	return json.Marshal(map[string]string{"$ref": t.Ref})
-}
-
-type BindingEntry struct {
-	Operation   string   `json:"operation"`
-	Source      string   `json:"source"`
-	Selector    string   `json:"selector,omitempty"`
-	Preference  *float64 `json:"preference,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Deprecated  bool     `json:"deprecated,omitempty"`
-
-	// InputTransform transforms operation input to binding input structure.
-	InputTransform *TransformOrRef `json:"inputTransform,omitempty"`
-	// OutputTransform transforms binding output to operation output structure.
-	OutputTransform *TransformOrRef `json:"outputTransform,omitempty"`
+// TransformReference is the object form of a binding transform,
+// {"$ref": "#/transforms/<name>"}. Its members beyond $ref, extensions and
+// unknown fields alike, are preserved (§12, OBI-T-02).
+type TransformReference struct {
+	// Ref is the same-document fragment naming a transforms entry.
+	Ref string `json:"$ref"`
 
 	LosslessFields
 }
 
-type bindingEntryWire struct {
-	Operation   string   `json:"operation"`
-	Source      string   `json:"source"`
-	Selector    string   `json:"selector,omitempty"`
-	Preference  *float64 `json:"preference,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Deprecated  bool     `json:"deprecated,omitempty"`
+type transformReferenceMembers TransformReference
 
-	InputTransform  *TransformOrRef `json:"inputTransform,omitempty"`
-	OutputTransform *TransformOrRef `json:"outputTransform,omitempty"`
+// Resolve returns the transforms entry Ref names.
+func (r *TransformReference) Resolve(transforms map[string]Transform) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	name, problem := transformReferenceName(r.Ref)
+	if problem != "" {
+		return "", false
+	}
+	expression, ok := transforms[name]
+	return expression, ok
 }
 
-func (be *BindingEntry) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
+func (*TransformReference) transformOrRef() {}
 
-	var w bindingEntryWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
+func (r *TransformReference) UnmarshalJSON(b []byte) error {
+	return decodeExact(b, "transform reference", r)
+}
 
-	*be = BindingEntry{
-		Operation:       w.Operation,
-		Source:          w.Source,
-		Selector:        w.Selector,
-		Preference:      w.Preference,
-		Description:     w.Description,
-		Deprecated:      w.Deprecated,
-		InputTransform:  w.InputTransform,
-		OutputTransform: w.OutputTransform,
-	}
+func (r *TransformReference) decodeVerified(b []byte) error {
+	return decodeObject(b, "transform reference", (*transformReferenceMembers)(r))
+}
 
-	be.Extensions, be.Unknown = splitLossless(raw, knownBindingEntrySet)
-	return nil
+func (r TransformReference) MarshalJSON() ([]byte, error) {
+	return encodeObject(transformReferenceMembers(r), r.LosslessFields)
+}
+
+// decodeTransform decodes a binding transform member: a string is an inline
+// expression, an object a reference.
+func decodeTransform(raw json.RawMessage) (TransformOrRef, error) {
+	trimmed := bytes.TrimSpace(raw)
+	switch {
+	case len(trimmed) > 0 && trimmed[0] == '"':
+		var expression string
+		if err := json.Unmarshal(trimmed, &expression); err != nil {
+			return nil, err
+		}
+		return InlineTransform(expression), nil
+	case len(trimmed) > 0 && trimmed[0] == '{':
+		reference := &TransformReference{}
+		if err := reference.decodeVerified(trimmed); err != nil {
+			return nil, err
+		}
+		return reference, nil
+	default:
+		return nil, fmt.Errorf("a transform is a JSONata expression string or a $ref object")
+	}
+}
+
+// BindingEntry is an author-declared realization of an operation through a
+// target in a source (§5.3).
+type BindingEntry struct {
+	Operation string `json:"operation"`
+	Source    string `json:"source"`
+	// Selector identifies the target within the source. Nil when the member is
+	// absent, which the governing binding specification gives its own
+	// meaning, distinct from any present value, the empty string included.
+	Selector *string `json:"selector,omitempty"`
+	// Preference is the author's signed integer preference among bindings of
+	// the same operation, nil when absent (no preference, not zero).
+	Preference  *int64  `json:"preference,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Deprecated  *bool   `json:"deprecated,omitempty"`
+
+	// InputTransform maps each caller-facing input value toward the source's
+	// expected input representation (§5.5).
+	InputTransform TransformOrRef `json:"inputTransform,omitempty"`
+	// OutputTransform maps each source output value toward the operation's
+	// output contract (§5.5).
+	OutputTransform TransformOrRef `json:"outputTransform,omitempty"`
+
+	LosslessFields
+}
+
+type bindingEntryMembers BindingEntry
+
+// maxPreference bounds a binding preference: the exactly representable
+// interoperable integer range of §5.3.
+const maxPreference = 9007199254740991
+
+func (be *BindingEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "binding", be) }
+
+func (be *BindingEntry) decodeVerified(b []byte) error {
+	return decodeObject(b, "binding", (*bindingEntryMembers)(be))
 }
 
 func (be BindingEntry) MarshalJSON() ([]byte, error) {
-	w := bindingEntryWire{
-		Operation:       be.Operation,
-		Source:          be.Source,
-		Selector:        be.Selector,
-		Preference:      be.Preference,
-		Description:     be.Description,
-		Deprecated:      be.Deprecated,
-		InputTransform:  be.InputTransform,
-		OutputTransform: be.OutputTransform,
+	for _, member := range []struct {
+		name      string
+		transform TransformOrRef
+	}{{"inputTransform", be.InputTransform}, {"outputTransform", be.OutputTransform}} {
+		switch transform := member.transform.(type) {
+		case nil, InlineTransform:
+		case *TransformReference:
+			if transform == nil {
+				return nil, fmt.Errorf("binding: %s holds a nil *TransformReference, which is neither transform form", member.name)
+			}
+		default:
+			// A type embedding InlineTransform satisfies the interface but is
+			// neither form (§5.5).
+			return nil, fmt.Errorf("binding: %s holds a %T, which is neither transform form", member.name, transform)
+		}
 	}
-	return marshalLossless(be.Unknown, be.Extensions, w)
+	return encodeObject(bindingEntryMembers(be), be.LosslessFields)
 }
 
 // DependencyEntry names an operation contract consumed at a local
-// composition point. BindingSpecs, when present, is an unordered any-of list
+// consumption point (§5.6). BindingSpecs, when present, is an unordered any-of list
 // of exact binding-specification identifiers accepted at that point. A nil
 // slice leaves the dependency unconstrained by binding family. Operation is
 // the canonical key of an operation in the same document.
 type DependencyEntry struct {
 	Operation    string   `json:"operation"`
-	BindingSpecs []string `json:"bindingSpecs,omitempty"`
+	BindingSpecs []string `json:"bindingSpecs,omitzero"`
 
 	LosslessFields
 }
 
-type dependencyEntryWire struct {
-	Operation    string    `json:"operation"`
-	BindingSpecs *[]string `json:"bindingSpecs,omitempty"`
-}
+type dependencyEntryMembers DependencyEntry
 
-func (d *DependencyEntry) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
+func (d *DependencyEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "dependency", d) }
 
-	var w dependencyEntryWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-
-	*d = DependencyEntry{Operation: w.Operation}
-	if w.BindingSpecs != nil {
-		d.BindingSpecs = append([]string{}, (*w.BindingSpecs)...)
-	}
-	d.Extensions, d.Unknown = splitLossless(raw, knownDependencyEntrySet)
-	return nil
+func (d *DependencyEntry) decodeVerified(b []byte) error {
+	return decodeObject(b, "dependency", (*dependencyEntryMembers)(d))
 }
 
 func (d DependencyEntry) MarshalJSON() ([]byte, error) {
-	w := dependencyEntryWire{Operation: d.Operation}
-	if d.BindingSpecs != nil {
-		bindingSpecs := append([]string{}, d.BindingSpecs...)
-		w.BindingSpecs = &bindingSpecs
-	}
-	return marshalLossless(d.Unknown, d.Extensions, w)
+	return encodeObject(dependencyEntryMembers(d), d.LosslessFields)
 }
 
-// Interface is the OpenBindings document shape.
+// Interface is the OpenBindings document shape (§5). OpenBindings is the
+// declared specification version. Every other member is absent exactly when
+// its Go value is nil. That includes Operations, which §5 requires: the model
+// carries a document that omits it, so Validate can report the omission
+// (OBI-D-02) and re-encoding leaves it omitted.
 type Interface struct {
-	OpenBindings string `json:"openbindings"`
-	Name         string `json:"name,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Description  string `json:"description,omitempty"`
+	OpenBindings string  `json:"openbindings"`
+	Name         *string `json:"name,omitempty"`
+	Version      *string `json:"version,omitempty"`
+	Description  *string `json:"description,omitempty"`
 
-	Schemas    map[string]JSONSchema `json:"schemas,omitempty"`
-	Operations map[string]Operation  `json:"operations"`
+	Schemas    map[string]JSONSchema `json:"schemas,omitzero"`
+	Operations map[string]Operation  `json:"operations,omitzero"`
 	// Dependencies contains named consumption points. A dependency declaration
 	// does not assert that a realization is installed, selected, or live.
-	Dependencies map[string]DependencyEntry `json:"dependencies,omitempty"`
+	Dependencies map[string]DependencyEntry `json:"dependencies,omitzero"`
 
-	Sources  map[string]Source       `json:"sources,omitempty"`
-	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
+	Sources  map[string]Source       `json:"sources,omitzero"`
+	Bindings map[string]BindingEntry `json:"bindings,omitzero"`
 
 	// Transforms contains named transforms that can be referenced by bindings.
-	Transforms map[string]Transform `json:"transforms,omitempty"`
+	Transforms map[string]Transform `json:"transforms,omitzero"`
 
 	LosslessFields
 }
 
-type interfaceWire struct {
-	OpenBindings string `json:"openbindings"`
-	Name         string `json:"name,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Description  string `json:"description,omitempty"`
+type interfaceMembers Interface
 
-	Schemas      map[string]JSONSchema      `json:"schemas,omitempty"`
-	Operations   map[string]Operation       `json:"operations"`
-	Dependencies map[string]DependencyEntry `json:"dependencies,omitempty"`
+func (i *Interface) UnmarshalJSON(b []byte) error { return decodeExact(b, "document", i) }
 
-	Sources  map[string]Source       `json:"sources,omitempty"`
-	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
-
-	Transforms map[string]Transform `json:"transforms,omitempty"`
-}
-
-func (i *Interface) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-
-	var w interfaceWire
-	if err := jsonvalue.Unmarshal(b, &w); err != nil {
-		return err
-	}
-
-	*i = Interface{
-		OpenBindings: w.OpenBindings,
-		Name:         w.Name,
-		Version:      w.Version,
-		Description:  w.Description,
-		Schemas:      w.Schemas,
-		Operations:   w.Operations,
-		Dependencies: w.Dependencies,
-		Sources:      w.Sources,
-		Bindings:     w.Bindings,
-		Transforms:   w.Transforms,
-	}
-
-	i.Extensions, i.Unknown = splitLossless(raw, knownInterfaceSet)
-	return nil
+func (i *Interface) decodeVerified(b []byte) error {
+	return decodeObject(b, "document", (*interfaceMembers)(i))
 }
 
 func (i Interface) MarshalJSON() ([]byte, error) {
-	w := interfaceWire{
-		OpenBindings: i.OpenBindings,
-		Name:         i.Name,
-		Version:      i.Version,
-		Description:  i.Description,
-		Schemas:      i.Schemas,
-		Operations:   i.Operations,
-		Dependencies: i.Dependencies,
-		Sources:      i.Sources,
-		Bindings:     i.Bindings,
-		Transforms:   i.Transforms,
-	}
-	return marshalLossless(i.Unknown, i.Extensions, w)
+	return encodeObject(interfaceMembers(i), i.LosslessFields)
 }

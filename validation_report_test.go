@@ -6,19 +6,19 @@ import (
 	"testing"
 )
 
-func TestValidateAgainstSchemaDistinguishesGraphUnavailable(t *testing.T) {
-	err := ValidateAgainstSchema("value", map[string]any{
+func TestValidateOperationInputDistinguishesGraphUnavailable(t *testing.T) {
+	err := ValidateOperationInput("value", documentWithInput(map[string]any{
 		"anyOf": []any{
 			map[string]any{"type": "string"},
 			map[string]any{"$ref": "https://example.invalid/missing.json"},
 		},
-	}, nil)
+	}, nil), "op")
 	var unavailable *SchemaGraphUnavailableError
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("expected SchemaGraphUnavailableError, got %T: %v", err, err)
 	}
 
-	err = ValidateAgainstSchema(42, map[string]any{"type": "string"}, nil)
+	err = ValidateOperationInput(42, documentWithInput(map[string]any{"type": "string"}, nil), "op")
 	if err == nil {
 		t.Fatal("expected instance mismatch")
 	}
