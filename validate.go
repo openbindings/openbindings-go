@@ -73,8 +73,9 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // reported as that rule's
 // violation, with every other rule inconclusive, since which of its values
 // the document holds is not established. A document holding a string that
-// escapes a lone UTF-16 surrogate, or nests deeper than encoding/json reads
-// (10000 levels), has OBI-D-01 decided and every other rule inconclusive.
+// escapes a lone UTF-16 surrogate has OBI-D-01 decided and every other rule
+// inconclusive; one nesting deeper than encoding/json reads (10000 levels)
+// has OBI-D-12 decided as well, on the version it declares.
 //
 // A document declaring a well-formed version outside the supported set is not
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
@@ -93,9 +94,11 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 		switch {
 		case errors.Is(err, errNestingLimit):
 			// OBI-D-01 is decided on the input, which the exact scan reads at
-			// any depth; the other rules read the decoded document, which
+			// any depth, and so is OBI-D-12, on the member the scan reads the
+			// version from. The other rules read the decoded document, which
 			// meets a resource limit and is no evidence either way (§10.5).
-			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-D-01")
+			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-D-01", "OBI-D-12")
+			checkDeclaredVersion(&c, versionView(data))
 		case errors.As(err, &lone):
 			// OBI-D-01 is decided: the input is UTF-8 JSON with no repeated
 			// name. The other rules read values this SDK cannot carry.
@@ -140,6 +143,32 @@ func documentView(i Interface) (any, error) {
 		return nil, fmt.Errorf("openbindings: decode encoded interface: %w", err)
 	}
 	return view, nil
+}
+
+// versionView returns what OBI-D-12 judges of input of any depth, read by the
+// exact scan: an object holding the root object's openbindings member when
+// it has one, a value other than a string standing as an empty value of its
+// JSON type.
+func versionView(data []byte) any {
+	raw, declared := versionMember(data)
+	if !declared {
+		return nil
+	}
+	var version any
+	switch raw[0] {
+	case '"':
+		version, _ = exactString(raw)
+	case '{':
+		version = map[string]any{}
+	case '[':
+		version = []any{}
+	case 't', 'f':
+		version = raw[0] == 't'
+	case 'n':
+	default:
+		version = json.Number(raw)
+	}
+	return map[string]any{"openbindings": version}
 }
 
 // checkDeclaredVersion decides OBI-D-12 from a document's generic view, which

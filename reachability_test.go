@@ -245,7 +245,7 @@ func TestReachability_DesignReview(t *testing.T) {
 	}, {
 		name:     "an oversized number in a reached default, which evaluation never reads",
 		document: `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","default":1e99999}}}}`,
-		values:   map[string]string{`"s"`: "unavailable"},
+		values:   map[string]string{`"s"`: "valid", `5`: "mismatch"},
 	}, {
 		// $recursiveAnchor true is not well-formed 2020-12, though 2020-12
 		// does not evaluate it: no verdict.

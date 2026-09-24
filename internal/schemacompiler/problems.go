@@ -40,11 +40,18 @@ var kindPrinter = message.NewPrinter(language.English)
 // alternative would read as several defects. A member name that fails
 // propertyNames is located at the member.
 func Outcome(err error) (problems []Problem, mismatch bool) {
+	return Substitution{}.Outcome(err)
+}
+
+// Outcome classifies a validation error of the Value as the package's Outcome
+// does, stating a comparison the schema made with a stand-in as made with the
+// number it stands for.
+func (s Substitution) Outcome(err error) (problems []Problem, mismatch bool) {
 	var ve *jsonschema.ValidationError
 	if !errors.As(err, &ve) || hasRefCycle(ve) {
 		return nil, false
 	}
-	problems = collect(ve)
+	problems = collect(ve, s.standsFor)
 	slices.SortStableFunc(problems, func(a, b Problem) int {
 		if order := slices.Compare(a.Location, b.Location); order != 0 {
 			return order
@@ -66,13 +73,13 @@ func hasRefCycle(ve *jsonschema.ValidationError) bool {
 	return false
 }
 
-func collect(ve *jsonschema.ValidationError) []Problem {
+func collect(ve *jsonschema.ValidationError, standsFor map[string]string) []Problem {
 	switch k := ve.ErrorKind.(type) {
 	case *kind.AnyOf, *kind.OneOf:
 		if len(ve.Causes) > 0 {
 			var alternatives []string
 			for _, cause := range ve.Causes {
-				for _, problem := range collect(cause) {
+				for _, problem := range collect(cause, standsFor) {
 					alternatives = append(alternatives, relativeText(ve.InstanceLocation, problem))
 				}
 			}
@@ -87,7 +94,7 @@ func collect(ve *jsonschema.ValidationError) []Problem {
 		// carry no location; the name is the member it names.
 		var messages []string
 		for _, cause := range ve.Causes {
-			for _, problem := range collect(cause) {
+			for _, problem := range collect(cause, standsFor) {
 				messages = append(messages, problem.Message)
 			}
 		}
@@ -103,14 +110,39 @@ func collect(ve *jsonschema.ValidationError) []Problem {
 		sorted := &kind.AdditionalProperties{Properties: slices.Sorted(slices.Values(k.Properties))}
 		return []Problem{{Location: ve.InstanceLocation, Message: sorted.LocalizedString(kindPrinter)}}
 	}
+	if got, want, compared := comparison(ve.ErrorKind); compared {
+		if number, standIn := standsFor[got.RatString()]; standIn {
+			// The schema compared the stand-in; the finding states the number.
+			limit, _ := want.Float64()
+			return []Problem{{Location: ve.InstanceLocation, Message: kindPrinter.Sprintf("%s: got %s, want %v", ve.ErrorKind.KeywordPath()[0], number, limit)}}
+		}
+	}
 	if len(ve.Causes) == 0 {
 		return []Problem{{Location: ve.InstanceLocation, Message: ve.ErrorKind.LocalizedString(kindPrinter)}}
 	}
 	var out []Problem
 	for _, cause := range ve.Causes {
-		out = append(out, collect(cause)...)
+		out = append(out, collect(cause, standsFor)...)
 	}
 	return out
+}
+
+// comparison returns the numbers a comparison failed on: the value's and the
+// schema's.
+func comparison(k jsonschema.ErrorKind) (got, want *big.Rat, compared bool) {
+	switch k := k.(type) {
+	case *kind.Minimum:
+		return k.Got, k.Want, true
+	case *kind.Maximum:
+		return k.Got, k.Want, true
+	case *kind.ExclusiveMinimum:
+		return k.Got, k.Want, true
+	case *kind.ExclusiveMaximum:
+		return k.Got, k.Want, true
+	case *kind.MultipleOf:
+		return k.Got, k.Want, true
+	}
+	return nil, nil, false
 }
 
 // relativeText renders a problem found under base, naming its location
@@ -164,57 +196,6 @@ func ValueProblem(v any) string {
 func IsNumber(n json.Number) bool {
 	s := string(n)
 	return s != "" && (s[0] == '-' || s[0] >= '0' && s[0] <= '9') && strings.TrimSpace(s) == s && json.Valid([]byte(s))
-}
-
-// The numeric limits of schema evaluation. The backend parses numbers into
-// math/big values: toward these limits the work grows, and past what
-// math/big parses v6.0.3 dereferences nil or drops the keyword, so a value or
-// schema holding such a number is not handed to it.
-const (
-	maxNumberLength   = 4096
-	maxNumberExponent = 10000
-)
-
-// errNumericLimit is NumericLimit's error.
-var errNumericLimit = errors.New("a number beyond the numeric limits of schema evaluation (at most 4096 characters, an exponent within ±10000)")
-
-// NumericLimit reports the first number in v, in key order, beyond the
-// numeric limits of schema evaluation: its location in v as a JSON Pointer
-// ("" for v itself) and errNumericLimit. It returns a nil error when v holds
-// none. Only a json.Number can exceed them; Go's numeric types cannot.
-func NumericLimit(v any) (location string, err error) {
-	switch v := v.(type) {
-	case json.Number:
-		if !withinNumericLimits(string(v)) {
-			return "", errNumericLimit
-		}
-	case []any:
-		for i, item := range v {
-			if location, err := NumericLimit(item); err != nil {
-				return jsonpointer.Format(fmt.Sprint(i)) + location, err
-			}
-		}
-	case map[string]any:
-		for _, key := range slices.Sorted(maps.Keys(v)) {
-			if location, err := NumericLimit(v[key]); err != nil {
-				return jsonpointer.Format(key) + location, err
-			}
-		}
-	}
-	return "", nil
-}
-
-func withinNumericLimits(token string) bool {
-	if len(token) > maxNumberLength {
-		return false
-	}
-	if i := strings.LastIndexAny(token, "eE"); i >= 0 {
-		exponent, ok := new(big.Int).SetString(token[i+1:], 10)
-		if !ok || exponent.CmpAbs(big.NewInt(maxNumberExponent)) > 0 {
-			return false
-		}
-	}
-	return true
 }
 
 func finiteProblem(f float64) string {

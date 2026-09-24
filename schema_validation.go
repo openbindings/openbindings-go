@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
@@ -61,10 +63,10 @@ func init() {
 // found well-formed, by their encoding.
 //
 // The meta-schema validator's work grows faster than linearly with a
-// schema's depth, so a schema holding a number beyond the numeric limits of
-// schema evaluation, or nesting subschemas deeper than schemaDepthLimit, meets
-// a resource limit and leaves the rule inconclusive there (§10.5), as it does
-// for an operation's schema graph.
+// schema's depth, so the subschemas a schema nests deeper than
+// schemaDepthLimit are not checked, which leaves the rule inconclusive there
+// (§10.5). The rest of the schema is checked all the same: the meta-schemas
+// judge each subschema by what it holds, whatever its subschemas hold.
 func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
 	case bool:
@@ -74,24 +76,19 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 		if key != "" && knownValid[key] {
 			return
 		}
-		if at, err := schemacompiler.NumericLimit(v); err != nil {
-			c.inconclusive("OBI-D-17", prefix+at, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+		checked, cut := cutSchema(v, schemaDepthLimit)
+		problems, err := checkAgainstMetaSchema(checked)
+		if err != nil {
+			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
 			return
 		}
-		if schemaDepth(v) > schemaDepthLimit {
-			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: it nests subschemas deeper than %d levels", schemaDepthLimit))
-			return
+		for _, problem := range problems {
+			c.violated("OBI-D-17", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
 		}
-		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
-			problems, mismatch := schemacompiler.Outcome(verr)
-			if !mismatch {
-				c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", verr))
-				return
-			}
-			for _, problem := range problems {
-				c.violated("OBI-D-17", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
-			}
-		} else if key != "" {
+		switch {
+		case cut != "":
+			c.inconclusive("OBI-D-17", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
+		case len(problems) == 0 && key != "":
 			knownValid[key] = true
 		}
 	default:
@@ -99,52 +96,101 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 	}
 }
 
-// numericMembers are the members of an OBI document the document schema does
-// numeric work on, as reference tokens where "*" is every entry of a map: a
-// binding's preference, held to its integer range (§5.3), and the items of an
-// operation's aliases and of a dependency's bindingSpecs, which uniqueItems
-// compares as numbers when they are numbers.
-// TestDocumentSchema_NumericWorkIsOnNumericMembers holds this list to the
-// embedded schema.
-var numericMembers = [][]string{
-	{"bindings", "*", "preference"},
-	{"operations", "*", "aliases"},
-	{"dependencies", "*", "bindingSpecs"},
+// checkAgainstMetaSchema validates a schema against the 2020-12 meta-schemas,
+// returning the problems found, or an error when no verdict was reached. A
+// number beyond the numeric limits of schema evaluation is checked as a
+// stand-in (schemacompiler.Substitute): the meta-schemas tell numbers apart
+// only by type, by equality, and by comparison with zero
+// (TestMetaSchema_ComparesNumbersOnlyWithZero).
+func checkAgainstMetaSchema(schema any) ([]schemacompiler.Problem, error) {
+	checked := schemacompiler.Substitute(schema)
+	err := compiledMetaSchema.Validate(checked.Value)
+	if err == nil {
+		return nil, nil
+	}
+	problems, mismatch := checked.Outcome(err)
+	if !mismatch {
+		return nil, err
+	}
+	return problems, nil
+}
+
+// cutSchema returns a schema with each subschema object it nests deeper than
+// limit levels replaced by true, and the location of the first replaced, or
+// the schema itself and "" when it nests none so deep. schema is not changed.
+func cutSchema(schema map[string]any, limit int) (map[string]any, string) {
+	if schemaDepth(schema) <= limit {
+		return schema, ""
+	}
+	first := ""
+	var path []string
+	var cut func(object map[string]any, level int) map[string]any
+	cut = func(object map[string]any, level int) map[string]any {
+		out := maps.Clone(object)
+		copied := map[string]bool{}
+		forEachDescribedSubschema(object, func(child any, tokens ...string) {
+			path = append(path, tokens...)
+			defer func() { path = path[:len(path)-len(tokens)] }()
+			childObject, isObject := child.(map[string]any)
+			if !isObject {
+				return
+			}
+			var replaced any = true
+			if level < limit {
+				replaced = cut(childObject, level+1)
+			} else if first == "" {
+				first = jsonpointer.Format(path...)
+			}
+			keyword := tokens[0]
+			if len(tokens) == 1 {
+				out[keyword] = replaced
+				return
+			}
+			switch container := out[keyword].(type) {
+			case map[string]any:
+				if !copied[keyword] {
+					container, copied[keyword] = maps.Clone(container), true
+					out[keyword] = container
+				}
+				container[tokens[1]] = replaced
+			case []any:
+				if !copied[keyword] {
+					container, copied[keyword] = slices.Clone(container), true
+					out[keyword] = container
+				}
+				index, _ := strconv.Atoi(tokens[1])
+				container[index] = replaced
+			}
+		})
+		return out
+	}
+	return cut(schema, 0), first
 }
 
 // validateAgainstOBISchema records OBI-D-02 evidence: whether the document's
 // generic view validates against openbindings.schema.json.
 //
-// The schema library is not handed a number beyond the numeric limits of
-// schema evaluation where the document schema does numeric work
-// (numericMembers). A member holding one is set aside, and the rest of the
-// document is still checked: a preference is decided here exactly, and an
-// array is left inconclusive.
+// The document schema tells numbers apart only by type and equality, except
+// that it holds a binding's preference to its integer range (§5.3;
+// TestDocumentSchema_ComparesNumbersOnlyAtAPreference). So the schema library
+// is never handed a number beyond the numeric limits of schema evaluation: a
+// preference holding one is decided exactly here, and any other is checked
+// as a stand-in (schemacompiler.Substitute).
 func validateAgainstOBISchema(c *ruleChecks, view any) {
-	var setAside [][]string
-	for _, pattern := range numericMembers {
-		for _, member := range membersAt(view, pattern, nil) {
-			at, err := schemacompiler.NumericLimit(member.value)
-			if err == nil {
-				continue
-			}
-			path := jsonpointer.Format(member.tokens...)
-			if member.tokens[len(member.tokens)-1] == "preference" {
-				inRange := false
-				if number, isNumber := member.value.(json.Number); isNumber {
-					_, inRange = preferenceValue(string(number))
-				}
-				if !inRange {
-					c.violated("OBI-D-02", path, fmt.Sprintf("does not validate against the document schema: a preference is an integer from -%d through %d", maxPreference, maxPreference))
-				}
-			} else {
-				c.inconclusive("OBI-D-02", path, fmt.Sprintf("could not be checked against the document schema: it holds, at %q, %v", at, err))
-			}
-			setAside = append(setAside, member.tokens)
+	var decided [][]string
+	for _, member := range membersAt(view, []string{"bindings", "*", "preference"}, nil) {
+		number, isNumber := member.value.(json.Number)
+		if _, err := schemacompiler.NumericLimit(number); !isNumber || err == nil {
+			continue
 		}
+		if _, inRange := preferenceValue(string(number)); !inRange {
+			c.violated("OBI-D-02", jsonpointer.Format(member.tokens...), fmt.Sprintf("does not validate against the document schema: a preference is an integer from -%d through %d", maxPreference, maxPreference))
+		}
+		decided = append(decided, member.tokens)
 	}
-	if verr := compiledOBISchema.Validate(withoutMembers(view, setAside)); verr != nil {
-		problems, mismatch := schemacompiler.Outcome(verr)
+	checked := schemacompiler.Substitute(withoutMembers(view, decided))
+	if verr := compiledOBISchema.Validate(checked.Value); verr != nil {
+		problems, mismatch := checked.Outcome(verr)
 		if !mismatch {
 			// An exceeded resource limit is not evidence of violation (§10.5).
 			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
@@ -462,12 +508,14 @@ func (e *SchemaValidationError) Unwrap() error {
 
 // schemaValidationError projects a backend validation error onto the SDK's
 // outcomes: a *SchemaValidationError for an established mismatch, and a
-// *SchemaGraphUnavailableError for anything that reached no verdict.
-func schemaValidationError(err error) error {
+// *SchemaGraphUnavailableError for anything that reached no verdict. checked
+// is what was validated, whose findings state the numbers its stand-ins
+// stand for.
+func schemaValidationError(err error, checked schemacompiler.Substitution) error {
 	if err == nil {
 		return nil
 	}
-	problems, mismatch := schemacompiler.Outcome(err)
+	problems, mismatch := checked.Outcome(err)
 	if !mismatch {
 		return &SchemaGraphUnavailableError{Cause: err}
 	}

@@ -34,6 +34,30 @@
   `"\ud800"` passed a `const` of U+FFFD. They now return the encoding error
   and no report. A nil `Extensions` or `Unknown` entry still encodes as
   `null`.
+- **A number beyond the numeric limits, or a subschema past the depth
+  limit, hides only what depends on it.** Each guard set a whole value
+  aside, hiding violations that were certain: `bindingSpecs: ["", 1e99999]`,
+  a schema `{"type": 42, "default": 1e99999}`, a schema holding `type: 42`
+  above 300 nested `not`s, and an example `{"a": 1, "b": 1e99999}` for a
+  schema whose `a` is a string were all undetermined. Now:
+  - Such a number is replaced by a stand-in within the limits, with the same
+    sign, an integer exactly when it is one, and equal to another number
+    exactly when it is. The stand-in is used wherever the check tells numbers
+    apart by nothing else: the document schema (OBI-D-02), the 2020-12
+    meta-schemas (OBI-D-17), and an operation's schema graph that compares no
+    number by order or divisibility and holds none in `const` or `enum`
+    (OBI-D-11, and `CompiledSchema.Validate`). A finding on a stand-in states
+    the number it stands for. Tests hold the document schema and the
+    meta-schemas to that premise. Where the graph does compare numbers, the
+    value still reaches no verdict, and the error names where.
+  - An operation's schema meets the numeric limits only through a number the
+    library reads: a keyword's value, or one in `const` or `enum`. A number
+    in `default`, `examples`, or an unknown keyword no longer leaves the
+    schema unavailable.
+  - OBI-D-17 checks a schema down to 256 levels and is inconclusive only for
+    the subschemas below.
+  - Input nested past 10,000 levels has OBI-D-12 decided on the version it
+    declares, read by the same scan as OBI-T-04's.
 - **OBI-D-01 no longer depends on how encoding/json reads deep input.** One
   scan of the input checks JSON syntax, repeated names, lone surrogates, and
   the declared version, at any depth and with its own stack. Under
@@ -79,7 +103,7 @@
   spelled out only when a reference resolves to it. A chain of thousands of
   nested `$id` resources still costs time quadratic in its depth, as does a
   report with a finding at every level of a deeply nested schema. OBI-D-17
-  is inconclusive for a schema nesting subschemas deeper than 256 levels,
+  is inconclusive for the subschemas a schema nests deeper than 256 levels,
   the limit compilation applies, since the meta-schema validator's work
   grows faster than linearly with that depth; data inside a schema (`const`,
   `default`, and the like) does not count toward either limit.
@@ -88,16 +112,14 @@
   holding more than 20 items, one of them a number beyond the numeric limits
   of schema evaluation, made `ParseDocument` and `ValidateDocument` panic
   inside the schema library, whose `uniqueItems` compares items as numbers.
-  Every member the document schema does numeric work on is now checked
-  (`preference`, `aliases`, `bindingSpecs`), and a test holds that list to
-  the embedded schema.
-- **A number beyond the limits in one member no longer hides the rest of
-  OBI-D-02.** The member is set aside and the rest of the document is still
-  checked. A `preference` is decided exactly, however it is spelled: `1e10001`
-  violates its range, and `1.` followed by 5,000 zeros is 1. An array holding
-  such a number is inconclusive at its location. The typed model decodes a
-  preference with the same check, whose work no longer grows with the
-  exponent.
+  No such number reaches the library (see above).
+- **A number beyond the limits no longer hides any of OBI-D-02.** A
+  `preference` is decided exactly, however it is spelled: `1e10001` violates
+  its range, and `1.` followed by 5,000 zeros is 1. Any other such number is
+  checked as a stand-in (see above), which the document schema cannot tell
+  from it: a test holds that the schema compares numbers only at a
+  preference. The typed model decodes a preference with the same check,
+  whose work no longer grows with the exponent.
 - **An unsupported version is refused however deeply the input nests.** The
   declared version is read by a scan with no depth limit, so input nested
   past the decoder's 10,000 levels is refused under OBI-T-04 rather than
@@ -112,10 +134,10 @@
   input.** It copied a value's location for every value, so deep and wide
   input cost depth times width: a 2 MB document took 16 seconds to parse.
 - **Resource limits cover what the schema library reaches, and nothing
-  else.** OBI-D-02 holds only the members the document schema does numeric
-  work on to the numeric limits of schema evaluation. An operation's schema is held to them, and to a nesting depth
-  of 256, over the values the library can reach from it: its schema and,
-  transitively, what the references in them name. A large number in an
+  else.** An operation's schema is held to the numeric limits of schema
+  evaluation, and to a nesting depth of 256, over the values the library can
+  reach from it: its schema and, transitively, what the references in them
+  name. A large number in an
   unrelated extension or in source content no longer leaves every operation
   unavailable and OBI-D-02 inconclusive, and a schema nested thousands of
   levels deep no longer takes seconds to compile. A finding about a limit
@@ -345,8 +367,8 @@
   - **A resource is given to the library whole.** The library compiles a
     whole resource when any part of it is used, so a part of an `$id`
     resource the graph does not reach, referencing a resource outside the
-    document or holding a number beyond the numeric limits, leaves the graph
-    without a verdict. 335d530 read the first as reaching outside, and
+    document or holding a number the library reads beyond the numeric
+    limits, leaves the graph without a verdict. 335d530 read the first as reaching outside, and
     skipped the examples.
   - An `$id` that names a meta-schema the library carries names the schema
     the document embeds, as before.
@@ -428,10 +450,11 @@
   enforces it under draft-07 and earlier, which a reference to their
   meta-schemas reaches, with no option to stop), and the graph an operation
   schema reaches is walked by core itself, so a `then` or `else` no `if`
-  selects counts, as §5.2 has it, though the library does not compile it. A number beyond the numeric limits of schema
-  evaluation (4096 characters, an exponent within ±10000) in a value, a
-  schema, or the document leaves that check without a verdict instead of
-  reaching the library, where v6.0.3 dereferences nil. The
+  selects counts, as §5.2 has it, though the library does not compile it. A
+  number beyond the numeric limits of schema evaluation (4096 characters, an
+  exponent within ±10000) never reaches the library, where v6.0.3
+  dereferences nil: where a check cannot tell it from a stand-in it is
+  checked as one, and otherwise that check reaches no verdict. The
   `github.com/dlclark/regexp2/v2` dependency is gone.
 
 - **The document model is exact** (breaking, pre-1.0). Decoding matched

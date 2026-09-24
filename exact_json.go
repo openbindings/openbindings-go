@@ -100,12 +100,22 @@ func verifyExactJSON(b []byte) error {
 // string. It reads input of any depth, and input that repeats a member name,
 // holds invalid UTF-8, or holds a lone surrogate.
 func declaredVersion(data []byte) (string, bool) {
-	scan := exactScan{b: bytes.TrimPrefix(data, byteOrderMark), readVersion: true}
-	if scan.run() != nil || len(scan.versions) != 1 || scan.versions[0][0] != '"' {
+	raw, declared := versionMember(data)
+	if !declared || raw[0] != '"' {
 		return "", false
 	}
-	version, _ := exactString(scan.versions[0])
+	version, _ := exactString(raw)
 	return version, true
+}
+
+// versionMember returns the raw value of the root object's openbindings
+// member, read as declaredVersion reads it, whatever its type.
+func versionMember(data []byte) ([]byte, bool) {
+	scan := exactScan{b: bytes.TrimPrefix(data, byteOrderMark), readVersion: true}
+	if scan.run() != nil || len(scan.versions) != 1 {
+		return nil, false
+	}
+	return scan.versions[0], true
 }
 
 // exactScan reads JSON a byte at a time, keeping its own stack rather than

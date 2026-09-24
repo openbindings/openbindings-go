@@ -57,7 +57,7 @@ func TestJSONSchemaTestSuite(t *testing.T) {
 				want := map[bool]string{true: "valid", false: "mismatch"}[test.Valid]
 				library := "unavailable"
 				if standalone != nil {
-					library = outcome(schemaValidationError(standalone.Validate(decodeLibraryValue(t, test.Data))))
+					library = outcome(schemaValidationError(standalone.Validate(decodeLibraryValue(t, test.Data)), schemacompiler.Substitution{}))
 				}
 				switch {
 				case ours == "unavailable":

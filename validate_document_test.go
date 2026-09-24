@@ -537,11 +537,14 @@ func TestValidateDocument_AbsoluteReferencesIntoEmbeddedResourcesResolve(t *test
 	}
 }
 
-// A resource limit is not evidence of a violation (§10.5).
+// A resource limit is not evidence of a violation (§10.5). A number the
+// schema library would read beyond the numeric limits leaves the schema
+// unevaluable, so its examples are not checked, though the schema is judged
+// well-formed: the meta-schemas are checked against a stand-in.
 func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
-	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"input":{"minLength":1e999999}}}}`)
-	if report.Evidence["OBI-D-17"] != EvidenceInconclusive {
-		t.Fatalf("OBI-D-17 = %s, want inconclusive; findings %+v", report.Evidence["OBI-D-17"], report.Findings)
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"input":{"minLength":1e999999},"examples":{"e":{"input":"x"}}}}}`)
+	if report.Evidence["OBI-D-17"] != EvidenceSatisfied || report.Evidence["OBI-D-11"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-17 = %s, OBI-D-11 = %s; findings %+v", report.Evidence["OBI-D-17"], report.Evidence["OBI-D-11"], report.Findings)
 	}
 }
 
@@ -615,16 +618,16 @@ func TestValidateDocument_TransformReferencesDecodeTheirFragment(t *testing.T) {
 	}
 }
 
-// ParseDocument refuses what it cannot check: a document missing a required
-// member stays refused whatever numbers it holds elsewhere, and an alias
-// beyond the numeric limits is not parsed.
-func TestParseDocument_RefusesWhatItCannotCheck(t *testing.T) {
+// ParseDocument checks a document whatever numbers it holds: one missing a
+// required member is refused, and a number beyond the numeric limits where
+// an alias belongs is no alias.
+func TestParseDocument_ChecksNumbersBeyondTheLimits(t *testing.T) {
 	if _, err := ParseDocument([]byte(`{"openbindings":"0.2.0","x-padding":1e10001}`)); !errors.As(err, new(*ValidationError)) {
 		t.Fatalf("a missing operations member is an OBI-D-02 violation, got %v", err)
 	}
 	alias := `{"openbindings":"0.2.0","operations":{"a":{"aliases":["b",1e10001]}}}`
-	if iface, err := ParseDocument([]byte(alias)); err == nil || iface != nil || errors.As(err, new(*ValidationError)) {
-		t.Fatalf("an unchecked alias must not parse, without a violation: %v", err)
+	if iface, err := ParseDocument([]byte(alias)); iface != nil || !errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "/operations/a/aliases/1") {
+		t.Fatalf("a number is no alias: %v", err)
 	}
 	if _, err := ParseDocument([]byte(`{"a":1,"a":2}`)); !errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "OBI-D-01") {
 		t.Fatalf("an OBI-D-01 violation is a *ValidationError, got %T %v", err, err)
@@ -632,16 +635,26 @@ func TestParseDocument_RefusesWhatItCannotCheck(t *testing.T) {
 }
 
 // Input nested deeper than the decoder reads is still read in full for
-// OBI-D-01, a token at a time, but cannot be decoded: every other rule meets
-// a resource limit and is inconclusive (§10.5). Its declared version is read
-// however deep the input and wherever the member lies, so an unsupported one
-// is refused (OBI-T-04).
+// OBI-D-01, a token at a time, but cannot be decoded: every rule but OBI-D-12
+// meets a resource limit and is inconclusive (§10.5). Its declared version is
+// read however deep the input and wherever the member lies, so an unsupported
+// one is refused (OBI-T-04) and a missing or malformed one violates OBI-D-12.
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 	nested := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
 	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + nested + `}`
 	_, report, err := ValidateDocument([]byte(deep), ValidateOptions{})
-	if err != nil || report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("err %v, OBI-D-01 %q, OBI-D-02 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Evidence["OBI-D-02"], report.Conclusion)
+	if err != nil || report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-12"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+		t.Fatalf("err %v, OBI-D-01 %q, OBI-D-12 %q, OBI-D-02 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Evidence["OBI-D-12"], report.Evidence["OBI-D-02"], report.Conclusion)
+	}
+	for member, want := range map[string]Finding{
+		``:                                 {Rule: "OBI-D-12", Status: EvidenceViolated, Message: "missing the required openbindings member"},
+		`"openbindings":"0.2",`:            {Rule: "OBI-D-12", Status: EvidenceViolated, Path: "/openbindings", Message: `"0.2" is not a valid SemVer 2.0.0 string`},
+		`"openbindings":[` + nested + `],`: {Rule: "OBI-D-12", Status: EvidenceViolated, Path: "/openbindings", Message: "must be a SemVer 2.0.0 string; got array"},
+	} {
+		_, report, err := ValidateDocument([]byte(`{`+member+`"operations":{},"x-deep":`+nested+`}`), ValidateOptions{})
+		if !errors.As(err, new(*ValidationError)) || !reflect.DeepEqual(report.Violations(), []Finding{want}) {
+			t.Errorf("%.40s: violations %+v", member, report.Violations())
+		}
 	}
 	for name, input := range map[string]string{
 		"a repeated name before it": `{"openbindings":"0.2.0","a":1,"a":2,"x-deep":` + nested + `}`,
@@ -699,30 +712,35 @@ func FuzzDeclaredVersion(f *testing.F) {
 	})
 }
 
-// The document schema does numeric work on three members (numericMembers). A
-// number beyond the numeric limits there is never handed to the schema
-// library: a preference is decided exactly, an array is left inconclusive, and
-// the rest of the document is still checked.
-func TestValidateDocument_NumericMembersBeyondTheLimits(t *testing.T) {
+// A number beyond the numeric limits is never handed to the schema library:
+// a preference holding one is decided exactly, and any other is checked as a
+// stand-in the document schema cannot tell from it, so every violation is
+// found and no finding is lost.
+func TestValidateDocument_NumbersBeyondTheLimitsAreChecked(t *testing.T) {
 	var items []string
 	for i := range 21 { // more than 20 items, which the library hashes
 		items = append(items, fmt.Sprintf(`"a%d"`, i))
 	}
 	list := strings.Join(append(items, "1e1000001"), ",")
 	for name, tc := range map[string]struct {
-		document     string
-		inconclusive string
-		violated     []string
+		document string
+		violated []string
 	}{
 		"an alias": {
-			document:     `{"openbindings":"0.2.0","name":5,"operations":{"op":{"aliases":[` + list + `]}}}`,
-			inconclusive: "/operations/op/aliases",
-			violated:     []string{"/name"},
+			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{"aliases":[` + list + `]}}}`,
+			violated: []string{"/name", "/operations/op/aliases/21"},
+		},
+		"aliases equal only as numbers": {
+			document: `{"openbindings":"0.2.0","operations":{"op":{"aliases":["a",1e99999,10e99998]}}}`,
+			violated: []string{"/operations/op/aliases", "/operations/op/aliases/1", "/operations/op/aliases/2"},
 		},
 		"a bindingSpecs item": {
-			document:     `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"dependencies":{"d":{"operation":"op","bindingSpecs":[` + list + `]}}}`,
-			inconclusive: "/dependencies/d/bindingSpecs",
-			violated:     []string{"/name"},
+			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"dependencies":{"d":{"operation":"op","bindingSpecs":[` + list + `]}}}`,
+			violated: []string{"/dependencies/d/bindingSpecs/21", "/name"},
+		},
+		"an empty bindingSpecs item beside one": {
+			document: `{"openbindings":"0.2.0","operations":{"op":{}},"dependencies":{"d":{"operation":"op","bindingSpecs":["",1e99999]}}}`,
+			violated: []string{"/dependencies/d/bindingSpecs/0", "/dependencies/d/bindingSpecs/1"},
 		},
 		"a preference out of range": {
 			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
@@ -732,21 +750,18 @@ func TestValidateDocument_NumericMembersBeyondTheLimits(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, report, _ := ValidateDocument([]byte(tc.document), ValidateOptions{})
-			var inconclusive string
 			var violated []string
 			for _, finding := range report.Findings {
-				if finding.Rule != "OBI-D-02" {
-					continue
-				}
-				if finding.Status == EvidenceInconclusive {
-					inconclusive = finding.Path
-				} else {
+				if finding.Rule == "OBI-D-02" {
+					if finding.Status != EvidenceViolated {
+						t.Errorf("OBI-D-02 %s at %q: %s", finding.Status, finding.Path, finding.Message)
+					}
 					violated = append(violated, finding.Path)
 				}
 			}
 			slices.Sort(violated)
-			if inconclusive != tc.inconclusive || !slices.Equal(violated, tc.violated) {
-				t.Fatalf("OBI-D-02 inconclusive at %q, violated at %v", inconclusive, violated)
+			if !slices.Equal(violated, tc.violated) {
+				t.Fatalf("OBI-D-02 violated at %v", violated)
 			}
 			if _, err := ParseDocument([]byte(tc.document)); !errors.As(err, new(*ValidationError)) {
 				t.Fatalf("ParseDocument: want the violation, got %v", err)
@@ -866,13 +881,34 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 	}
 }
 
-// A schema nested deeper than the meta-schema validator checks quickly meets
-// a resource limit: OBI-D-17 is inconclusive there, not decided (§10.5).
+// A subschema nested deeper than the meta-schema validator checks quickly
+// meets a resource limit: OBI-D-17 is inconclusive there, not decided
+// (§10.5). What the schema holds above it is still checked.
 func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
-	nested := strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300)
-	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+nested+`}}`), ValidateOptions{})
-	if report.Evidence["OBI-D-17"] != EvidenceInconclusive || !strings.Contains(fmt.Sprint(report.Findings), "nests subschemas deeper than 256") {
-		t.Fatalf("OBI-D-17 %q, findings %v", report.Evidence["OBI-D-17"], report.Findings)
+	nested := strings.Repeat(`{"not":`, 300) + `{"type":42}` + strings.Repeat(`}`, 300)
+	cut := "/schemas/A" + strings.Repeat("/not", 257)
+	for _, tc := range []struct {
+		schema   string
+		evidence RuleEvidenceStatus
+		violated []string
+	}{
+		{schema: nested, evidence: EvidenceInconclusive},
+		{schema: `{"type":42,"not":` + nested + `}`, evidence: EvidenceViolated, violated: []string{"/schemas/A/type"}},
+	} {
+		_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+tc.schema+`}}`), ValidateOptions{})
+		var inconclusive, violated []string
+		for _, finding := range report.Findings {
+			switch {
+			case finding.Rule != "OBI-D-17":
+			case finding.Status == EvidenceViolated:
+				violated = append(violated, finding.Path)
+			default:
+				inconclusive = append(inconclusive, finding.Path)
+			}
+		}
+		if report.Evidence["OBI-D-17"] != tc.evidence || !slices.Equal(violated, tc.violated) || !slices.Equal(inconclusive, []string{cut}) {
+			t.Fatalf("OBI-D-17 %q, violated at %v, inconclusive at %v", report.Evidence["OBI-D-17"], violated, inconclusive)
+		}
 	}
 }
 

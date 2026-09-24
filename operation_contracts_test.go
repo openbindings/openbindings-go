@@ -1,10 +1,10 @@
 package openbindings
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -218,11 +218,12 @@ func TestKeywordTables(t *testing.T) {
 	}
 }
 
-// numericMembers is every member the document schema does numeric work on:
-// a numeric keyword or type, uniqueItems (which compares items as numbers
-// when they are), or a const or enum holding a number. This test fails if a
-// schema update adds another, and the preference range is §5.3's.
-func TestDocumentSchema_NumericWorkIsOnNumericMembers(t *testing.T) {
+// The document schema tells numbers apart only by type and equality, which
+// a stand-in for a number beyond the numeric limits of schema evaluation
+// keeps (validateAgainstOBISchema), except at a binding's preference, which
+// validation decides exactly. This test fails if a schema update compares
+// numbers anywhere else, and the preference range is §5.3's.
+func TestDocumentSchema_ComparesNumbersOnlyAtAPreference(t *testing.T) {
 	var schema any
 	if err := json.Unmarshal(openbindingsSchemaJSON, &schema); err != nil {
 		t.Fatal(err)
@@ -250,13 +251,8 @@ func TestDocumentSchema_NumericWorkIsOnNumericMembers(t *testing.T) {
 		case map[string]any:
 			for key, value := range node {
 				switch key {
-				case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "uniqueItems":
+				case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
 					found[path] = true
-				case "type":
-					types, _ := value.([]any)
-					if value == "integer" || value == "number" || slices.Contains(types, any("integer")) || slices.Contains(types, any("number")) {
-						found[path] = true
-					}
 				case "const", "enum":
 					if holdsNumber(value) {
 						found[path] = true
@@ -271,22 +267,8 @@ func TestDocumentSchema_NumericWorkIsOnNumericMembers(t *testing.T) {
 		}
 	}
 	walk(schema, "")
-	members := map[string]string{
-		"/$defs/BindingEntry/properties/preference":      "bindings/*/preference",
-		"/$defs/Operation/properties/aliases":            "operations/*/aliases",
-		"/$defs/DependencyEntry/properties/bindingSpecs": "dependencies/*/bindingSpecs",
-	}
-	var want, got []string
-	for path := range found {
-		want = append(want, cmp.Or(members[path], "unlisted: "+path))
-	}
-	for _, member := range numericMembers {
-		got = append(got, strings.Join(member, "/"))
-	}
-	slices.Sort(want)
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		t.Fatalf("numericMembers %v, the document schema does numeric work on %v", got, want)
+	if got := slices.Sorted(maps.Keys(found)); !slices.Equal(got, []string{"/$defs/BindingEntry/properties/preference"}) {
+		t.Fatalf("the document schema compares numbers at %v", got)
 	}
 	preference, _ := jsonpointer.Resolve(schema, "/$defs/BindingEntry/properties/preference")
 	bounds := preference.(map[string]any)

@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -62,15 +63,18 @@ type copyGraph struct {
 	id     map[string]int
 	copies []copyNode
 	// closure holds, per copy, the first problem in sorted order among the
-	// copies reachable from it, its own included.
-	closure []string
+	// copies reachable from it, its own included; comparison the first place
+	// among them where a schema compares numbers (see numberComparison).
+	closure    []string
+	comparison []string
 }
 
 type copyNode struct {
-	location string
-	to       []string
-	edges    []int
-	problem  string
+	location   string
+	to         []string
+	edges      []int
+	problem    string
+	comparison string
 }
 
 // analyze builds the graph of the copies the analyzed schemas need.
@@ -88,6 +92,7 @@ func (c *copyGraph) analyze(o *operationSchemas) {
 		}
 		node := copyNode{location: at, problem: o.copyProblem(at)}
 		if o.limitProblem(at) == "" {
+			node.comparison = numberComparison(mustResolve(o.view, at), at)
 			// A copy meeting a resource limit is never bundled, so what it
 			// references is not needed, and reading it would do the work the
 			// limit refuses.
@@ -107,10 +112,14 @@ func (c *copyGraph) analyze(o *operationSchemas) {
 		}
 	}
 	component, count := components(len(c.copies), func(i int) []int { return c.copies[i].edges })
-	gathered := gather(component, count, func(i int) []int { return c.copies[i].edges }, func(i int) string { return c.copies[i].problem })
+	successors := func(i int) []int { return c.copies[i].edges }
+	problems := gather(component, count, successors, func(i int) string { return c.copies[i].problem })
+	comparisons := gather(component, count, successors, func(i int) string { return c.copies[i].comparison })
 	c.closure = make([]string, len(c.copies))
+	c.comparison = make([]string, len(c.copies))
 	for i := range c.copies {
-		c.closure[i] = gathered[component[i]]
+		c.closure[i] = problems[component[i]]
+		c.comparison[i] = comparisons[component[i]]
 	}
 }
 
@@ -175,9 +184,7 @@ func forEachReference(value any, at string, fn func(holder, keyword, ref string)
 }
 
 // copyProblem states why a copied schema cannot be handed to the schema
-// library, or returns "": a number beyond the numeric limits of schema
-// evaluation or nesting past schemaDepthLimit, which the library crashes or
-// stalls on (§10.5); a dialect or vocabulary §5.2 excludes; a pattern Go's
+// library, or returns "": a resource limit it meets (limitProblem); a dialect or vocabulary §5.2 excludes; a pattern Go's
 // regexp cannot compile, which cannot be evaluated (the SDK's compilers accept
 // every pattern, so format "regex" never asserts, and leave this check to
 // core); a resource whose
@@ -193,11 +200,9 @@ func (o *operationSchemas) copyProblem(at string) string {
 	// The library checks what it is given against the meta-schema, but it is
 	// given the copy without the keywords strict 2020-12 drops; the document
 	// holds them, and they too must be well-formed.
-	if verr := compiledMetaSchema.Validate(value); verr != nil {
-		problems, mismatch := schemacompiler.Outcome(verr)
-		if !mismatch || len(problems) == 0 {
-			return fmt.Sprintf("the schema at %s could not be checked against the 2020-12 meta-schemas: %v", at, verr)
-		}
+	if problems, err := checkAgainstMetaSchema(value); err != nil {
+		return fmt.Sprintf("the schema at %s could not be checked against the 2020-12 meta-schemas: %v", at, err)
+	} else if len(problems) > 0 {
 		return fmt.Sprintf("the schema at %s is not a well-formed JSON Schema 2020-12 schema: %s: %s", at, at+jsonpointer.Format(problems[0].Location...), problems[0].Message)
 	}
 	var problems []string
@@ -253,8 +258,10 @@ func (o *operationSchemas) copyProblem(at string) string {
 }
 
 // limitProblem states a resource limit a copied schema meets, or returns "":
-// a number beyond the numeric limits of schema evaluation, or nesting past
-// schemaDepthLimit, which the library crashes or stalls on (§10.5). It is
+// nesting past schemaDepthLimit, or a number the schema library reads beyond
+// the numeric limits of schema evaluation, which the library crashes or
+// stalls on (§10.5). The library reads a number that is a keyword's value, or
+// in const or enum; one elsewhere, as in default, is only carried. It is
 // found once per copy, before the graph is walked into it, so the walk never
 // does work that grows with a depth the limit refuses.
 func (o *operationSchemas) limitProblem(at string) string {
@@ -263,13 +270,103 @@ func (o *operationSchemas) limitProblem(at string) string {
 	}
 	value := mustResolve(o.view, at)
 	problem := ""
-	if where, err := schemacompiler.NumericLimit(value); err != nil {
-		problem = fmt.Sprintf("the schema graph holds, at %s, %v", at+where, err)
-	} else if schemaDepth(value) > schemaDepthLimit {
+	if schemaDepth(value) > schemaDepthLimit {
 		problem = fmt.Sprintf("the schema graph nests subschemas deeper than %d levels at %s", schemaDepthLimit, at)
+	} else if where, err := numberRead(value); err != nil {
+		problem = fmt.Sprintf("the schema graph holds, at %s, %v", at+where, err)
 	}
 	o.limits[at] = problem
 	return problem
+}
+
+// comparisonKeywords compare a value's number with the schema's by more than
+// equality; countKeywords bound a count. The schema library reads the value
+// of each as a number.
+var (
+	comparisonKeywords = map[string]bool{"minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true, "multipleOf": true}
+	countKeywords      = map[string]bool{"maxLength": true, "minLength": true, "maxItems": true, "minItems": true, "maxContains": true, "minContains": true, "maxProperties": true, "minProperties": true}
+)
+
+// numberRead returns where, in a schema, the first number the schema library
+// reads lies beyond the numeric limits of schema evaluation, with the limits'
+// error, or a nil error when none does: the value of a comparison or count
+// keyword, or a number in const or enum, which the library compares with a
+// value's.
+func numberRead(schema any) (string, error) {
+	var location string
+	var err error
+	walkSchemaObjects(schema, func(object map[string]any, path []string) bool {
+		for _, keyword := range sortedKeys(object) {
+			if !comparisonKeywords[keyword] && !countKeywords[keyword] && keyword != "const" && keyword != "enum" {
+				continue
+			}
+			if where, limit := schemacompiler.NumericLimit(object[keyword]); limit != nil {
+				location, err = jsonpointer.Format(append(slices.Clip(path), keyword)...)+where, limit
+				return false
+			}
+		}
+		return true
+	})
+	return location, err
+}
+
+// numberComparison states the first place in a schema, at location at, that
+// tells numbers apart by more than type and equality, or returns "": a
+// comparison keyword, or a const or enum holding a number. Only where there
+// is none is a value's stand-in (schemacompiler.Substitute) validated as the
+// number it stands for would be.
+func numberComparison(schema any, at string) string {
+	found := ""
+	walkSchemaObjects(schema, func(object map[string]any, path []string) bool {
+		for _, keyword := range sortedKeys(object) {
+			if comparisonKeywords[keyword] || (keyword == "const" || keyword == "enum") && holdsNumber(object[keyword]) {
+				found = fmt.Sprintf("the schema at %s compares numbers with %s", at+jsonpointer.Format(path...), keyword)
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// walkSchemaObjects calls fn for a schema object and each subschema object
+// the 2020-12 meta-schema describes within it, in sorted order, with the
+// reference tokens that reach it, until fn returns false.
+func walkSchemaObjects(schema any, fn func(object map[string]any, path []string) bool) {
+	var path []string
+	more := true
+	var walk func(node any)
+	walk = func(node any) {
+		object, ok := node.(map[string]any)
+		if !ok || !more {
+			return
+		}
+		if more = fn(object, path); !more {
+			return
+		}
+		forEachDescribedSubschema(object, func(child any, tokens ...string) {
+			path = append(path, tokens...)
+			walk(child)
+			path = path[:len(path)-len(tokens)]
+		})
+	}
+	walk(schema)
+}
+
+func holdsNumber(value any) bool {
+	switch value := value.(type) {
+	case json.Number:
+		return true
+	case []any:
+		return slices.ContainsFunc(value, holdsNumber)
+	case map[string]any:
+		for _, member := range value {
+			if holdsNumber(member) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func asObject(value any) map[string]any {
@@ -440,7 +537,7 @@ func (o *operationSchemas) compile(starts []string) map[string]compiled {
 		if sharedErr == nil {
 			if address, ok := shared.address(start); ok {
 				if schema, err := c.Compile(address); err == nil {
-					out[start] = compiled{schema: &CompiledSchema{backend: schema}}
+					out[start] = compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
 					continue
 				}
 			}
@@ -466,7 +563,18 @@ func (o *operationSchemas) compileAlone(start string) compiled {
 	if err != nil {
 		return compiled{err: own.describe(err)}
 	}
-	return compiled{schema: &CompiledSchema{backend: schema}}
+	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
+}
+
+// comparison states where the schema graph from start tells numbers apart by
+// more than type and equality, or returns "": a value's stand-ins
+// (schemacompiler.Substitute) are then validated as the numbers they stand
+// for would be.
+func (o *operationSchemas) comparison(start string) string {
+	if meta := o.facts(start).metaSchema; meta != "" {
+		return "the schema graph reaches the meta-schema " + meta
+	}
+	return o.copies.comparison[o.copies.id[copiedAt(start)]]
 }
 
 // describe restates an error the schema library reports for a bundle in the
