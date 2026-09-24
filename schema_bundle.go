@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -53,17 +54,22 @@ func copiedAt(location string) string {
 	return location
 }
 
-// copyGraph is the graph of what the bundle copies: where each schema the
-// operation schemas reach is copied (copiedAt), and, as a bundler would, where
-// each schema any reference in a copy names is copied, reached or not. The
-// library compiles a whole resource whenever any part of it is used, so it
-// must find everything the resource references. A problem in one copy is a
-// problem of every copy reaching it.
+// copyGraph is the graph of what the schema library compiles from the bundle,
+// by root: where it compiles a schema from (rootOf). A root is a copy
+// (copiedAt), or a location in one that a reference names and the copy's
+// keywords do not reach, such as a schema held in an annotation; the schemas
+// a root holds are what its keywords reach, and everything else in it is data
+// the library only carries. As a bundler would, the graph follows every
+// reference those schemas hold, reached by the operation schemas or not, since
+// the library compiles a whole resource whenever any part of it is used, and
+// must find everything the resource references. A root within a copy leads to
+// the copy too, which the bundle must hold. A problem of one root is a problem
+// of every root reaching it.
 type copyGraph struct {
-	id     map[string]int
-	copies []copyNode
-	// closure holds, per copy, the first problem in sorted order among the
-	// copies reachable from it, its own included; comparison the first place
+	id    map[string]int
+	nodes []copyNode
+	// closure holds, per root, the first problem in sorted order among the
+	// roots reachable from it, its own included; comparison the first place
 	// among them where a schema compares numbers (see numberComparison).
 	closure    []string
 	comparison []string
@@ -77,72 +83,76 @@ type copyNode struct {
 	comparison string
 }
 
-// analyze builds the graph of the copies the analyzed schemas need.
+// analyze builds the graph of the roots the analyzed schemas need.
 func (c *copyGraph) analyze(o *operationSchemas) {
 	*c = copyGraph{id: map[string]int{}}
 	var queue []string
 	for _, node := range o.graph.nodes {
-		queue = append(queue, copiedAt(node.location))
+		queue = append(queue, node.root)
 	}
 	for len(queue) > 0 {
-		at := queue[0]
+		root := queue[0]
 		queue = queue[1:]
-		if _, seen := c.id[at]; seen {
+		if _, seen := c.id[root]; seen {
 			continue
 		}
-		node := copyNode{location: at, problem: o.copyProblem(at)}
-		if o.limitProblem(at) == "" {
-			node.comparison = numberComparison(mustResolve(o.view, at), at)
-			// A copy meeting a resource limit is never bundled, so what it
+		node := copyNode{location: root, problem: o.rootProblem(root)}
+		if copy := copiedAt(root); copy != root {
+			node.to = append(node.to, copy)
+		}
+		if o.limitProblem(root) == "" {
+			// A root meeting a resource limit is never compiled, so what it
 			// references is not needed, and reading it would do the work the
 			// limit refuses.
-			forEachReference(mustResolve(o.view, at), at, func(holder, _, ref string) {
+			value := mustResolve(o.view, root)
+			node.comparison = numberComparison(value, root)
+			forEachSchemaReference(value, root, func(holder, ref string) {
 				if target := o.schemas.resolve(ref, holder, o.view); target.origin == inDocument {
-					node.to = append(node.to, copiedAt(target.location))
+					node.to = append(node.to, rootOf(target.location))
 				}
 			})
 		}
-		c.id[at] = len(c.copies)
-		c.copies = append(c.copies, node)
+		c.id[root] = len(c.nodes)
+		c.nodes = append(c.nodes, node)
 		queue = append(queue, node.to...)
 	}
-	for i := range c.copies {
-		for _, at := range c.copies[i].to {
-			c.copies[i].edges = append(c.copies[i].edges, c.id[at])
+	for i := range c.nodes {
+		for _, at := range c.nodes[i].to {
+			c.nodes[i].edges = append(c.nodes[i].edges, c.id[at])
 		}
 	}
-	component, count := components(len(c.copies), func(i int) []int { return c.copies[i].edges })
-	successors := func(i int) []int { return c.copies[i].edges }
-	problems := gather(component, count, successors, func(i int) string { return c.copies[i].problem })
-	comparisons := gather(component, count, successors, func(i int) string { return c.copies[i].comparison })
-	c.closure = make([]string, len(c.copies))
-	c.comparison = make([]string, len(c.copies))
-	for i := range c.copies {
+	successors := func(i int) []int { return c.nodes[i].edges }
+	component, count := components(len(c.nodes), successors)
+	problems := gather(component, count, successors, func(i int) string { return c.nodes[i].problem })
+	comparisons := gather(component, count, successors, func(i int) string { return c.nodes[i].comparison })
+	c.closure = make([]string, len(c.nodes))
+	c.comparison = make([]string, len(c.nodes))
+	for i := range c.nodes {
 		c.closure[i] = problems[component[i]]
 		c.comparison[i] = comparisons[component[i]]
 	}
 }
 
-// problemOf returns the first problem among the copies a copy reaches.
-func (c *copyGraph) problemOf(at string) string {
-	return c.closure[c.id[at]]
+// problemOf returns the first problem among the roots a root reaches.
+func (c *copyGraph) problemOf(root string) string {
+	return c.closure[c.id[root]]
 }
 
-// from returns the copies reachable from those at the given locations.
-func (c *copyGraph) from(locations []string) map[string]bool {
+// copiesFrom returns the copies holding the roots reachable from a root.
+func (c *copyGraph) copiesFrom(root string) map[string]bool {
 	out := map[string]bool{}
-	var queue []int
-	for _, at := range locations {
-		queue = append(queue, c.id[at])
-	}
+	seen := map[int]bool{c.id[root]: true}
+	queue := []int{c.id[root]}
 	for len(queue) > 0 {
 		i := queue[0]
 		queue = queue[1:]
-		if out[c.copies[i].location] {
-			continue
+		out[copiedAt(c.nodes[i].location)] = true
+		for _, next := range c.nodes[i].edges {
+			if !seen[next] {
+				seen[next] = true
+				queue = append(queue, next)
+			}
 		}
-		out[c.copies[i].location] = true
-		queue = append(queue, c.copies[i].edges...)
 	}
 	return out
 }
@@ -159,64 +169,52 @@ func outermost(set map[string]bool) []string {
 	return out
 }
 
-// forEachReference calls fn for every $ref and $dynamicRef string within a
-// value, with the location of the object holding it. The values of const and
-// enum are data compared as a whole, never schemas, and are skipped.
-func forEachReference(value any, at string, fn func(holder, keyword, ref string)) {
-	switch value := value.(type) {
-	case map[string]any:
-		for _, key := range sortedKeys(value) {
-			switch member := value[key]; {
-			case key == "const" || key == "enum":
-			case key == "$ref" || key == "$dynamicRef":
-				if ref, ok := member.(string); ok {
-					fn(at, key, ref)
-				}
-			default:
-				forEachReference(member, at+jsonpointer.Format(key), fn)
+// forEachSchemaReference calls fn for every $ref and $dynamicRef the schemas
+// of a root hold, with the location of the schema holding it. A member
+// that is not a schema is data, whatever it holds.
+func forEachSchemaReference(root any, at string, fn func(holder, ref string)) {
+	walkSchemaObjects(root, func(object map[string]any, path []string) bool {
+		for _, keyword := range []string{"$ref", "$dynamicRef"} {
+			if ref, ok := object[keyword].(string); ok {
+				fn(at+jsonpointer.Format(path...), ref)
 			}
 		}
-	case []any:
-		for i, item := range value {
-			forEachReference(item, at+jsonpointer.Format(fmt.Sprint(i)), fn)
-		}
-	}
+		return true
+	})
 }
 
-// copyProblem states why a copied schema cannot be handed to the schema
-// library, or returns "": a resource limit it meets (limitProblem); a dialect or vocabulary §5.2 excludes; a pattern Go's
-// regexp cannot compile, which cannot be evaluated (the SDK's compilers accept
-// every pattern, so format "regex" never asserts, and leave this check to
-// core); a resource whose
-// base has no hierarchical path (urn:x:y) holding a relative reference, which
-// the library resolves differently from RFC 3986; or, for a schema copied from
-// outside the schema positions, an identity keyword, which only a schema
-// position declares (§7).
-func (o *operationSchemas) copyProblem(at string) string {
+// rootProblem states why the schema library cannot be given what a root
+// holds, or returns "": a resource limit it meets (limitProblem); a schema
+// that is not well-formed; a dialect or vocabulary §5.2 excludes; a pattern
+// Go's regexp cannot compile, which cannot be evaluated (the SDK's compilers
+// accept every pattern, so format "regex" never asserts, and leave this
+// check to core); a resource whose base has no hierarchical path (urn:x:y)
+// holding a relative reference, which the library resolves differently from
+// RFC 3986; or, for a root outside the schema positions, an identity keyword,
+// which only a schema position declares (§7).
+func (o *operationSchemas) rootProblem(at string) string {
 	if problem := o.limitProblem(at); problem != "" {
 		return problem
 	}
 	value := mustResolve(o.view, at)
 	// The library checks what it is given against the meta-schema, but it is
-	// given the copy without the keywords strict 2020-12 drops; the document
-	// holds them, and they too must be well-formed.
+	// given each copy without the keywords strict 2020-12 drops, and a root
+	// in an annotation as the annotation's data; the document holds them as
+	// schemas, and they too must be well-formed.
 	if problems, err := checkAgainstMetaSchema(value); err != nil {
 		return fmt.Sprintf("the schema at %s could not be checked against the 2020-12 meta-schemas: %v", at, err)
 	} else if len(problems) > 0 {
 		return fmt.Sprintf("the schema at %s is not a well-formed JSON Schema 2020-12 schema: %s: %s", at, at+jsonpointer.Format(problems[0].Location...), problems[0].Message)
 	}
 	var problems []string
-	var walk func(node any, location string)
-	walk = func(node any, location string) {
-		object, ok := node.(map[string]any)
-		if !ok {
-			return
-		}
+	atPosition := atSchemaPosition(at)
+	walkSchemaObjects(value, func(object map[string]any, path []string) bool {
+		location := func() string { return at + jsonpointer.Format(path...) }
 		if dialect, present := object["$schema"]; present && dialect != draft202012URI {
-			problems = append(problems, fmt.Sprintf("the schema at %s declares $schema %s, not %s", location, describeJSON(dialect), draft202012URI))
+			problems = append(problems, fmt.Sprintf("the schema at %s declares $schema %s, not %s", location(), describeJSON(dialect), draft202012URI))
 		}
 		if _, present := object["$vocabulary"]; present {
-			problems = append(problems, fmt.Sprintf("the schema at %s declares $vocabulary", location))
+			problems = append(problems, fmt.Sprintf("the schema at %s declares $vocabulary", location()))
 		}
 		patterns := sortedKeys(asObject(object["patternProperties"]))
 		if pattern, ok := object["pattern"].(string); ok {
@@ -224,32 +222,26 @@ func (o *operationSchemas) copyProblem(at string) string {
 		}
 		for _, pattern := range patterns {
 			if _, err := regexp.Compile(pattern); err != nil {
-				problems = append(problems, fmt.Sprintf("the pattern %q at %s cannot be evaluated: Go's regexp does not support it (%v)", pattern, location, err))
+				problems = append(problems, fmt.Sprintf("the pattern %q at %s cannot be evaluated: Go's regexp does not support it (%v)", pattern, location(), err))
 			}
 		}
-		forEachDescribedSubschema(object, func(child any, tokens ...string) {
-			walk(child, location+jsonpointer.Format(tokens...))
-		})
+		if keyword := identityKeyword(object); keyword != "" && !atPosition {
+			problems = append(problems, fmt.Sprintf("the schema at %s is not at a schema position, and it declares %s, which only a schema position declares; define it in schemas to use it", location(), keyword))
+		}
+		return true
+	})
+	resources := o.resourcesIn[at]
+	if resource := o.schemas.resourceAt(at); resource != nil && resource.location != at {
+		// A root within a resource resolves its references against it.
+		resources = append(slices.Clip(resources), &schemaResource{location: at, uri: resource.uri, schema: asObject(value)})
 	}
-	walk(value, at)
-	for _, resource := range o.resourcesIn[at] {
-		if !covers(at, resource.location) || resource.uri == nil {
+	for _, resource := range resources {
+		if resource.uri == nil || resource.uri.Opaque == "" {
 			continue
 		}
-		location := resource.location
-		if resource.uri.Opaque == "" {
-			continue
+		if relative := relativeReference(resource.schema, resource.location); relative != "" {
+			problems = append(problems, fmt.Sprintf("the schema at %s declares %s, whose path is not hierarchical, and holds the relative reference %s, which the schema library resolves differently from RFC 3986", resource.location, resource.uri, relative))
 		}
-		if relative := relativeReference(resource.schema, location); relative != "" {
-			problems = append(problems, fmt.Sprintf("the schema at %s declares %s, whose path is not hierarchical, and holds the relative reference %s, which the schema library resolves differently from RFC 3986", location, resource.uri, relative))
-		}
-	}
-	if !atSchemaPosition(at) {
-		forEachObject(value, at, func(object map[string]any, location string) {
-			if keyword := identityKeyword(object); keyword != "" {
-				problems = append(problems, fmt.Sprintf("the schema at %s is not at a schema position, and it declares %s, which only a schema position declares; define it in schemas to use it", location, keyword))
-			}
-		})
 	}
 	if len(problems) == 0 {
 		return ""
@@ -257,12 +249,12 @@ func (o *operationSchemas) copyProblem(at string) string {
 	return slices.Min(problems)
 }
 
-// limitProblem states a resource limit a copied schema meets, or returns "":
+// limitProblem states a resource limit a root meets, or returns "":
 // nesting past schemaDepthLimit, or a number the schema library reads beyond
 // the numeric limits of schema evaluation, which the library crashes or
 // stalls on (§10.5). The library reads a number that is a keyword's value, or
 // in const or enum; one elsewhere, as in default, is only carried. It is
-// found once per copy, before the graph is walked into it, so the walk never
+// found once per root, before the graph is walked into it, so the walk never
 // does work that grows with a depth the limit refuses.
 func (o *operationSchemas) limitProblem(at string) string {
 	if problem, found := o.limits[at]; found {
@@ -374,13 +366,13 @@ func asObject(value any) map[string]any {
 	return object
 }
 
-// relativeReference returns the first reference or nested $id within a
-// resource that is relative and not a bare fragment, or "".
+// relativeReference returns the first reference or nested $id the schemas of
+// a resource hold that is relative and not a bare fragment, or "".
 func relativeReference(resource map[string]any, at string) string {
 	var found []string
-	forEachObject(resource, at, func(object map[string]any, location string) {
+	walkSchemaObjects(resource, func(object map[string]any, path []string) bool {
 		for _, keyword := range []string{"$ref", "$dynamicRef", "$id"} {
-			if keyword == "$id" && location == at {
+			if keyword == "$id" && len(path) == 0 {
 				continue
 			}
 			value, ok := object[keyword].(string)
@@ -388,32 +380,15 @@ func relativeReference(resource map[string]any, at string) string {
 				continue
 			}
 			if parsed, err := url.Parse(value); err == nil && !parsed.IsAbs() {
-				found = append(found, fmt.Sprintf("%q at %s", value, location))
+				found = append(found, fmt.Sprintf("%q at %s", value, at+jsonpointer.Format(path...)))
 			}
 		}
+		return true
 	})
 	if len(found) == 0 {
 		return ""
 	}
 	return slices.Min(found)
-}
-
-// forEachObject calls fn for every object within a value, the value included,
-// with its location, skipping the values of const and enum.
-func forEachObject(value any, at string, fn func(object map[string]any, location string)) {
-	switch value := value.(type) {
-	case map[string]any:
-		fn(value, at)
-		for _, key := range sortedKeys(value) {
-			if key != "const" && key != "enum" {
-				forEachObject(value[key], at+jsonpointer.Format(key), fn)
-			}
-		}
-	case []any:
-		for i, item := range value {
-			forEachObject(item, at+jsonpointer.Format(fmt.Sprint(i)), fn)
-		}
-	}
 }
 
 // schemaBundle is a bundle and the locations copied into it.
@@ -430,7 +405,7 @@ func (o *operationSchemas) bundle(copied []string) schemaBundle {
 	}
 	defs := make(map[string]any, len(copied))
 	for _, at := range copied {
-		defs[at] = o.copySchema(mustResolve(o.view, at), at, false, b)
+		defs[at] = o.copySchema(mustResolve(o.view, at), false, false, b)
 	}
 	b.document = map[string]any{"$schema": draft202012URI, "$id": bundleURI, "$defs": defs}
 	return b
@@ -438,47 +413,48 @@ func (o *operationSchemas) bundle(copied []string) schemaBundle {
 
 // copySchema copies a value within a copied schema. names is true for the
 // object a keyword like properties holds, whose members are names, not
-// keywords.
-func (o *operationSchemas) copySchema(value any, at string, names bool, b schemaBundle) any {
+// keywords; inResource for a value within a schema resource, whose
+// references the library resolves by its $id.
+func (o *operationSchemas) copySchema(value any, names, inResource bool, b schemaBundle) any {
 	switch value := value.(type) {
 	case map[string]any:
+		inResource = inResource || o.resourceObjects[objectID(value)]
 		out := make(map[string]any, len(value))
 		for key, member := range value {
-			location := at + jsonpointer.Format(key)
 			switch {
 			case names:
-				out[key] = o.copySchema(member, location, false, b)
+				out[key] = o.copySchema(member, false, inResource, b)
 			case strictlyExcluded[key]:
 			case key == "const" || key == "enum":
 				out[key] = member
 			case key == "$ref" || key == "$dynamicRef":
-				out[key] = o.rewrite(member, at, b)
+				out[key] = o.rewrite(member, inResource, b)
 			case schemaMapKeywords[key] || describedMapKeywords[key]:
-				out[key] = o.copySchema(member, location, true, b)
+				out[key] = o.copySchema(member, true, inResource, b)
 			default:
-				out[key] = o.copySchema(member, location, false, b)
+				out[key] = o.copySchema(member, false, inResource, b)
 			}
 		}
 		return out
 	case []any:
 		out := make([]any, len(value))
 		for i, item := range value {
-			out[i] = o.copySchema(item, at+jsonpointer.Format(fmt.Sprint(i)), false, b)
+			out[i] = o.copySchema(item, false, inResource, b)
 		}
 		return out
 	}
 	return value
 }
 
-// rewrite returns a reference held at a location as the bundle holds it: a
-// same-document reference in the document resource points into the bundle,
-// and any other is left as written.
-func (o *operationSchemas) rewrite(member any, holder string, b schemaBundle) any {
+// rewrite returns a reference as the bundle holds it: a same-document
+// reference outside every schema resource, which §7 reads from the document
+// root, points into the bundle, and any other is left as written.
+func (o *operationSchemas) rewrite(member any, inResource bool, b schemaBundle) any {
 	ref, ok := member.(string)
-	if !ok || !strings.HasPrefix(ref, "#") || o.schemas.resourceAt(holder) != nil {
+	if !ok || !strings.HasPrefix(ref, "#") || inResource {
 		return member
 	}
-	target := o.schemas.resolve(ref, holder, o.view)
+	target := o.schemas.resolve(ref, "", o.view)
 	if target.origin != inDocument {
 		return member
 	}
@@ -486,6 +462,12 @@ func (o *operationSchemas) rewrite(member any, holder string, b schemaBundle) an
 		return address
 	}
 	return member
+}
+
+// objectID identifies an object of the generic view by its map, which
+// decoding never shares between locations.
+func objectID(object map[string]any) uintptr {
+	return reflect.ValueOf(object).Pointer()
 }
 
 // address returns the URI at which the bundle holds a document location: in
@@ -525,8 +507,8 @@ type compiled struct {
 func (o *operationSchemas) compile(starts []string) map[string]compiled {
 	out := map[string]compiled{}
 	fit := map[string]bool{}
-	for i, node := range o.copies.copies {
-		if o.copies.closure[i] == "" {
+	for i, node := range o.copies.nodes {
+		if o.copies.closure[i] == "" && copiedAt(node.location) == node.location {
 			fit[node.location] = true
 		}
 	}
@@ -547,13 +529,10 @@ func (o *operationSchemas) compile(starts []string) map[string]compiled {
 	return out
 }
 
-// compileAlone compiles the schema at start from a bundle of its own graph.
+// compileAlone compiles the schema at start from a bundle of the copies its
+// root reaches.
 func (o *operationSchemas) compileAlone(start string) compiled {
-	var reached []string
-	for _, at := range o.graph.reachedFrom(start) {
-		reached = append(reached, copiedAt(at))
-	}
-	own := o.bundle(outermost(o.copies.from(reached)))
+	own := o.bundle(outermost(o.copies.copiesFrom(rootOf(start))))
 	c := schemacompiler.New()
 	if err := c.AddResource(bundleURI, own.document); err != nil {
 		return compiled{err: own.describe(err)}
@@ -566,15 +545,16 @@ func (o *operationSchemas) compileAlone(start string) compiled {
 	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
 }
 
-// comparison states where the schema graph from start tells numbers apart by
-// more than type and equality, or returns "": a value's stand-ins
-// (schemacompiler.Substitute) are then validated as the numbers they stand
-// for would be.
+// comparison states where what the library compiles for start compares a
+// number by order or divisibility or holds one in const or enum, or where
+// the schema graph reaches a meta-schema, which core does not examine; or it
+// returns "". Only where there is none is a value's stand-in
+// (schemacompiler.Substitute) validated as the number it stands for would be.
 func (o *operationSchemas) comparison(start string) string {
 	if meta := o.facts(start).metaSchema; meta != "" {
 		return "the schema graph reaches the meta-schema " + meta
 	}
-	return o.copies.comparison[o.copies.id[copiedAt(start)]]
+	return o.copies.comparison[o.copies.id[rootOf(start)]]
 }
 
 // describe restates an error the schema library reports for a bundle in the

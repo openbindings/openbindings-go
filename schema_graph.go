@@ -22,6 +22,9 @@ const schemaDepthLimit = 256
 type operationSchemas struct {
 	view    any
 	schemas documentSchemas
+	// resourceObjects holds the objects that declare the document's
+	// resources (objectID).
+	resourceObjects map[uintptr]bool
 	// resourcesIn holds the resources each OBI schema position holds, and
 	// limits the resource limit each copy meets, once found.
 	resourcesIn map[string][]*schemaResource
@@ -31,10 +34,11 @@ type operationSchemas struct {
 }
 
 func newOperationSchemas(view any, schemas documentSchemas) *operationSchemas {
-	o := &operationSchemas{view: view, schemas: schemas, resourcesIn: map[string][]*schemaResource{}, limits: map[string]string{}}
+	o := &operationSchemas{view: view, schemas: schemas, resourceObjects: map[uintptr]bool{}, resourcesIn: map[string][]*schemaResource{}, limits: map[string]string{}}
 	for _, location := range slices.Sorted(maps.Keys(schemas.at)) {
 		at := copiedAt(location)
 		o.resourcesIn[at] = append(o.resourcesIn[at], schemas.at[location])
+		o.resourceObjects[objectID(schemas.at[location].schema)] = true
 	}
 	return o
 }
@@ -94,6 +98,9 @@ type schemaGraph struct {
 
 type schemaNode struct {
 	location string
+	// root is where the schema library compiles the schema from (rootOf):
+	// the schema lies at or below it along its keywords.
+	root string
 	// Where the schema leads, by location until the graph is linked:
 	// in place to what applies to the same value, to what applies to property
 	// names, and to what applies to a member or item.
@@ -116,19 +123,30 @@ var inPlaceKeywords = map[string]bool{
 func (o *operationSchemas) analyze(starts []string) {
 	g := &o.graph
 	*g = schemaGraph{id: map[string]int{}}
-	queue := slices.Clone(starts)
+	type schemaAt struct{ location, root string }
+	var queue []schemaAt
+	for _, start := range starts {
+		queue = append(queue, schemaAt{start, rootOf(start)})
+	}
 	for len(queue) > 0 {
-		at := queue[0]
+		next := queue[0]
 		queue = queue[1:]
-		if _, seen := g.id[at]; seen {
+		if _, seen := g.id[next.location]; seen {
 			continue
 		}
-		node := o.examine(at)
-		g.id[at] = len(g.nodes)
+		node := o.examine(next.location, next.root)
+		g.id[node.location] = len(g.nodes)
 		g.nodes = append(g.nodes, node)
-		queue = append(queue, node.inPlaceTo...)
-		queue = append(queue, node.propertyNamesTo...)
-		queue = append(queue, node.advancingTo...)
+		for _, to := range slices.Concat(node.inPlaceTo, node.propertyNamesTo, node.advancingTo) {
+			// A subschema is compiled with the root of the schema holding it;
+			// a reference's target, from its own root, unless the root the
+			// graph is in reaches it too.
+			root := node.root
+			if !reachedByKeywords(root, to) {
+				root = rootOf(to)
+			}
+			queue = append(queue, schemaAt{to, root})
+		}
 	}
 	ids := func(locations []string) []int {
 		out := make([]int, len(locations))
@@ -178,7 +196,7 @@ func (o *operationSchemas) analyze(starts []string) {
 	// (schema_bundle.go).
 	o.copies.analyze(o)
 	for i := range g.nodes {
-		g.nodes[i].local.problem = firstOf(g.nodes[i].local.problem, o.copies.problemOf(copiedAt(g.nodes[i].location)))
+		g.nodes[i].local.problem = firstOf(g.nodes[i].local.problem, o.copies.problemOf(g.nodes[i].root))
 	}
 
 	all, count := components(len(g.nodes), func(i int) []int { return g.nodes[i].edges })
@@ -226,9 +244,10 @@ func (o *operationSchemas) graphProblem(start string) string {
 }
 
 // examine reads one schema's own keywords: where it leads, and what it holds.
-func (o *operationSchemas) examine(at string) schemaNode {
-	node := schemaNode{location: at}
-	if problem := o.limitProblem(copiedAt(at)); problem != "" {
+// root is the root it is compiled from, whose resource limits it meets.
+func (o *operationSchemas) examine(at, root string) schemaNode {
+	node := schemaNode{location: at, root: root}
+	if problem := o.limitProblem(root); problem != "" {
 		node.local.problem = problem
 		return node
 	}
@@ -281,25 +300,6 @@ func (o *operationSchemas) examine(at string) schemaNode {
 		}
 	})
 	return node
-}
-
-// reachedFrom returns every schema reachable from start's, start's included.
-func (g *schemaGraph) reachedFrom(start string) []string {
-	seen := map[int]bool{g.id[start]: true}
-	queue := []int{g.id[start]}
-	var out []string
-	for len(queue) > 0 {
-		i := queue[0]
-		queue = queue[1:]
-		out = append(out, g.nodes[i].location)
-		for _, next := range g.nodes[i].edges {
-			if !seen[next] {
-				seen[next] = true
-				queue = append(queue, next)
-			}
-		}
-	}
-	return out
 }
 
 // components returns the strongly connected component of each of n nodes
@@ -400,9 +400,19 @@ func atSchemaPosition(location string) bool {
 	default:
 		return false
 	}
+	return keywordPath(tokens[i:], false)
+}
+
+// keywordPath reports whether reference tokens lead from a schema to a
+// subschema, each step a keyword holding one schema, or a keyword holding a
+// map or an array of them and then an entry. described admits the entries of
+// definitions and dependencies, which the 2020-12 meta-schema describes but
+// 2020-12 does not evaluate.
+func keywordPath(tokens []string, described bool) bool {
+	i := 0
 	for i < len(tokens) {
 		switch keyword := tokens[i]; {
-		case schemaMapKeywords[keyword], arraySchemaKeywords[keyword]:
+		case schemaMapKeywords[keyword], arraySchemaKeywords[keyword], described && describedMapKeywords[keyword]:
 			i += 2
 		case singleSchemaKeywords[keyword]:
 			i++
@@ -411,6 +421,27 @@ func atSchemaPosition(location string) bool {
 		}
 	}
 	return i == len(tokens)
+}
+
+// reachedByKeywords reports whether a location lies at or below from along
+// the subschema positions the 2020-12 meta-schema describes.
+func reachedByKeywords(from, location string) bool {
+	if !covers(from, location) {
+		return false
+	}
+	tokens, ok := jsonpointer.Parse(location[len(from):])
+	return ok && keywordPath(tokens, true)
+}
+
+// rootOf returns the root the schema library compiles the schema at a
+// location from: the copy holding it (copiedAt), when the copy's keywords
+// reach it, or the location itself, as for a schema a reference names in an
+// annotation, which the library compiles as a schema of its own.
+func rootOf(location string) string {
+	if copy := copiedAt(location); reachedByKeywords(copy, location) {
+		return copy
+	}
+	return location
 }
 
 // identityKeyword returns the first keyword by which a schema object declares

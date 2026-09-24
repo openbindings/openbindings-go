@@ -155,6 +155,81 @@ func TestSchemaGraphEdgeCases(t *testing.T) {
 	}
 }
 
+// A schema a reference names in an annotation is a schema the library
+// compiles on its own, so what it holds is checked as for any schema the
+// library is given; and a reference held in an annotation's data, which no
+// reference names, is data, which leads nowhere.
+func TestSchemasHeldInAnnotations(t *testing.T) {
+	for _, c := range []struct {
+		name, operations string
+		op               string
+		value            any
+		want             string
+		examples         RuleEvidenceStatus
+	}{
+		{"a comparison in a named annotation keeps the stand-in from use",
+			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":100}},"examples":{"e":{"input":1e99999}}}`,
+			"op", json.Number("1e99999"), "unavailable", EvidenceInconclusive},
+		{"a named annotation is evaluated",
+			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":100}},"examples":{"e":{"input":5}}}`,
+			"op", json.Number("5"), "mismatch", EvidenceViolated},
+		{"a reference in an annotation's data leads nowhere",
+			`"op":{"input":{"type":"number","x-note":{"$ref":"#/x-memo"}},"examples":{"e":{"input":"bad"}}}`,
+			"op", "bad", "mismatch", EvidenceViolated},
+		{"a number the library would read in a named annotation meets the limits",
+			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":1e1000000000}},"examples":{"e":{"input":5}}}`,
+			"op", json.Number("5"), "unavailable", EvidenceInconclusive},
+		{"an ill-formed named annotation",
+			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"type":42}},"examples":{"e":{"input":5}}}`,
+			"op", json.Number("5"), "unavailable", EvidenceInconclusive},
+		{"a pattern Go's regexp cannot compile in a named annotation",
+			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"pattern":"^(?=a)"}},"examples":{"e":{"input":"a"}}}`,
+			"op", "a", "unavailable", EvidenceInconclusive},
+		{"an annotation no reference names is only carried",
+			`"op":{"input":{"type":"string","x-note":{"minimum":1e1000000000,"type":42}},"examples":{"e":{"input":"s"}}},
+			 "other":{"input":{"$ref":"#/operations/op/input/x-note"}}`,
+			"op", "s", "valid", EvidenceSatisfied},
+		{"another operation naming the annotation meets its problem",
+			`"op":{"input":{"type":"string","x-note":{"minimum":1e1000000000}}},
+			 "other":{"input":{"$ref":"#/operations/op/input/x-note"},"examples":{"e":{"input":5}}}`,
+			"other", json.Number("5"), "unavailable", EvidenceInconclusive},
+	} {
+		document := `{"openbindings":"0.2.0","x-memo":"text","operations":{` + c.operations + `}}`
+		if got := outcome(ValidateOperationInput(c.value, mustDecodeInterface(t, document), c.op)); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
+		report := validateBytes(t, document)
+		var examples RuleEvidenceStatus = EvidenceSatisfied
+		for _, f := range report.Findings {
+			if f.Rule == "OBI-D-11" && strings.HasPrefix(f.Path, "/operations/"+c.op+"/") && examples != EvidenceViolated {
+				examples = f.Status
+			}
+		}
+		if examples != c.examples {
+			t.Errorf("%s: the example's OBI-D-11 evidence is %s, want %s; findings %+v", c.name, examples, c.examples, report.Findings)
+		}
+	}
+}
+
+// Data an operation schema only carries costs work in proportion to it,
+// however deeply it nests.
+func TestCarriedDataIsLinear(t *testing.T) {
+	build := func(depth int) *Interface {
+		return mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"x-note":`+strings.Repeat("[", depth)+"0"+strings.Repeat("]", depth)+`}}}}`)
+	}
+	small, large := build(2000), build(8000)
+	compile := func(i *Interface) func() {
+		return func() {
+			if _, err := CompileOperationSchema(i, "op", "input"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if ratio := float64(allocated(compile(large))) / float64(allocated(compile(small))); ratio > 6 {
+		t.Errorf("4 times the depth allocated %.1f times the memory", ratio)
+	}
+}
+
 // One operation's evidence depends only on its own graph: another operation,
 // and the order of operations, change nothing for it; and ValidateDocument
 // and CompileOperationSchema agree on every operation.
