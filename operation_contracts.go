@@ -18,11 +18,12 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// schemaDepthLimit bounds the nesting depth of a value handed to the schema
-// library to compile. The library's compile-time meta-schema checks grow
-// faster than linearly with depth (seconds at a few thousand levels), and
-// schemas never nest near this deep, so a deeper one is a resource limit met,
-// not evidence about the schema (§10.5).
+// schemaDepthLimit bounds how deeply a schema handed to the schema library
+// nests subschemas (see schemaDepth). The library's meta-schema checks grow
+// faster than linearly with that depth (seconds at a few thousand levels),
+// and schemas never nest near this deep, so a deeper one is a resource limit
+// met, not evidence about the schema (§10.5). Data inside a schema (const,
+// enum, default, examples) costs the library nothing and does not count.
 const schemaDepthLimit = 256
 
 // operationContracts is what the schema library is given of one document to
@@ -173,8 +174,8 @@ func (o *operationContracts) check(g schemaGraph) error {
 			value, _ := jsonpointer.Resolve(o.container, location)
 			if at, limit := schemacompiler.NumericLimit(value); limit != nil {
 				err = fmt.Errorf("the schema graph holds, at %s, %w", location+at, limit)
-			} else if schemacompiler.Depth(value) > schemaDepthLimit {
-				err = fmt.Errorf("the schema graph nests deeper than %d levels at %s", schemaDepthLimit, location)
+			} else if schemaDepth(value) > schemaDepthLimit {
+				err = fmt.Errorf("the schema graph nests subschemas deeper than %d levels at %s", schemaDepthLimit, location)
 			}
 			o.checked[location] = err
 		}
@@ -321,7 +322,7 @@ func (o *operationContracts) resolve(ref, at string) (target, outside string, ex
 	if id == "" {
 		// The document root, which declares no anchors (§7).
 		if fragment != "" && !strings.HasPrefix(fragment, "/") {
-			return "", "", false, "is a plain-name fragment, which no schema at an OBI position declares"
+			return "", "", false, "is a plain-name fragment, which §7 does not resolve from the document root"
 		}
 		if _, ok := jsonpointer.Resolve(o.container, fragment); !ok {
 			return "", "", false, "does not resolve within the document"
@@ -339,7 +340,7 @@ func (o *operationContracts) resolve(ref, at string) (target, outside string, ex
 	if fragment != "" && !strings.HasPrefix(fragment, "/") {
 		switch anchors := resource.anchors[fragment]; len(anchors) {
 		case 1:
-			within = anchors[0]
+			within = resource.anchorLocation(anchors[0])
 		case 0:
 			return "", "", false, fmt.Sprintf("names an anchor %s does not declare", id)
 		default:

@@ -64,7 +64,8 @@ func Value[T any](member *T) T {
 // OperationExample is a named, author-supplied sample of an operation's
 // caller-facing values (§5.1). Input and Output are the example values as
 // JSON: nil when the member is absent, and the bytes `null` when the example
-// supplies the JSON value null, which OBI-D-11 validates like any other.
+// supplies the JSON value null, which OBI-D-11 validates like any other. An
+// empty, non-nil json.RawMessage holds no value and encodes as absent.
 type OperationExample struct {
 	Description *string         `json:"description,omitempty"`
 	Input       json.RawMessage `json:"input,omitempty"`

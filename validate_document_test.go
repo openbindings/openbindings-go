@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func mustValidateDocument(t *testing.T, document string) ValidationReport {
@@ -841,6 +842,13 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 		}
 		return `{"openbindings":"0.2.0","operations":{` + strings.Join(operations, ",") + `}}`
 	})
+	scaled("a chain of nested anchors", func(n int) string {
+		chain := `{}`
+		for i := range n {
+			chain = fmt.Sprintf(`{"$anchor":"a%d","$defs":{"d":%s}}`, i, chain)
+		}
+		return `{"openbindings":"0.2.0","operations":{},"schemas":{"A":{"$id":"https://ex.test/a","$defs":{"c":` + chain + `}}}}`
+	})
 	scaled("anchor references", func(n int) string {
 		var definitions, operations []string
 		for i := range n {
@@ -868,7 +876,7 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
 	nested := strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300)
 	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+nested+`}}`), ValidateOptions{})
-	if report.Evidence["OBI-D-17"] != EvidenceInconclusive || !strings.Contains(fmt.Sprint(report.Findings), "nests deeper than 256") {
+	if report.Evidence["OBI-D-17"] != EvidenceInconclusive || !strings.Contains(fmt.Sprint(report.Findings), "nests subschemas deeper than 256") {
 		t.Fatalf("OBI-D-17 %q, findings %v", report.Evidence["OBI-D-17"], report.Findings)
 	}
 }
@@ -886,4 +894,106 @@ func TestValidateDocument_MalformedFragmentsAreStillResolved(t *testing.T) {
 			t.Errorf("%s: OBI-D-05 %q, OBI-D-16 %q", ref, report.Evidence["OBI-D-05"], report.Evidence["OBI-D-16"])
 		}
 	}
+}
+
+// The depth limit counts nested subschemas only: data inside a schema, such
+// as a const or a default, costs the schema library nothing and does not
+// count, so it neither hides a violation nor leaves a graph unavailable.
+func TestValidateDocument_DepthCountsSubschemasOnly(t *testing.T) {
+	deep := strings.Repeat("[", 300) + strings.Repeat("]", 300)
+	for schema, want := range map[string]RuleEvidenceStatus{
+		`{"const":` + deep + `}`:             EvidenceSatisfied,
+		`{"type":42,"default":` + deep + `}`: EvidenceViolated,
+		`{"x-meta":` + deep + `}`:            EvidenceSatisfied,
+	} {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+schema+`}}`)
+		if report.Evidence["OBI-D-17"] != want {
+			t.Errorf("%.30s: OBI-D-17 %q, want %q", schema, report.Evidence["OBI-D-17"], want)
+		}
+	}
+	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"array","const":` + deep + `,"$defs":{"u":{"default":` + deep + `}}}}}}`
+	if _, err := CompileOperationSchema(mustDecodeInterface(t, document), "op", "input"); err != nil {
+		t.Fatalf("deep data is no resource limit: %v", err)
+	}
+}
+
+// An $id that is empty once its fragment is removed declares no resource, as
+// the schema library reads it: the schema stays part of the resource around
+// it.
+func TestValidateDocument_EmptyIDsDeclareNothing(t *testing.T) {
+	for _, id := range []string{"", "#"} {
+		document := `{"openbindings":"0.2.0","schemas":{"R":{"$id":"https://example.com/r","properties":{"a":{"$id":"` + id + `","type":"string"}}}},
+			"operations":{"op":{"input":{"$ref":"https://example.com/r"},"examples":{"e":{"input":{"a":1}}}}}}`
+		if report := mustValidateDocument(t, document); report.Evidence["OBI-D-11"] != EvidenceViolated || report.Evidence["OBI-D-16"] != EvidenceSatisfied {
+			t.Errorf("$id %q: OBI-D-11 %q, OBI-D-16 %q", id, report.Evidence["OBI-D-11"], report.Evidence["OBI-D-16"])
+		}
+		if err := ValidateOperationInput(map[string]any{"a": json.Number("1")}, mustDecodeInterface(t, document), "op"); !errors.As(err, new(*SchemaValidationError)) {
+			t.Errorf("$id %q: want a mismatch, got %v", id, err)
+		}
+	}
+}
+
+// A reference to a URI more than one schema declares names no one schema,
+// but a fragment that resolves within none of them resolves nowhere.
+func TestValidateDocument_AmbiguousReferencesResolvingNowhere(t *testing.T) {
+	for fragment, want := range map[string]RuleEvidenceStatus{"#/$defs/missing": EvidenceViolated, "#/$defs/d": EvidenceInconclusive} {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{
+			"A":{"$id":"https://example.com/a","$defs":{"d":{}}},
+			"B":{"$id":"https://example.com/x/../a","$defs":{"d":{}}}},
+			"operations":{"op":{"input":{"$ref":"https://example.com/a`+fragment+`"}}}}`)
+		if report.Evidence["OBI-D-16"] != want {
+			t.Errorf("%s: OBI-D-16 %q, want %q", fragment, report.Evidence["OBI-D-16"], want)
+		}
+	}
+}
+
+// Syntax errors in input deeper than encoding/json reads are described as
+// encoding/json describes them in shallow input.
+func TestValidateDocument_DeepSyntaxErrorsAreDescribed(t *testing.T) {
+	open, closed := strings.Repeat("[", 10001), strings.Repeat("]", 10001)
+	for input, want := range map[string]string{
+		`{"openbindings":"0.2.0","x":` + open:                 "unexpected end of JSON input",
+		`{"openbindings":"0.2.0","x":` + open + closed + `}]`: "invalid character ']' after top-level value",
+	} {
+		_, report, _ := ValidateDocument([]byte(input), ValidateOptions{})
+		if violations := report.Violations(); len(violations) != 1 || !strings.Contains(violations[0].Message, want) {
+			t.Errorf("want %q, got %+v", want, violations)
+		}
+	}
+}
+
+// Input deeper than encoding/json reads is judged for OBI-D-01 as the same
+// input is at ordinary depth: wrapping a value in 10,001 arrays changes only
+// where a repeated name or lone surrogate lies, and makes a document that
+// OBI-D-01 accepts one the decoder cannot read. Only one JSON value is
+// wrapped: wrapping anything else (nothing, or "1,2") can make valid JSON.
+func FuzzDeepInput(f *testing.F) {
+	for _, seed := range []string{`{}`, `{"a":1,"a":2}`, `["\ud800"]`, `{"a":[1,2,{"b":"c"}]}`, `[{"k":{"k":1,"k":2}}]`, `"x"`, ` 1 `} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		if !utf8.ValidString(input) || !json.Valid([]byte(input)) || strings.Count(input, "[")+strings.Count(input, "{") > 100 {
+			return
+		}
+		shallow := verifyExactJSON([]byte(input))
+		deep := verifyExactJSON([]byte(strings.Repeat("[", 10001) + input + strings.Repeat("]", 10001)))
+		var shallowDuplicate, deepDuplicate *duplicateNameError
+		var shallowLone, deepLone *loneSurrogateError
+		switch {
+		case errors.As(shallow, &shallowDuplicate):
+			if !errors.As(deep, &deepDuplicate) || deepDuplicate.location != strings.Repeat("/0", 10001)+shallowDuplicate.location {
+				t.Fatalf("%s: shallow %v, deep %v", input, shallow, deep)
+			}
+		case errors.As(shallow, &shallowLone):
+			if !errors.As(deep, &deepLone) || deepLone.location != strings.Repeat("/0", 10001)+shallowLone.location {
+				t.Fatalf("%s: shallow %v, deep %v", input, shallow, deep)
+			}
+		case shallow == nil:
+			if !errors.Is(deep, errNestingLimit) {
+				t.Fatalf("%s: shallow accepted, deep %v", input, deep)
+			}
+		default:
+			t.Fatalf("%s: valid JSON refused: %v", input, shallow)
+		}
+	})
 }

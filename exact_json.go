@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -100,12 +101,16 @@ func verifyExactJSON(b []byte) error {
 }
 
 // validJSONStream reports whether b is exactly one JSON value, reading it a
-// token at a time, which holds however deeply it nests.
+// token at a time, which holds however deeply it nests. Its errors read as
+// encoding/json's do for input of ordinary depth.
 func validJSONStream(b []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(b))
 	decoder.UseNumber()
 	for depth := 0; ; {
 		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return errors.New("unexpected end of JSON input")
+		}
 		if err != nil {
 			return err
 		}
@@ -119,10 +124,22 @@ func validJSONStream(b []byte) error {
 			break
 		}
 	}
-	if _, err := decoder.Token(); err != io.EOF {
-		return errors.New("invalid JSON: more than one value")
+	if end := skipJSONSpace(b, int(decoder.InputOffset())); end < len(b) {
+		return fmt.Errorf("invalid character %s after top-level value", quoteByte(b[end]))
 	}
 	return nil
+}
+
+// quoteByte quotes a byte as encoding/json's syntax errors do.
+func quoteByte(c byte) string {
+	if c == '\'' {
+		return `'\''`
+	}
+	if c == '"' {
+		return `'"'`
+	}
+	s := strconv.Quote(string(c))
+	return "'" + s[1:len(s)-1] + "'"
 }
 
 // exactScan walks valid JSON for repeated member names and lone surrogates.
@@ -166,10 +183,8 @@ func (s *exactScan) run(b []byte) error {
 			open = append(open, map[string]struct{}{})
 			i = skipJSONSpace(b, i+1)
 			if b[i] != '}' {
-				var err error
-				if i, err = s.member(b, i, open[len(open)-1]); err != nil {
-					return err
-				}
+				// An object's first member repeats no name.
+				i, _ = s.member(b, i, open[len(open)-1])
 				continue
 			}
 			open = open[:len(open)-1]

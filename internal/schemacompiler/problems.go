@@ -212,29 +212,6 @@ func withinNumericLimits(token string) bool {
 	return true
 }
 
-// Depth returns the nesting depth of v: 0 for a scalar, and one more than its
-// deepest member or item for an array or object.
-func Depth(v any) int {
-	deepest := 0
-	switch v := v.(type) {
-	case []any:
-		for _, item := range v {
-			deepest = max(deepest, Depth(item)+1)
-		}
-		if len(v) == 0 {
-			deepest = 1
-		}
-	case map[string]any:
-		for _, member := range v {
-			deepest = max(deepest, Depth(member)+1)
-		}
-		if len(v) == 0 {
-			deepest = 1
-		}
-	}
-	return deepest
-}
-
 func finiteProblem(f float64) string {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return fmt.Sprintf("%v is not a JSON number", f)

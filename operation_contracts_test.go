@@ -313,3 +313,21 @@ func TestOperationContracts_DotSegmentsAreRemoved(t *testing.T) {
 		}
 	}
 }
+
+// A schema the document embeds under a JSON Schema meta-schema's URI is the
+// schema a reference to that URI means (§7), not the meta-schema.
+func TestOperationContracts_EmbeddedSchemaUnderAMetaSchemaURI(t *testing.T) {
+	document := mustDecodeInterface(t, `{"openbindings":"0.2.0",
+		"schemas":{"S":{"$id":"http://json-schema.org/draft-07/schema","type":"string"}},
+		"operations":{"op":{"input":{"$ref":"http://json-schema.org/draft-07/schema"}}}}`)
+	compiled, err := CompileOperationSchema(document, "op", "input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate("text"); err != nil {
+		t.Errorf("the embedded schema accepts a string: %v", err)
+	}
+	if err := compiled.Validate(json.Number("5")); !errors.As(err, new(*SchemaValidationError)) {
+		t.Errorf("the embedded schema refuses a number, got %v", err)
+	}
+}

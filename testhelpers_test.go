@@ -51,18 +51,6 @@ func assertPreservedExtensionAndUnknown(t *testing.T, outMap map[string]any) {
 	}
 }
 
-func makeTestInterface(name string, ops ...string) *Interface {
-	iface := &Interface{
-		OpenBindings: "0.2.0",
-		Name:         Present(name),
-		Operations:   map[string]Operation{},
-	}
-	for _, op := range ops {
-		iface.Operations[op] = Operation{}
-	}
-	return iface
-}
-
 // exampleValue encodes an example value as the model carries it: raw JSON,
 // so a present null is distinct from an absent member.
 func exampleValue(v any) json.RawMessage {

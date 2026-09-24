@@ -6,6 +6,17 @@
 
 ### Fixed
 
+- **An `$id` of `""` or `"#"` declares no resource**, as the schema library
+  reads it. Inside an embedded resource it was taken for a second resource
+  with the same URI, so every reference to the resource was ambiguous: a
+  violating example left OBI-D-11 inconclusive and validation reported the
+  graph unavailable.
+- **OBI-D-16 is violated when an ambiguous reference resolves nowhere.** A
+  reference to a URI that more than one schema declares names no one schema
+  and stays inconclusive, unless its fragment resolves within none of them.
+- **Syntax errors in deeply nested input read as encoding/json's do**
+  ("unexpected end of JSON input", "invalid character ']' after top-level
+  value"), not "EOF" or "more than one value".
 - **An absolute URI names the resource it resolves to.** A `$id` or `$ref`
   holding dot segments (`https://example.com/x/../a`) was compared as
   written, while the schema library removes them (RFC 3986 §5.2.4). A
@@ -26,14 +37,19 @@
 - **OBI-D-16 resolves a malformed same-document fragment.** A `$ref` of
   `#/schemas/Missing Thing` violates OBI-D-05 and, resolving nowhere, now
   OBI-D-16 as well; it satisfied OBI-D-16.
-- **Validation work stays linear on hostile input.** Setting members aside
-  for OBI-D-02 copied the document once per member (232 KB allocated 5 GB);
-  collecting schema resources and walking schemas for OBI-D-05/06/07/16
-  copied the path at every node (62 KB allocated 640 MB); and every anchor
-  reference re-walked its resource (232 KB took 3.3 s). Each now does one
-  pass. OBI-D-17 is inconclusive for a schema nesting deeper than 256
-  levels, the limit compilation already applies, since the meta-schema
-  validator's work grows faster than linearly with depth.
+- **Validation no longer does quadratic work in three places on hostile
+  input.** Setting members aside for OBI-D-02 copied the document once per
+  member (232 KB allocated 5 GB); collecting schema resources and walking
+  schemas for OBI-D-05/06/07/16 copied the path at every node (62 KB
+  allocated 640 MB); and every anchor reference re-walked its resource
+  (232 KB took 3.3 s). Each now does one pass, and an anchor's location is
+  spelled out only when a reference resolves to it. A chain of thousands of
+  nested `$id` resources still costs time quadratic in its depth, as does a
+  report with a finding at every level of a deeply nested schema. OBI-D-17
+  is inconclusive for a schema nesting subschemas deeper than 256 levels,
+  the limit compilation applies, since the meta-schema validator's work
+  grows faster than linearly with that depth; data inside a schema (`const`,
+  `default`, and the like) does not count toward either limit.
 - **A document with a large number in its aliases no longer crashes
   validation.** An operation's `aliases` or a dependency's `bindingSpecs`
   holding more than 20 items, one of them a number beyond the numeric limits
@@ -148,8 +164,7 @@
   the 2020-12 meta-schemas refuse, another `$schema`, or a `$vocabulary`. An
   unreferenced definition stays outside the graph. A cycle of references
   that never advances into the value is unavailable wherever it sits, not a
-  mismatch or a pass. A relative `$id` at an OBI position has no base and
-  leaves the graph unavailable. They refuse an unsupported version
+  mismatch or a pass. They refuse an unsupported version
   (OBI-T-04), refuse to interpret a document declaring no valid version
   (OBI-D-12), and resolve an operation by key or alias (OBI-T-12). A value
   outside the JSON value domain (a Go struct, a `map[string]int`) is refused

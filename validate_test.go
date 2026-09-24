@@ -561,7 +561,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `/bindings/nonexistent.api/operation: references unknown operation "nonexistent" (OBI-D-08)`) {
+	if !containsProblem(err, `/bindings/nonexistent.api/operation: references unknown operation key "nonexistent" (OBI-D-08)`) {
 		t.Fatalf("expected operation ref error, got %v", err)
 	}
 }

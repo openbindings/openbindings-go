@@ -286,6 +286,11 @@ for _, issue := range issues {
 
 ### Satisfy a named interface dependency
 
+> **Out of date on this branch:** this example predates the current core.
+> `openbindings.PrepareInterface` has been removed, and `invoke` is being
+> reconnected to the core one package at a time; the example will be
+> rewritten when it is.
+
 The consumer OBI's `dependencies` map is the contract authority. Prepare the
 consumer and providers once, compose them with explicit application-owned
 preference, and resolve the generated dependency signature:

@@ -23,6 +23,8 @@ type documentSchemas struct {
 	// ambiguous maps an absolute URI that more than one schema declares as its
 	// $id to why it names no one resource. Such a URI is in no graph's reach.
 	ambiguous map[string]string
+	// claimants holds, for each ambiguous URI, every resource declaring it.
+	claimants map[string][]schemaResource
 	// shadowed holds embedded resources whose $id is a JSON Schema
 	// meta-schema's URI. The document embeds them (§7), but the schema
 	// library resolves that URI to the meta-schema it carries, so it cannot
@@ -36,74 +38,108 @@ type schemaResource struct {
 	// parent is the base in effect where the resource sits, against which its
 	// own $id resolves; nil at an OBI schema position.
 	parent *url.URL
-	// anchors maps each plain-name anchor the resource declares, by $anchor
-	// or $dynamicAnchor, to the location of every schema declaring it, as a
-	// JSON Pointer from the resource, in document order. A nested resource's
-	// anchors are its own.
-	anchors map[string][]string
+	// node is where the resource sits, and anchors maps each plain-name
+	// anchor the resource declares, by $anchor or $dynamicAnchor, to where
+	// every schema declaring it sits, in document order; anchorLocation
+	// spells one out. A nested resource's anchors are its own.
+	node    *pathNode
+	anchors map[string][]*pathNode
+}
+
+// anchorLocation returns where a schema declaring one of the resource's
+// anchors sits, as a JSON Pointer from the resource.
+func (r schemaResource) anchorLocation(anchor *pathNode) string {
+	return anchor.from(r.node)
+}
+
+// pathNode is one reference token of a location, linked to the location it
+// extends, so a walk records where it is in constant space per step and
+// spells a location out only when one is needed.
+type pathNode struct {
+	parent *pathNode
+	token  string
+}
+
+// child returns the location tokens reach from n.
+func (n *pathNode) child(tokens ...string) *pathNode {
+	for _, token := range tokens {
+		n = &pathNode{parent: n, token: token}
+	}
+	return n
+}
+
+// from returns the location of n relative to its ancestor base, as a JSON
+// Pointer; a nil base is the document root.
+func (n *pathNode) from(base *pathNode) string {
+	var tokens []string
+	for at := n; at != base; at = at.parent {
+		tokens = append(tokens, at.token)
+	}
+	slices.Reverse(tokens)
+	return jsonpointer.Format(tokens...)
 }
 
 // collectDocumentSchemas walks the schema positions of a document's generic
 // view and every subschema of them.
 func collectDocumentSchemas(view any) documentSchemas {
 	d := documentSchemas{resources: map[string]schemaResource{}}
-	claims := map[string][]string{}
-	var path []string
+	claimants := map[string][]schemaResource{}
 	// anchors indexes the anchors of the resource the walk is in, whose root
-	// is at path[:anchorsFrom]; nil outside a resource, or within a nested
-	// $id that declares none (its anchors are not the outer resource's).
-	var walk func(node any, base *url.URL, anchors map[string][]string, anchorsFrom int)
-	walk = func(node any, base *url.URL, anchors map[string][]string, anchorsFrom int) {
+	// is at the node from; nil outside a resource, or within a nested $id
+	// that declares none (its anchors are not the outer resource's).
+	var walk func(node any, at *pathNode, base *url.URL, anchors map[string][]*pathNode)
+	walk = func(node any, at *pathNode, base *url.URL, anchors map[string][]*pathNode) {
 		object, ok := node.(map[string]any)
 		if !ok {
 			return
 		}
 		if id, declared := resourceID(object, base); declared {
-			location := jsonpointer.Format(path...)
 			key := id.String()
-			claims[key] = append(claims[key], location)
-			anchors, anchorsFrom = map[string][]string{}, len(path)
-			d.resources[key] = schemaResource{location: location, schema: object, parent: base, anchors: anchors}
+			anchors = map[string][]*pathNode{}
+			resource := schemaResource{location: at.from(nil), schema: object, parent: base, node: at, anchors: anchors}
+			claimants[key] = append(claimants[key], resource)
+			d.resources[key] = resource
 			base = id
-		} else if _, nested := object["$id"].(string); nested {
+		} else if _, declares := declaredID(object); declares {
 			anchors = nil
 		}
 		if anchors != nil {
 			for _, name := range anchorNames(object) {
-				anchors[name] = append(anchors[name], jsonpointer.Format(path[anchorsFrom:]...))
+				anchors[name] = append(anchors[name], at)
 			}
 		}
 		forEachSubschema(object, func(child any, tokens ...string) {
-			path = append(path, tokens...)
-			walk(child, base, anchors, anchorsFrom)
-			path = path[:len(path)-len(tokens)]
+			walk(child, at.child(tokens...), base, anchors)
 		})
 	}
 
 	root, _ := view.(map[string]any)
 	schemas, _ := root["schemas"].(map[string]any)
 	for _, key := range sortedKeys(schemas) {
-		path = []string{"schemas", key}
-		walk(schemas[key], nil, nil, 0)
+		walk(schemas[key], (*pathNode)(nil).child("schemas", key), nil, nil)
 	}
 	operations, _ := root["operations"].(map[string]any)
 	for _, key := range sortedKeys(operations) {
 		operation, _ := operations[key].(map[string]any)
 		for _, position := range []string{"input", "output"} {
 			if schema, present := operation[position]; present {
-				path = []string{"operations", key, position}
-				walk(schema, nil, nil, 0)
+				walk(schema, (*pathNode)(nil).child("operations", key, position), nil, nil)
 			}
 		}
 	}
-	for id, locations := range claims {
+	for id, resources := range claimants {
 		switch {
-		case len(locations) > 1:
+		case len(resources) > 1:
+			var locations []string
+			for _, resource := range resources {
+				locations = append(locations, resource.location)
+			}
 			sort.Strings(locations)
 			if d.ambiguous == nil {
-				d.ambiguous = map[string]string{}
+				d.ambiguous, d.claimants = map[string]string{}, map[string][]schemaResource{}
 			}
 			d.ambiguous[id] = fmt.Sprintf("the schemas at %s all declare it", strings.Join(locations, ", "))
+			d.claimants[id] = resources
 			delete(d.resources, id)
 		case isBuiltInMetaSchema(id):
 			if d.shadowed == nil {
@@ -131,7 +167,7 @@ func anchorNames(object map[string]any) []string {
 // schema object declares by $id, resolved against base. declared is false
 // when the object declares no resource with an absolute URI.
 func resourceID(object map[string]any, base *url.URL) (id *url.URL, declared bool) {
-	raw, ok := object["$id"].(string)
+	raw, ok := declaredID(object)
 	if !ok {
 		return nil, false
 	}
@@ -147,21 +183,31 @@ func resourceID(object map[string]any, base *url.URL) (id *url.URL, declared boo
 	return parsed, true
 }
 
-// resolveURI resolves ref against base as RFC 3986 §5.2 does, and as the
-// schema library does for every $id and $ref: dot segments are removed even
+// declaredID returns the $id a schema object declares a resource by, its
+// fragment removed, as the schema library reads it: an $id that is empty
+// once its fragment is removed ("" or "#") declares nothing.
+func declaredID(object map[string]any) (string, bool) {
+	raw, _ := object["$id"].(string)
+	id, _, _ := strings.Cut(raw, "#")
+	return id, id != ""
+}
+
+// resolveURI resolves ref against base as the schema library does for every
+// $id and $ref, which follows RFC 3986 §5.2: dot segments are removed even
 // from an absolute reference, so https://example.com/x/../a names
-// https://example.com/a. base may be nil when ref is absolute. A relative
-// reference against an opaque base (a urn:, say) keeps the base's opaque
-// part, as the library keeps it.
+// https://example.com/a. base may be nil when ref is absolute. One exception
+// departs from RFC 3986: a relative reference against an opaque base (a
+// urn:, say) keeps the base's opaque part, as the library keeps it, where
+// RFC 3986 would replace it.
 func resolveURI(base, ref *url.URL) *url.URL {
 	if base == nil {
 		base = &url.URL{}
 	}
-	resolved := base.ResolveReference(ref)
+	target := base.ResolveReference(ref)
 	if !ref.IsAbs() && base.Opaque != "" {
-		resolved.Opaque = base.Opaque
+		target.Opaque = base.Opaque
 	}
-	return resolved
+	return target
 }
 
 // forEachSubschema calls fn for every direct subschema of a schema object, as
@@ -185,6 +231,21 @@ func forEachSubschema(object map[string]any, fn func(child any, tokens ...string
 			}
 		}
 	}
+}
+
+// schemaDepth returns how deeply a schema nests subschemas, as JSON Schema
+// 2020-12 defines them: 0 for a schema with none. Values that are not
+// subschemas, such as const, enum, default, and examples, do not count.
+func schemaDepth(schema any) int {
+	object, ok := schema.(map[string]any)
+	if !ok {
+		return 0
+	}
+	deepest := 0
+	forEachSubschema(object, func(child any, _ ...string) {
+		deepest = max(deepest, schemaDepth(child)+1)
+	})
+	return deepest
 }
 
 // builtInMetaSchemas remembers the URIs found to name a meta-schema the

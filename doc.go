@@ -25,7 +25,8 @@
 // The document rules judge the JSON a document is: ValidateDocument judges
 // the bytes, and Validate the encoding of a host object, so for the same
 // document both reach the same evidence on every rule but OBI-D-01, which
-// only the exact bytes decide and Validate leaves inconclusive. Validate
+// only the exact bytes decide and Validate leaves inconclusive, provided the
+// host object's raw members hold bytes the exact decoder accepts. Validate
 // returns a *ValidationError listing every violation it establishes, which
 // makes it a gate. A nil error is not conformance: a rule this SDK cannot
 // decide is inconclusive, not violated. OBI-D-18 takes a

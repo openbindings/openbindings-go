@@ -42,7 +42,8 @@ import (
 // field alone states that member, so a nil field is absent whatever these maps
 // hold.
 type LosslessFields struct {
-	// Extensions holds `x-` members.
+	// Extensions holds `x-` members. An entry whose name lacks the prefix is
+	// encoded all the same, and decodes into Unknown.
 	Extensions map[string]json.RawMessage `json:"-"`
 
 	// Unknown holds every other member the type does not model.

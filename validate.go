@@ -34,7 +34,10 @@ type ValidateOptions struct {
 // The rules judge the document the host object encodes, exactly as
 // ValidateDocument judges bytes. OBI-D-01 is always inconclusive here,
 // because it is decided on the exact input bytes, which a host object no
-// longer carries; ValidateDocument decides it.
+// longer carries; ValidateDocument decides it. A raw member (an example
+// value, source content, or a kept member) is judged as encoding/json decodes
+// it: bytes the exact decoder refuses, such as an escaped lone surrogate or a
+// repeated name, are not checked here.
 //
 // The error is a *ValidationError listing every established violation, so
 // `if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil`
@@ -70,7 +73,8 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // violation error Interface.Validate returns. The rules never depend on that
 // decoding: a document the model cannot carry is still judged in full, except
 // where the SDK cannot read it in full. Input that OBI-D-01 refuses (not JSON,
-// not UTF-8, or repeating a member name) is reported as that rule's
+// not UTF-8, beginning with a byte-order mark, or repeating a member name) is
+// reported as that rule's
 // violation, with every other rule inconclusive, since which of its values
 // the document holds is not established. A document holding a string that
 // escapes a lone UTF-16 surrogate, or nests deeper than encoding/json reads
@@ -325,7 +329,7 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 		if !ok {
 			continue
 		}
-		d.checkReference(binding, path, "operation", "OBI-D-08", operations, "operation")
+		d.checkReference(binding, path, "operation", "OBI-D-08", operations, "operation key")
 		d.checkReference(binding, path, "source", "OBI-D-09", sources, "source")
 		for _, member := range []string{"inputTransform", "outputTransform"} {
 			if value, present := binding[member]; present {
@@ -379,7 +383,7 @@ func (d *documentCheck) checkReference(entry map[string]any, entryPath, name, ru
 	path := entryPath + jsonpointer.Format(name)
 	key, ok := value.(string)
 	if !ok {
-		d.c.violated(rule, path, fmt.Sprintf("names no %s: a %s is referenced by its key string; got %s", noun, noun, jsonTypeName(value)))
+		d.c.violated(rule, path, fmt.Sprintf("names no %s: a reference is a key string; got %s", noun, jsonTypeName(value)))
 		return
 	}
 	if _, found := targets[key]; !found {
@@ -673,7 +677,8 @@ func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool
 			} else if !hasScheme {
 				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("%q must be an absolute URI", id))
 			}
-			inResource = isString
+			// An $id empty once its fragment is removed declares no resource.
+			_, inResource = declaredID(s)
 		}
 	}
 
@@ -706,8 +711,8 @@ func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool
 
 // schemaPath is where a walk of a schema is: the location of the schema it
 // began at, and the reference tokens from there to the schema it is at. A
-// location is formatted only when a finding needs one, so a walk's work stays
-// linear in the schema however deeply it nests.
+// location is formatted only when a finding needs one, so the walk itself
+// does no work per node that grows with depth; each finding costs its path.
 type schemaPath struct {
 	start string
 	below []string
@@ -768,7 +773,15 @@ func (d *documentCheck) checkEmbeddedReference(path, ref string) {
 	parsed.Fragment, parsed.RawFragment = "", ""
 	id := parsed.String()
 	if why := d.schemas.ambiguous[id]; why != "" {
-		d.c.inconclusive("OBI-D-16", path, fmt.Sprintf("%q names no one embedded schema: %s", ref, why))
+		// The reference names no one schema, but when its fragment resolves
+		// within none of the schemas declaring the URI, it resolves nowhere.
+		for _, resource := range d.schemas.claimants[id] {
+			if resolveInResource(resource, fragment) != missing {
+				d.c.inconclusive("OBI-D-16", path, fmt.Sprintf("%q names no one embedded schema: %s", ref, why))
+				return
+			}
+		}
+		d.c.violated("OBI-D-16", path, fmt.Sprintf("%q does not resolve within any of the schemas that declare %s: %s", ref, id, why))
 		return
 	}
 	resource, embedded := d.schemas.resources[id]

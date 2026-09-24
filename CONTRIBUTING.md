@@ -36,8 +36,9 @@ stale `go.work` fails loudly otherwise.
 ## Testing
 
 ```bash
-# Core SDK
-go test ./...
+# Core SDK (the rest of the module is being reconnected to the core one
+# package at a time and does not all build yet)
+go test . ./internal/jsonpointer ./internal/schemacompiler
 
 # Each format sub-module
 for d in formats/*/; do (cd "$d" && go test ./...) || exit 1; done

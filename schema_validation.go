@@ -62,8 +62,8 @@ func init() {
 //
 // The meta-schema validator's work grows faster than linearly with a
 // schema's depth, so a schema holding a number beyond the numeric limits of
-// schema evaluation, or nesting deeper than schemaDepthLimit, meets a
-// resource limit and leaves the rule inconclusive there (§10.5), as it does
+// schema evaluation, or nesting subschemas deeper than schemaDepthLimit, meets
+// a resource limit and leaves the rule inconclusive there (§10.5), as it does
 // for an operation's schema graph.
 func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
@@ -78,8 +78,8 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 			c.inconclusive("OBI-D-17", prefix+at, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
 			return
 		}
-		if schemacompiler.Depth(v) > schemaDepthLimit {
-			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: it nests deeper than %d levels", schemaDepthLimit))
+		if schemaDepth(v) > schemaDepthLimit {
+			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: it nests subschemas deeper than %d levels", schemaDepthLimit))
 			return
 		}
 		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
@@ -309,16 +309,16 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 	if !IsValidSemver(i.OpenBindings) {
 		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-12), so it is not interpreted", i.OpenBindings)
 	}
-	key, resolved, ok := ResolveOperation(i, operation)
+	key, target, ok := ResolveOperation(i, operation)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrOperationNotFound, operation)
 	}
 	var schema JSONSchema
 	switch position {
 	case "input":
-		schema = resolved.Input
+		schema = target.Input
 	case "output":
-		schema = resolved.Output
+		schema = target.Output
 	default:
 		return nil, fmt.Errorf("openbindings: unknown operation schema position %q", position)
 	}
@@ -338,6 +338,8 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 
 // ValidateOperationInput validates a value against an operation's input
 // schema, with the complete OBI document as the resolution root (OBI-T-16).
+// It compiles the document's schemas on every call; to validate many values,
+// compile once with CompileOperationSchema and use CompiledSchema.Validate.
 //
 // A nil error means the value validates. A *SchemaValidationError is an
 // established mismatch; a *SchemaGraphUnavailableError means the schema's
