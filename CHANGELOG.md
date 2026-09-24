@@ -1021,6 +1021,23 @@
 
 ### Removed
 
+- **Everything outside the core** (breaking, pre-1.0). The module now carries
+  only what the core specification defines: the root package and the two
+  internal packages it uses (`internal/jsonpointer`,
+  `internal/schemacompiler`). Removed: `invoke` and `invoke/jsonata`,
+  `synthesize` and `synthesize/synthesisscenarios`, `httpdiscovery`,
+  `acquire`, `bindingsupport`, `compare`, `schemaprofile`, `schemavalidate`,
+  `canonicaljson`, `jsonvalue`, `processorscenarios`, `sdk`, their internal
+  packages (`jstring`, `location`, `obishape`, `value`, `valueio`, the
+  vendored JSON codec), the eight `formats/*` modules, and the documents and
+  scripts that served them. Each layer is to be rebuilt on this core from its
+  own authority. The removed code is preserved on the `legacy/pre-core-rebuild`
+  branch at `aceb788`, where every module built and passed; the published
+  `v0.1.0` and `formats/*/v0.1.0` tags are unaffected. The root module no
+  longer requires `github.com/openbindings/jsonata/go` or `golang.org/x/net`.
+  Entries elsewhere in this working draft that describe removed packages
+  record the preserved line, not this module.
+
 - **`PreparedInterface` and root helpers without a Core role** (breaking,
   pre-1.0). `PrepareInterface`, `PreparedInterface`, and its operation,
   dependency, and binding descriptors were a validated, indexed snapshot for
