@@ -236,6 +236,30 @@ func TestCarriedDataIsLinear(t *testing.T) {
 	}
 }
 
+// Many schemas outside the schema positions, each its own copy, cost work in
+// proportion to their number.
+func TestManyCopiesOutsideTheSchemaPositionsAreLinear(t *testing.T) {
+	build := func(n int) *Interface {
+		var lib, refs []string
+		for i := range n {
+			lib = append(lib, fmt.Sprintf(`"s%d":true`, i))
+			refs = append(refs, fmt.Sprintf(`{"$ref":"#/x-lib/s%d"}`, i))
+		}
+		return mustDecodeInterface(t, `{"openbindings":"0.2.0","x-lib":{`+strings.Join(lib, ",")+`},"operations":{"op":{"input":{"allOf":[`+strings.Join(refs, ",")+`]}}}}`)
+	}
+	small, large := build(1000), build(4000)
+	compile := func(i *Interface) func() {
+		return func() {
+			if _, err := CompileOperationSchema(i, "op", "input"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if ratio := float64(allocated(compile(large))) / float64(allocated(compile(small))); ratio > 6 {
+		t.Errorf("4 times the copies allocated %.1f times the memory", ratio)
+	}
+}
+
 // A schema compiled from two roots holds what each root holds: an operation
 // reaching it through its own root does not meet a problem of another root
 // that also holds it.
@@ -276,6 +300,7 @@ func TestSchemasTheBundleCarriesAsWritten(t *testing.T) {
 		{`"A":{"const":{"type":"string"}}`, `{"$ref":"#/schemas/A/const"}`, "mismatch", ""},
 		{`"A":{"enum":[{"type":"string"}]}`, `{"$ref":"#/schemas/A/enum/0"}`, "mismatch", ""},
 		{`"A":{"dependencies":{"x":{"type":"string"}}}`, `{"$ref":"#/schemas/A/dependencies/x"}`, "unavailable", "leaves out"},
+		{`"A":{"const":{"dependencies":{"x":false}}}`, `{"$ref":"#/schemas/A/const"}`, "unavailable", "keeps dependencies"},
 		{`"A":{"properties":{"const":{"type":"string"}}}`, `{"$ref":"#/schemas/A/properties/const"}`, "mismatch", ""},
 	} {
 		document := `{"openbindings":"0.2.0","schemas":{` + c.schemas + `},"operations":{"op":{"input":` + c.input + `}}}`

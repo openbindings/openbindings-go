@@ -117,22 +117,25 @@ func (c *copyGraph) analyze(o *operationSchemas) {
 		queue = append(queue, node.to...)
 	}
 	// A root the bundle holds within a copy is compiled as that copy
-	// carries it, which copySchema decides.
-	var outsidePositions []string
+	// carries it, which copySchema decides: the copy holding it at a schema
+	// position, or any copy outside the schema positions that covers it.
+	var outside copyTrie
 	for _, node := range c.nodes {
 		if at := node.location; copiedAt(at) == at && !atSchemaPosition(at) {
-			outsidePositions = append(outsidePositions, at)
+			outside.add(at)
 		}
 	}
 	for i := range c.nodes {
 		root := c.nodes[i].location
-		holders := slices.DeleteFunc(slices.Clone(outsidePositions), func(copy string) bool { return copy == root || !covers(copy, root) })
 		if copy := copiedAt(root); copy != root {
-			holders = append(holders, copy)
+			c.nodes[i].problem = firstOf(c.nodes[i].problem, o.carriageProblem(copy, root))
 		}
-		for _, holder := range holders {
-			c.nodes[i].problem = firstOf(c.nodes[i].problem, o.carriageProblem(holder, root))
-		}
+		outside.forEachHolder(root, func(holder string, _ []string) bool {
+			if holder != root {
+				c.nodes[i].problem = firstOf(c.nodes[i].problem, o.carriageProblem(holder, root))
+			}
+			return true
+		})
 	}
 	for i := range c.nodes {
 		for _, at := range c.nodes[i].to {
@@ -203,17 +206,25 @@ func (o *operationSchemas) carriageProblem(holder, root string) string {
 		case strictlyExcluded[token]:
 			return fmt.Sprintf("the schema at %s lies within %s, which the bundle leaves out, as strict 2020-12 does not evaluate it", root, holder+jsonpointer.Format(tokens[:i+1]...))
 		case token == "const" || token == "enum":
-			if o.schemas.resourceAt(root) != nil {
-				return ""
-			}
-			rewritten := false
-			forEachSchemaReference(mustResolve(o.view, root), root, func(_, ref string) {
-				rewritten = rewritten || strings.HasPrefix(ref, "#")
+			within := holder + jsonpointer.Format(tokens[:i+1]...)
+			inResource := o.schemas.resourceAt(root) != nil
+			problem := ""
+			walkSchemaObjects(mustResolve(o.view, root), func(object map[string]any, _ []string) bool {
+				for keyword := range object {
+					if strictlyExcluded[keyword] {
+						problem = fmt.Sprintf("the schema at %s lies within the %s value at %s, which the bundle carries as written, so it keeps %s, which strict 2020-12 does not evaluate but the schema library would", root, token, within, keyword)
+						return false
+					}
+				}
+				for _, keyword := range []string{"$ref", "$dynamicRef"} {
+					if ref, ok := object[keyword].(string); ok && strings.HasPrefix(ref, "#") && !inResource {
+						problem = fmt.Sprintf("the schema at %s lies within the %s value at %s, which the bundle carries as written, so its same-document references cannot point into the bundle", root, token, within)
+						return false
+					}
+				}
+				return true
 			})
-			if rewritten {
-				return fmt.Sprintf("the schema at %s lies within the %s value at %s, which the bundle carries as written, so its same-document references cannot point into the bundle", root, token, holder+jsonpointer.Format(tokens[:i+1]...))
-			}
-			return ""
+			return problem
 		case schemaMapKeywords[token] || describedMapKeywords[token]:
 			names = true
 		}
@@ -449,15 +460,55 @@ func relativeReference(resource map[string]any, at string) string {
 
 // schemaBundle is a bundle and the locations copied into it.
 type schemaBundle struct {
-	copied   map[string]bool
+	copied   copyTrie
 	document map[string]any
+}
+
+// copyTrie holds copy locations by their reference tokens, so the copies
+// holding a location are found in time linear in it, however deep it lies.
+type copyTrie struct {
+	children map[string]*copyTrie
+	// copy is the location of the copy ending here, or "".
+	copy string
+}
+
+func (t *copyTrie) add(location string) {
+	tokens, _ := jsonpointer.Parse(location)
+	for _, token := range tokens {
+		if t.children == nil {
+			t.children = map[string]*copyTrie{}
+		}
+		next := t.children[token]
+		if next == nil {
+			next = &copyTrie{}
+			t.children[token] = next
+		}
+		t = next
+	}
+	t.copy = location
+}
+
+// forEachHolder calls fn for each copy at or above a location, outermost
+// first, with the reference tokens from it to the location, until fn returns
+// false.
+func (t *copyTrie) forEachHolder(location string, fn func(copy string, rest []string) bool) {
+	tokens, _ := jsonpointer.Parse(location)
+	for i := 0; t != nil; i++ {
+		if t.copy != "" && !fn(t.copy, tokens[i:]) {
+			return
+		}
+		if i == len(tokens) {
+			return
+		}
+		t = t.children[tokens[i]]
+	}
 }
 
 // bundle builds the bundle holding the copies at the given locations.
 func (o *operationSchemas) bundle(copied []string) schemaBundle {
-	b := schemaBundle{copied: map[string]bool{}}
+	var b schemaBundle
 	for _, at := range copied {
-		b.copied[at] = true
+		b.copied.add(at)
 	}
 	defs := make(map[string]any, len(copied))
 	for _, at := range copied {
@@ -527,20 +578,14 @@ func objectID(object map[string]any) uintptr {
 }
 
 // address returns the URI at which the bundle holds a document location: in
-// the copy holding it, found among the location's prefixes, shortest first,
-// since the bundle holds no copy within another.
+// the copy holding it. The bundle holds no copy within another.
 func (b schemaBundle) address(location string) (string, bool) {
-	for end := 0; end < len(location); {
-		if next := strings.IndexByte(location[end+1:], '/'); next < 0 {
-			end = len(location)
-		} else {
-			end += 1 + next
-		}
-		if at := location[:end]; b.copied[at] {
-			return bundleURI + "#" + fragment(jsonpointer.Format("$defs", at)+location[end:]), true
-		}
-	}
-	return "", false
+	address, found := "", false
+	b.copied.forEachHolder(location, func(copy string, rest []string) bool {
+		address, found = bundleURI+"#"+fragment(jsonpointer.Format("$defs", copy)+jsonpointer.Format(rest...)), true
+		return false
+	})
+	return address, found
 }
 
 // fragment writes a JSON Pointer as a URI fragment the way the schema library

@@ -74,8 +74,9 @@
   another operation's root holds. A schema a reference names within a
   `const` or `enum` value, which the bundle carries as written, or within
   `dependencies`, which it leaves out, now reaches no verdict with that
-  reason where it failed to compile (a `const`-held schema without
-  same-document references is evaluated).
+  reason where it failed to compile or was evaluated with keywords strict
+  2020-12 drops (a `const`-held schema without same-document references or
+  such keywords is evaluated).
 - **OBI-D-01 no longer depends on how encoding/json reads deep input.** One
   scan of the input checks JSON syntax, repeated names, lone surrogates, and
   the declared version, at any depth and with its own stack. Under
