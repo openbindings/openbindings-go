@@ -23,11 +23,17 @@
   `Extensions`/`Unknown` entry) holding what decoding refuses (an escaped
   lone UTF-16 surrogate, a repeated member name, invalid UTF-8, or nesting
   deeper than the decoder reads) now fails `MarshalJSON`, where encoding/json
-  wrote it out or altered it. `Interface.Validate` and the contract API judge
-  a host object's encoding, so such an object returned a verdict on a
-  different document: an example `"\ud800"` passed a `const` of U+FFFD. They
-  now return the encoding error and no report. A nil `Extensions` or
-  `Unknown` entry still encodes as `null`.
+  wrote it out or altered it. So does invalid UTF-8 in any typed string or
+  map key (a description, a schema's `const`, a member name), which
+  encoding/json replaced with U+FFFD and could merge two names into one; a
+  name held in both `Extensions` and `Unknown`, of which only one value could
+  be written; and any other bytes the encoding writes that decoding would
+  refuse, such as a schema value with its own `MarshalJSON`.
+  `Interface.Validate` and the contract API judge a host object's encoding,
+  so such an object returned a verdict on a different document: an example
+  `"\ud800"` passed a `const` of U+FFFD. They now return the encoding error
+  and no report. A nil `Extensions` or `Unknown` entry still encodes as
+  `null`.
 - **OBI-D-01 no longer depends on how encoding/json reads deep input.** One
   scan of the input checks JSON syntax, repeated names, lone surrogates, and
   the declared version, at any depth and with its own stack. Under

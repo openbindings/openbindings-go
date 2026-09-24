@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
@@ -34,9 +35,11 @@ import (
 // UTF-8, a duplicate member name in any object, and a string escaping a lone
 // UTF-16 surrogate, which a Go string cannot hold and encoding/json would
 // replace with U+FFFD. Members are matched by exact name, never case-folded.
-// Encoding refuses the same in the members the model carries as raw JSON (an
-// example value, source content, and the members LosslessFields keeps), so
-// the model encodes only what it would decode back unchanged.
+// Encoding refuses what would not decode back unchanged: invalid UTF-8 in any
+// string or name the model holds, which encoding/json would replace with
+// U+FFFD; a member name LosslessFields holds twice; and, in the bytes it
+// writes, anything decoding refuses. So the model encodes only what it would
+// decode back unchanged.
 
 // LosslessFields is embedded in every OBI-defined object type to carry the
 // members its typed fields do not: Extensions holds `x-` members (§12) and
@@ -45,8 +48,8 @@ import (
 //
 // An entry whose name is a typed member's name is never encoded: the typed
 // field alone states that member, so a nil field is absent whatever these maps
-// hold. Every other entry must hold JSON decoding would accept, or encoding
-// fails; a nil entry encodes as null.
+// hold. Every other entry must hold JSON decoding would accept, and a name
+// must not be in both maps, or encoding fails; a nil entry encodes as null.
 type LosslessFields struct {
 	// Extensions holds `x-` members. An entry whose name lacks the prefix is
 	// encoded all the same, and decodes into Unknown.
@@ -95,6 +98,7 @@ var (
 	rawMessageType      = reflect.TypeFor[json.RawMessage]()
 	int64PointerType    = reflect.TypeFor[*int64]()
 	transformType       = reflect.TypeFor[TransformOrRef]()
+	marshalerType       = reflect.TypeFor[json.Marshaler]()
 	verifiedDecoderType = reflect.TypeFor[verifiedDecoder]()
 	errNotJSONObject    = errors.New("not a JSON object")
 	errNullJSONObject   = errors.New("null is not an object")
@@ -306,26 +310,104 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyRawMembers(typed, lossless); err != nil {
 		return nil, err
 	}
+	if err := verifyStrings(typed, lossless); err != nil {
+		return nil, err
+	}
 	data, err := json.Marshal(typed)
 	if err != nil {
 		return nil, err
 	}
-	if len(lossless.Extensions) == 0 && len(lossless.Unknown) == 0 {
-		return data, nil
+	if len(lossless.Extensions) > 0 || len(lossless.Unknown) > 0 {
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(data, &members); err != nil {
+			return nil, err
+		}
+		typedNames := membersOf(reflect.TypeOf(typed)).typed
+		for _, carried := range []map[string]json.RawMessage{lossless.Unknown, lossless.Extensions} {
+			for name, raw := range carried {
+				if !typedNames[name] {
+					members[name] = raw
+				}
+			}
+		}
+		if data, err = json.Marshal(members); err != nil {
+			return nil, err
+		}
 	}
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(data, &members); err != nil {
-		return nil, err
+	// A value the model holds as any (a schema) can hold what the checks
+	// above do not reach, such as raw JSON or a type with its own encoding:
+	// what was written must decode back as written.
+	if err := verifyExactJSON(data); err != nil {
+		return nil, fmt.Errorf("the encoding is not one decoding accepts: %w", err)
 	}
-	typedNames := membersOf(reflect.TypeOf(typed)).typed
-	for _, carried := range []map[string]json.RawMessage{lossless.Unknown, lossless.Extensions} {
-		for name, raw := range carried {
-			if !typedNames[name] {
-				members[name] = raw
+	return data, nil
+}
+
+// verifyStrings refuses invalid UTF-8 in a string or a name an OBI-defined
+// object holds, which encoding/json would replace with U+FFFD, so the document
+// written would not be the one the model holds (two map keys could even become
+// one name). An OBI-defined object nested in another checks its own; a name
+// held in both Extensions and Unknown is refused too, since only one of its
+// values could be written.
+func verifyStrings(typed any, lossless LosslessFields) error {
+	value := reflect.ValueOf(typed)
+	for _, field := range membersOf(value.Type()).fields {
+		if below, invalid := invalidUTF8(value.Field(field.index)); invalid {
+			slices.Reverse(below)
+			return fmt.Errorf("%s: invalid UTF-8, which would not encode as held", strings.Join(append([]string{field.name}, below...), "/"))
+		}
+	}
+	for _, carried := range []map[string]json.RawMessage{lossless.Extensions, lossless.Unknown} {
+		for name := range carried {
+			if !utf8.ValidString(name) {
+				return fmt.Errorf("member %s: invalid UTF-8, which would not encode as held", strconv.Quote(name))
 			}
 		}
 	}
-	return json.Marshal(members)
+	for _, name := range slices.Sorted(maps.Keys(lossless.Extensions)) {
+		if _, twice := lossless.Unknown[name]; twice {
+			return fmt.Errorf("member %s is in both Extensions and Unknown", strconv.Quote(name))
+		}
+	}
+	return nil
+}
+
+// invalidUTF8 reports where, below a value, a string or map key holds invalid
+// UTF-8, as the reference tokens from the value, last first: the path is
+// spelled out only when one is found. It does not descend into a value that
+// encodes itself (an OBI-defined object, or raw JSON, which encodeObject
+// verifies as written).
+func invalidUTF8(v reflect.Value) ([]string, bool) {
+	if !v.IsValid() || (v.Kind() != reflect.Interface && v.Type().Implements(marshalerType)) {
+		return nil, false
+	}
+	switch v.Kind() {
+	case reflect.String:
+		return nil, !utf8.ValidString(v.String())
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() {
+			return nil, false
+		}
+		return invalidUTF8(v.Elem())
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if below, invalid := invalidUTF8(v.Index(i)); invalid {
+				return append(below, strconv.Itoa(i)), true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key()
+			if key.Kind() == reflect.String && !utf8.ValidString(key.String()) {
+				return []string{strconv.Quote(key.String())}, true
+			}
+			if below, invalid := invalidUTF8(iter.Value()); invalid {
+				return append(below, key.String()), true
+			}
+		}
+	}
+	return nil, false
 }
 
 // verifyRawMembers refuses a member an OBI-defined object carries as raw JSON,
