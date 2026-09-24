@@ -22,14 +22,16 @@ const schemaDepthLimit = 256
 type operationSchemas struct {
 	view    any
 	schemas documentSchemas
-	// resourcesIn holds the resources each OBI schema position holds.
+	// resourcesIn holds the resources each OBI schema position holds, and
+	// limits the resource limit each copy meets, once found.
 	resourcesIn map[string][]*schemaResource
+	limits      map[string]string
 	graph       schemaGraph
 	copies      copyGraph
 }
 
 func newOperationSchemas(view any, schemas documentSchemas) *operationSchemas {
-	o := &operationSchemas{view: view, schemas: schemas, resourcesIn: map[string][]*schemaResource{}}
+	o := &operationSchemas{view: view, schemas: schemas, resourcesIn: map[string][]*schemaResource{}, limits: map[string]string{}}
 	for _, location := range slices.Sorted(maps.Keys(schemas.at)) {
 		at := copiedAt(location)
 		o.resourcesIn[at] = append(o.resourcesIn[at], schemas.at[location])
@@ -226,6 +228,10 @@ func (o *operationSchemas) graphProblem(start string) string {
 // examine reads one schema's own keywords: where it leads, and what it holds.
 func (o *operationSchemas) examine(at string) schemaNode {
 	node := schemaNode{location: at}
+	if problem := o.limitProblem(copiedAt(at)); problem != "" {
+		node.local.problem = problem
+		return node
+	}
 	value, _ := jsonpointer.Resolve(o.view, at)
 	object, isObject := value.(map[string]any)
 	if !isObject {

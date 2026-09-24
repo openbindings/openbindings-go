@@ -87,11 +87,16 @@ func (c *copyGraph) analyze(o *operationSchemas) {
 			continue
 		}
 		node := copyNode{location: at, problem: o.copyProblem(at)}
-		forEachReference(mustResolve(o.view, at), at, func(holder, _, ref string) {
-			if target := o.schemas.resolve(ref, holder, o.view); target.origin == inDocument {
-				node.to = append(node.to, copiedAt(target.location))
-			}
-		})
+		if o.limitProblem(at) == "" {
+			// A copy meeting a resource limit is never bundled, so what it
+			// references is not needed, and reading it would do the work the
+			// limit refuses.
+			forEachReference(mustResolve(o.view, at), at, func(holder, _, ref string) {
+				if target := o.schemas.resolve(ref, holder, o.view); target.origin == inDocument {
+					node.to = append(node.to, copiedAt(target.location))
+				}
+			})
+		}
 		c.id[at] = len(c.copies)
 		c.copies = append(c.copies, node)
 		queue = append(queue, node.to...)
@@ -181,12 +186,19 @@ func forEachReference(value any, at string, fn func(holder, keyword, ref string)
 // outside the schema positions, an identity keyword, which only a schema
 // position declares (§7).
 func (o *operationSchemas) copyProblem(at string) string {
-	value := mustResolve(o.view, at)
-	if where, err := schemacompiler.NumericLimit(value); err != nil {
-		return fmt.Sprintf("the schema graph holds, at %s, %v", at+where, err)
+	if problem := o.limitProblem(at); problem != "" {
+		return problem
 	}
-	if schemaDepth(value) > schemaDepthLimit {
-		return fmt.Sprintf("the schema graph nests subschemas deeper than %d levels at %s", schemaDepthLimit, at)
+	value := mustResolve(o.view, at)
+	// The library checks what it is given against the meta-schema, but it is
+	// given the copy without the keywords strict 2020-12 drops; the document
+	// holds them, and they too must be well-formed.
+	if verr := compiledMetaSchema.Validate(value); verr != nil {
+		problems, mismatch := schemacompiler.Outcome(verr)
+		if !mismatch || len(problems) == 0 {
+			return fmt.Sprintf("the schema at %s could not be checked against the 2020-12 meta-schemas: %v", at, verr)
+		}
+		return fmt.Sprintf("the schema at %s is not a well-formed JSON Schema 2020-12 schema: %s: %s", at, at+jsonpointer.Format(problems[0].Location...), problems[0].Message)
 	}
 	var problems []string
 	var walk func(node any, location string)
@@ -238,6 +250,26 @@ func (o *operationSchemas) copyProblem(at string) string {
 		return ""
 	}
 	return slices.Min(problems)
+}
+
+// limitProblem states a resource limit a copied schema meets, or returns "":
+// a number beyond the numeric limits of schema evaluation, or nesting past
+// schemaDepthLimit, which the library crashes or stalls on (§10.5). It is
+// found once per copy, before the graph is walked into it, so the walk never
+// does work that grows with a depth the limit refuses.
+func (o *operationSchemas) limitProblem(at string) string {
+	if problem, found := o.limits[at]; found {
+		return problem
+	}
+	value := mustResolve(o.view, at)
+	problem := ""
+	if where, err := schemacompiler.NumericLimit(value); err != nil {
+		problem = fmt.Sprintf("the schema graph holds, at %s, %v", at+where, err)
+	} else if schemaDepth(value) > schemaDepthLimit {
+		problem = fmt.Sprintf("the schema graph nests subschemas deeper than %d levels at %s", schemaDepthLimit, at)
+	}
+	o.limits[at] = problem
+	return problem
 }
 
 func asObject(value any) map[string]any {
