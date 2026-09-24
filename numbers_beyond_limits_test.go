@@ -133,3 +133,31 @@ func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 		}
 	}
 }
+
+// A number the schema library only carries (in default, examples, or a
+// keyword it does not know) does not make a schema unavailable, however far
+// beyond the numeric limits it lies, even past what math/big reads. v6.0.3
+// reads a schema's numbers only as the values of the keywords that compare
+// or count (objcompiler.go) and a value's numbers only where a keyword
+// compares, counts, or tests equality (util.go, validator.go): never these.
+func TestValidateOperationInput_CarriedNumbersAreNeverRead(t *testing.T) {
+	const unreadable = "1e999999999999999"
+	for _, input := range []string{
+		`{"type":"string","default":` + unreadable + `}`,
+		`{"type":"string","examples":[` + unreadable + `]}`,
+		`{"type":"string","x-note":{"n":` + unreadable + `}}`,
+		`{"properties":{"a":{"type":"string","default":` + unreadable + `}}}`,
+		`{"$ref":"#/schemas/S"}`,
+	} {
+		document := `{"openbindings":"0.2.0","schemas":{"S":{"type":"string","default":` + unreadable + `}},
+			"operations":{"op":{"input":` + input + `,"examples":{"e":{"input":5}}}}}`
+		report := mustValidateDocument(t, document)
+		if report.Evidence["OBI-D-17"] != EvidenceSatisfied || report.Evidence["OBI-D-11"] == EvidenceInconclusive {
+			t.Errorf("%s: OBI-D-17 %s, OBI-D-11 %s; findings %+v", input, report.Evidence["OBI-D-17"], report.Evidence["OBI-D-11"], report.Findings)
+		}
+		iface := mustDecodeInterface(t, document)
+		if got := outcome(ValidateOperationInput(decodeValue(t, []byte(`"s"`)), iface, "op")); got != "valid" {
+			t.Errorf("%s: \"s\" gave %s", input, got)
+		}
+	}
+}

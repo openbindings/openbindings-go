@@ -13,10 +13,14 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
-// The numeric limits of schema evaluation. The backend parses numbers into
-// math/big values: toward these limits the work grows, and past what
-// math/big parses v6.0.3 dereferences nil or drops the keyword, so a value or
-// schema holding such a number is not handed to it.
+// The numeric limits of schema evaluation. The backend parses the numbers it
+// reads into math/big values: toward these limits the work grows, and past
+// what math/big parses v6.0.3 drops a schema keyword holding the number,
+// judges the number neither an integer nor equal to any other, or
+// dereferences nil. So a number beyond them is never handed to it where it
+// reads one: a value's is replaced by a stand-in (Substitute) or not
+// validated, and a schema that holds one where the backend reads it is not
+// compiled. A number the backend only carries, as in default, is harmless.
 const (
 	maxNumberLength   = 4096
 	maxNumberExponent = 10000
