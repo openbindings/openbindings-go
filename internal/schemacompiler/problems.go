@@ -97,6 +97,11 @@ func collect(ve *jsonschema.ValidationError) []Problem {
 		slices.Sort(messages)
 		location := append(slices.Clone(ve.InstanceLocation), k.Property)
 		return []Problem{{Location: location, Message: "invalid member name: " + strings.Join(messages, "; ")}}
+	case *kind.AdditionalProperties:
+		// The backend lists the members in map order; sorted, the same value
+		// gives the same message every time.
+		sorted := &kind.AdditionalProperties{Properties: slices.Sorted(slices.Values(k.Properties))}
+		return []Problem{{Location: ve.InstanceLocation, Message: sorted.LocalizedString(kindPrinter)}}
 	}
 	if len(ve.Causes) == 0 {
 		return []Problem{{Location: ve.InstanceLocation, Message: ve.ErrorKind.LocalizedString(kindPrinter)}}

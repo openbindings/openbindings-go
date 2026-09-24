@@ -235,45 +235,68 @@ func metaSchemaCacheKey(schema map[string]any) string {
 // that the examples conform. Operations and examples that are not objects
 // hold no example values.
 func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas documentSchemas) {
-	contracts := newOperationContracts(view, schemas)
+	o := newOperationSchemas(view, schemas)
+	type position struct {
+		path, name string
+		examples   map[string]any
+		provided   []string
+	}
+	var candidates []position
+	var paths []string
 	for _, opKey := range sortedKeys(operations) {
 		operation, _ := operations[opKey].(map[string]any)
 		examples, _ := operation["examples"].(map[string]any)
-		for _, position := range []string{"input", "output"} {
-			if _, specified := operation[position]; !specified {
+		for _, name := range []string{"input", "output"} {
+			if _, specified := operation[name]; !specified {
 				continue
 			}
 			var provided []string
 			for _, exampleKey := range sortedKeys(examples) {
-				if example, ok := examples[exampleKey].(map[string]any); ok && hasKey(example, position) {
+				if example, ok := examples[exampleKey].(map[string]any); ok && hasKey(example, name) {
 					provided = append(provided, exampleKey)
 				}
 			}
 			if len(provided) == 0 {
 				continue
 			}
-			path := jsonpointer.Format("operations", opKey, position)
-			compiled, outside, err := contracts.compile(opKey, position)
-			if outside != "" {
-				// The graph reaches outside the document.
-				continue
-			}
-			if err != nil {
-				c.inconclusive("OBI-D-11", path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", err))
-				continue
-			}
-			for _, exampleKey := range provided {
-				examplePath := jsonpointer.Format("operations", opKey, "examples", exampleKey, position)
-				var mismatch *SchemaValidationError
-				switch err := compiled.Validate(examples[exampleKey].(map[string]any)[position]); {
-				case err == nil:
-				case errors.As(err, &mismatch):
-					for _, problem := range mismatch.Problems {
-						c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+position+" schema: "+problem.Message)
-					}
-				default:
-					c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
+			path := jsonpointer.Format("operations", opKey, name)
+			candidates = append(candidates, position{path: path, name: name, examples: examples, provided: provided})
+			paths = append(paths, path)
+		}
+	}
+	o.analyze(paths)
+	var checked []position
+	var starts []string
+	for _, p := range candidates {
+		if f := o.facts(p.path); f.outside != "" || f.metaSchema != "" {
+			// The graph reaches outside the document.
+			continue
+		}
+		if problem := o.graphProblem(p.path); problem != "" {
+			c.inconclusive("OBI-D-11", p.path, "the schema graph could not be evaluated, so its examples were not checked: "+problem)
+			continue
+		}
+		checked = append(checked, p)
+		starts = append(starts, p.path)
+	}
+	results := o.compile(starts)
+	for _, p := range checked {
+		result := results[p.path]
+		if result.err != nil {
+			c.inconclusive("OBI-D-11", p.path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", result.err))
+			continue
+		}
+		for _, exampleKey := range p.provided {
+			examplePath := p.path[:strings.LastIndexByte(p.path, '/')] + jsonpointer.Format("examples", exampleKey, p.name)
+			var mismatch *SchemaValidationError
+			switch err := result.schema.Validate(p.examples[exampleKey].(map[string]any)[p.name]); {
+			case err == nil:
+			case errors.As(err, &mismatch):
+				for _, problem := range mismatch.Problems {
+					c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+p.name+" schema: "+problem.Message)
 				}
+			default:
+				c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
 			}
 		}
 	}
@@ -329,11 +352,17 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 	if err != nil {
 		return nil, err
 	}
-	compiled, _, err := newOperationContracts(view, collectDocumentSchemas(view)).compile(key, position)
-	if err != nil {
-		return nil, &SchemaGraphUnavailableError{Cause: err}
+	o := newOperationSchemas(view, collectDocumentSchemas(view))
+	path := jsonpointer.Format("operations", key, position)
+	o.analyze([]string{path})
+	if problem := o.graphProblem(path); problem != "" {
+		return nil, &SchemaGraphUnavailableError{Cause: errors.New(problem)}
 	}
-	return compiled, nil
+	result := o.compileAlone(path)
+	if result.err != nil {
+		return nil, &SchemaGraphUnavailableError{Cause: result.err}
+	}
+	return result.schema, nil
 }
 
 // ValidateOperationInput validates a value against an operation's input

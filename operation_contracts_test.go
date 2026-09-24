@@ -198,18 +198,23 @@ func TestOperationContracts_MetaSchemaCacheIsBounded(t *testing.T) {
 	}
 }
 
-// The keywords withheld from the library's root are JSON Schema's own,
-// deprecated ones included, and no OBI map but dependencies is among them.
-func TestSchemaKeywords(t *testing.T) {
-	for _, keyword := range []string{"type", "$defs", "$id", "dependencies", "definitions", "$recursiveRef", "description", "format"} {
-		if !schemaKeywords()[keyword] {
-			t.Errorf("%s is a keyword", keyword)
-		}
+// Evaluation positions are 2020-12's; definitions and dependencies are only
+// described by its meta-schema, so the document's shape rules walk them and
+// nothing else does.
+func TestKeywordTables(t *testing.T) {
+	schema := map[string]any{
+		"properties": map[string]any{"p": true}, "$defs": map[string]any{"d": true},
+		"definitions": map[string]any{"x": true}, "dependencies": map[string]any{"y": true},
+		"items": true, "allOf": []any{true},
 	}
-	for _, member := range []string{"openbindings", "name", "version", "schemas", "operations", "sources", "bindings", "transforms"} {
-		if schemaKeywords()[member] {
-			t.Errorf("%s is not a keyword", member)
-		}
+	var evaluated, described []string
+	forEachSubschema(schema, func(_ any, tokens ...string) { evaluated = append(evaluated, tokens[0]) })
+	forEachDescribedSubschema(schema, func(_ any, tokens ...string) { described = append(described, tokens[0]) })
+	if want := []string{"$defs", "allOf", "items", "properties"}; !slices.Equal(evaluated, want) {
+		t.Errorf("evaluation positions %v, want %v", evaluated, want)
+	}
+	if want := []string{"$defs", "allOf", "definitions", "dependencies", "items", "properties"}; !slices.Equal(described, want) {
+		t.Errorf("described positions %v, want %v", described, want)
 	}
 }
 
