@@ -116,6 +116,24 @@ func (c *copyGraph) analyze(o *operationSchemas) {
 		c.nodes = append(c.nodes, node)
 		queue = append(queue, node.to...)
 	}
+	// A root the bundle holds within a copy is compiled as that copy
+	// carries it, which copySchema decides.
+	var outsidePositions []string
+	for _, node := range c.nodes {
+		if at := node.location; copiedAt(at) == at && !atSchemaPosition(at) {
+			outsidePositions = append(outsidePositions, at)
+		}
+	}
+	for i := range c.nodes {
+		root := c.nodes[i].location
+		holders := slices.DeleteFunc(slices.Clone(outsidePositions), func(copy string) bool { return copy == root || !covers(copy, root) })
+		if copy := copiedAt(root); copy != root {
+			holders = append(holders, copy)
+		}
+		for _, holder := range holders {
+			c.nodes[i].problem = firstOf(c.nodes[i].problem, o.carriageProblem(holder, root))
+		}
+	}
 	for i := range c.nodes {
 		for _, at := range c.nodes[i].to {
 			c.nodes[i].edges = append(c.nodes[i].edges, c.id[at])
@@ -167,6 +185,40 @@ func outermost(set map[string]bool) []string {
 		}
 	}
 	return out
+}
+
+// carriageProblem states why a copy at holder cannot give the library the
+// schema at root, which lies within it, as a schema, or returns "": the copy
+// leaves out a keyword strict 2020-12 drops, and carries the value of const
+// and enum as written, so a schema within the one is absent and a schema
+// within the other keeps same-document references that point nowhere in the
+// bundle.
+func (o *operationSchemas) carriageProblem(holder, root string) string {
+	tokens, _ := jsonpointer.Parse(root[len(holder):])
+	names := false
+	for i, token := range tokens {
+		switch {
+		case names:
+			names = false
+		case strictlyExcluded[token]:
+			return fmt.Sprintf("the schema at %s lies within %s, which the bundle leaves out, as strict 2020-12 does not evaluate it", root, holder+jsonpointer.Format(tokens[:i+1]...))
+		case token == "const" || token == "enum":
+			if o.schemas.resourceAt(root) != nil {
+				return ""
+			}
+			rewritten := false
+			forEachSchemaReference(mustResolve(o.view, root), root, func(_, ref string) {
+				rewritten = rewritten || strings.HasPrefix(ref, "#")
+			})
+			if rewritten {
+				return fmt.Sprintf("the schema at %s lies within the %s value at %s, which the bundle carries as written, so its same-document references cannot point into the bundle", root, token, holder+jsonpointer.Format(tokens[:i+1]...))
+			}
+			return ""
+		case schemaMapKeywords[token] || describedMapKeywords[token]:
+			names = true
+		}
+	}
+	return ""
 }
 
 // forEachSchemaReference calls fn for every $ref and $dynamicRef the schemas
@@ -322,8 +374,9 @@ func numberComparison(schema any, at string) string {
 }
 
 // walkSchemaObjects calls fn for a schema object and each subschema object
-// the 2020-12 meta-schema describes within it, in sorted order, with the
-// reference tokens that reach it, until fn returns false.
+// a copy of it carries (the positions the 2020-12 meta-schema describes, but
+// for the keywords strict 2020-12 drops), in sorted order, with the reference
+// tokens that reach it, until fn returns false.
 func walkSchemaObjects(schema any, fn func(object map[string]any, path []string) bool) {
 	var path []string
 	more := true
@@ -337,6 +390,9 @@ func walkSchemaObjects(schema any, fn func(object map[string]any, path []string)
 			return
 		}
 		forEachDescribedSubschema(object, func(child any, tokens ...string) {
+			if strictlyExcluded[tokens[0]] {
+				return
+			}
 			path = append(path, tokens...)
 			walk(child)
 			path = path[:len(path)-len(tokens)]
@@ -471,9 +527,15 @@ func objectID(object map[string]any) uintptr {
 }
 
 // address returns the URI at which the bundle holds a document location: in
-// the copy holding it, found by the location's prefixes.
+// the copy holding it, found among the location's prefixes, shortest first,
+// since the bundle holds no copy within another.
 func (b schemaBundle) address(location string) (string, bool) {
-	for end := len(location); end > 0; end = strings.LastIndexByte(location[:end], '/') {
+	for end := 0; end < len(location); {
+		if next := strings.IndexByte(location[end+1:], '/'); next < 0 {
+			end = len(location)
+		} else {
+			end += 1 + next
+		}
 		if at := location[:end]; b.copied[at] {
 			return bundleURI + "#" + fragment(jsonpointer.Format("$defs", at)+location[end:]), true
 		}

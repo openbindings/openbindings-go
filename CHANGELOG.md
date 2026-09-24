@@ -69,7 +69,13 @@
   annotation's data, which no reference names, was read as a reference, and
   a target that is not a schema left the graph without a verdict where a
   mismatch was certain. Copying data an operation schema only carries took
-  time quadratic in its depth.
+  time quadratic in its depth. A schema compiled from two such roots is
+  judged as each holds it, so one operation no longer meets a problem only
+  another operation's root holds. A schema a reference names within a
+  `const` or `enum` value, which the bundle carries as written, or within
+  `dependencies`, which it leaves out, now reaches no verdict with that
+  reason where it failed to compile (a `const`-held schema without
+  same-document references is evaluated).
 - **OBI-D-01 no longer depends on how encoding/json reads deep input.** One
   scan of the input checks JSON syntax, repeated names, lone surrogates, and
   the declared version, at any depth and with its own stack. Under

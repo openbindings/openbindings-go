@@ -90,7 +90,9 @@ func firstOf(a, b string) string {
 // core finding it. $recursiveRef and dependencies are not 2020-12 keywords and
 // are not followed.
 type schemaGraph struct {
-	id    map[string]int
+	// id identifies a schema as compiled from a root: the same location
+	// compiled from two roots holds what each root holds.
+	id    map[compiledAt]int
 	nodes []schemaNode
 	// reached holds, per schema, the facts of its whole graph.
 	reached []graphFacts
@@ -111,6 +113,19 @@ type schemaNode struct {
 	local                         graphFacts
 }
 
+// compiledAt is a schema's location and the root it is compiled from.
+type compiledAt struct{ location, root string }
+
+// rootWithin returns the root the schema at a location is compiled from when
+// a schema compiled from root leads to it: root itself, when root's keywords
+// reach the location, and otherwise the location's own root.
+func rootWithin(root, location string) string {
+	if reachedByKeywords(root, location) {
+		return root
+	}
+	return rootOf(location)
+}
+
 // inPlaceKeywords apply their subschemas to the value their schema applies
 // to, as $ref and $dynamicRef apply their targets.
 var inPlaceKeywords = map[string]bool{
@@ -122,43 +137,35 @@ var inPlaceKeywords = map[string]bool{
 // hold, which facts then gives for each.
 func (o *operationSchemas) analyze(starts []string) {
 	g := &o.graph
-	*g = schemaGraph{id: map[string]int{}}
-	type schemaAt struct{ location, root string }
-	var queue []schemaAt
+	*g = schemaGraph{id: map[compiledAt]int{}}
+	var queue []compiledAt
 	for _, start := range starts {
-		queue = append(queue, schemaAt{start, rootOf(start)})
+		queue = append(queue, compiledAt{start, rootOf(start)})
 	}
 	for len(queue) > 0 {
 		next := queue[0]
 		queue = queue[1:]
-		if _, seen := g.id[next.location]; seen {
+		if _, seen := g.id[next]; seen {
 			continue
 		}
 		node := o.examine(next.location, next.root)
-		g.id[node.location] = len(g.nodes)
+		g.id[next] = len(g.nodes)
 		g.nodes = append(g.nodes, node)
 		for _, to := range slices.Concat(node.inPlaceTo, node.propertyNamesTo, node.advancingTo) {
-			// A subschema is compiled with the root of the schema holding it;
-			// a reference's target, from its own root, unless the root the
-			// graph is in reaches it too.
-			root := node.root
-			if !reachedByKeywords(root, to) {
-				root = rootOf(to)
-			}
-			queue = append(queue, schemaAt{to, root})
+			queue = append(queue, compiledAt{to, rootWithin(node.root, to)})
 		}
 	}
-	ids := func(locations []string) []int {
+	ids := func(root string, locations []string) []int {
 		out := make([]int, len(locations))
 		for i, at := range locations {
-			out[i] = g.id[at]
+			out[i] = g.id[compiledAt{at, rootWithin(root, at)}]
 		}
 		return out
 	}
 	for i := range g.nodes {
 		n := &g.nodes[i]
-		n.inPlace, n.propertyNames = ids(n.inPlaceTo), ids(n.propertyNamesTo)
-		n.edges = slices.Concat(n.inPlace, n.propertyNames, ids(n.advancingTo))
+		n.inPlace, n.propertyNames = ids(n.root, n.inPlaceTo), ids(n.root, n.propertyNamesTo)
+		n.edges = slices.Concat(n.inPlace, n.propertyNames, ids(n.root, n.advancingTo))
 		n.inPlaceTo, n.propertyNamesTo, n.advancingTo = nil, nil, nil
 	}
 
@@ -226,7 +233,7 @@ func (o *operationSchemas) analyze(starts []string) {
 // facts returns what the graph of the schema at start holds; start must have
 // been analyzed.
 func (o *operationSchemas) facts(start string) graphFacts {
-	f := o.graph.reached[o.graph.id[start]]
+	f := o.graph.reached[o.graph.id[compiledAt{start, rootOf(start)}]]
 	if f.dynamicRef && o.schemas.documentDynamicAnchor {
 		f.problem = firstOf(f.problem, "the graph holds a $dynamicRef, and a schema outside every resource declares $dynamicAnchor, which OBI-D-05 excludes")
 	}
@@ -405,14 +412,14 @@ func atSchemaPosition(location string) bool {
 
 // keywordPath reports whether reference tokens lead from a schema to a
 // subschema, each step a keyword holding one schema, or a keyword holding a
-// map or an array of them and then an entry. described admits the entries of
-// definitions and dependencies, which the 2020-12 meta-schema describes but
-// 2020-12 does not evaluate.
-func keywordPath(tokens []string, described bool) bool {
+// map or an array of them and then an entry. carried admits the entries of
+// the described keywords a copy carries, though 2020-12 does not evaluate
+// them: definitions, but not dependencies, which strict 2020-12 drops.
+func keywordPath(tokens []string, carried bool) bool {
 	i := 0
 	for i < len(tokens) {
 		switch keyword := tokens[i]; {
-		case schemaMapKeywords[keyword], arraySchemaKeywords[keyword], described && describedMapKeywords[keyword]:
+		case schemaMapKeywords[keyword], arraySchemaKeywords[keyword], carried && describedMapKeywords[keyword] && !strictlyExcluded[keyword]:
 			i += 2
 		case singleSchemaKeywords[keyword]:
 			i++
@@ -424,7 +431,7 @@ func keywordPath(tokens []string, described bool) bool {
 }
 
 // reachedByKeywords reports whether a location lies at or below from along
-// the subschema positions the 2020-12 meta-schema describes.
+// the subschema positions a copy of from carries (keywordPath).
 func reachedByKeywords(from, location string) bool {
 	if !covers(from, location) {
 		return false

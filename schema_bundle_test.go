@@ -212,21 +212,77 @@ func TestSchemasHeldInAnnotations(t *testing.T) {
 }
 
 // Data an operation schema only carries costs work in proportion to it,
-// however deeply it nests.
+// however deeply it nests, and so does a reference into it.
 func TestCarriedDataIsLinear(t *testing.T) {
-	build := func(depth int) *Interface {
-		return mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"x-note":`+strings.Repeat("[", depth)+"0"+strings.Repeat("]", depth)+`}}}}`)
-	}
-	small, large := build(2000), build(8000)
-	compile := func(i *Interface) func() {
-		return func() {
-			if _, err := CompileOperationSchema(i, "op", "input"); err != nil {
-				t.Fatal(err)
+	for _, referenced := range []bool{false, true} {
+		build := func(depth int) *Interface {
+			ref := ""
+			if referenced {
+				ref = `"$ref":"#/operations/op/input/x-note` + strings.Repeat("/0", depth) + `",`
+			}
+			return mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{`+ref+`"x-note":`+strings.Repeat("[", depth)+`{"type":"string"}`+strings.Repeat("]", depth)+`}}}}`)
+		}
+		small, large := build(2000), build(8000)
+		compile := func(i *Interface) func() {
+			return func() {
+				if _, err := CompileOperationSchema(i, "op", "input"); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
+		if ratio := float64(allocated(compile(large))) / float64(allocated(compile(small))); ratio > 6 {
+			t.Errorf("referenced %v: 4 times the depth allocated %.1f times the memory", referenced, ratio)
+		}
 	}
-	if ratio := float64(allocated(compile(large))) / float64(allocated(compile(small))); ratio > 6 {
-		t.Errorf("4 times the depth allocated %.1f times the memory", ratio)
+}
+
+// A schema compiled from two roots holds what each root holds: an operation
+// reaching it through its own root does not meet a problem of another root
+// that also holds it.
+func TestASchemaHeldByTwoRoots(t *testing.T) {
+	document := `{"openbindings":"0.2.0",
+		"schemas":{"M":{"$ref":"#/schemas/S/x-note/properties/p"},
+		           "S":{"x-note":{"pattern":"^(?=a)","properties":{"p":{"type":"string"}}}}},
+		"operations":{"a":{"input":{"$ref":"#/schemas/S/x-note"},"examples":{"e":{"input":"a"}}},
+		              "b":{"input":{"$ref":"#/schemas/M"},"examples":{"e":{"input":5}}}}}`
+	evidence := map[string]RuleEvidenceStatus{}
+	for _, f := range validateBytes(t, document).Findings {
+		if f.Rule == "OBI-D-11" {
+			evidence[strings.Split(f.Path, "/")[2]] = f.Status
+		}
+	}
+	if evidence["a"] != EvidenceInconclusive || evidence["b"] != EvidenceViolated {
+		t.Errorf("OBI-D-11 evidence %v", evidence)
+	}
+	iface := mustDecodeInterface(t, document)
+	if got := outcome(ValidateOperationInput(json.Number("5"), iface, "b")); got != "mismatch" {
+		t.Errorf("b: %s", got)
+	}
+	if got := outcome(ValidateOperationInput("a", iface, "a")); got != "unavailable" {
+		t.Errorf("a: %s", got)
+	}
+}
+
+// A schema a reference names within a value the bundle carries as written
+// (const, enum) or leaves out (dependencies) reaches no verdict where the
+// bundle cannot give it to the library as a schema, and is evaluated where it
+// can.
+func TestSchemasTheBundleCarriesAsWritten(t *testing.T) {
+	for _, c := range []struct {
+		schemas, input string
+		want, says     string
+	}{
+		{`"A":{"const":{"$ref":"#/schemas/T"}},"T":{"type":"string"}`, `{"$ref":"#/schemas/A/const"}`, "unavailable", "carries as written"},
+		{`"A":{"const":{"type":"string"}}`, `{"$ref":"#/schemas/A/const"}`, "mismatch", ""},
+		{`"A":{"enum":[{"type":"string"}]}`, `{"$ref":"#/schemas/A/enum/0"}`, "mismatch", ""},
+		{`"A":{"dependencies":{"x":{"type":"string"}}}`, `{"$ref":"#/schemas/A/dependencies/x"}`, "unavailable", "leaves out"},
+		{`"A":{"properties":{"const":{"type":"string"}}}`, `{"$ref":"#/schemas/A/properties/const"}`, "mismatch", ""},
+	} {
+		document := `{"openbindings":"0.2.0","schemas":{` + c.schemas + `},"operations":{"op":{"input":` + c.input + `}}}`
+		err := ValidateOperationInput(json.Number("5"), mustDecodeInterface(t, document), "op")
+		if got := outcome(err); got != c.want || c.says != "" && !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: got %s (%v), want %s", c.input, got, err, c.want)
+		}
 	}
 }
 
