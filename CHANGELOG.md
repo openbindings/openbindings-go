@@ -285,6 +285,22 @@
   at the whole document.
 ### Changed
 
+- **Transforms leave the core, and a binding carries content** (breaking,
+  pre-1.0), following the core draft. `BindingEntry.Selector` is now
+  `BindingEntry.Content`, a `json.RawMessage` the source's binding
+  specification defines: typically which target realizes the operation and
+  how values are adapted to it. `Interface.Transforms`,
+  `BindingEntry.InputTransform`, and `BindingEntry.OutputTransform` are gone,
+  as are `Transform`, `TransformOrRef`, `InlineTransform`,
+  `TransformReference`, `TransformEvaluator`, `ErrTransformNoResult`, and
+  `ErrTransformUndecided`: the core defines no transforms, so the SDK carries
+  no transform capability. `DocumentRules` no longer lists OBI-D-10, and
+  OBI-D-05 checks schema references only. A document carrying `transforms`,
+  `selector`, `inputTransform`, or `outputTransform` violates OBI-D-02, and
+  the document model keeps those members in `Unknown` for round-tripping.
+  This supersedes what the entries below say about transforms,
+  `TransformEvaluator`, and `selector`.
+
 - **An unprefixed field the core does not define is a violation**, following
   the core draft (§12): the embedded document schema closes the root and the
   operation, example, dependency, source, binding, and named-transform `$ref`

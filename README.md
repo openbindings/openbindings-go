@@ -23,11 +23,9 @@ and returns a `ValidationReport` in the vocabulary of
 [§10.5](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#105-conformance-conclusions):
 evidence for every document rule, located findings, OBI-T-02 diagnostics, and a
 conclusion of conformant, non-conformant, or conformance-undetermined.
-No document rule needs knowledge of a binding specification: a source's
-`content` and a binding's `selector` are the binding specification's to
-define, and no core rule judges them. Nor does any rule judge transform
-expression syntax: an expression that does not parse fails when it is
-evaluated (§5.5).
+No document rule needs knowledge of a binding specification: a source's and
+a binding's `content` are the binding specification's to define, and no core
+rule judges them.
 `Interface.Validate(options)` does the same for a document already in
 memory, where OBI-D-01 is inconclusive because a host object no longer
 carries the exact input bytes. The rules judge the JSON a document is, never
@@ -88,12 +86,11 @@ go get github.com/openbindings/openbindings-go
 ## What this SDK does
 
 - **Core types** for the OpenBindings interface document: operations,
-  dependencies, bindings, sources, transforms, and schemas
+  dependencies, bindings, sources, and schemas
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
 - **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
 - **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-16): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
-- **The transform capability** the specification names, as an interface an application implements: `TransformEvaluator` (§5.5, OBI-T-10). The SDK carries no transform engine; an application gives one implementation to every layer that evaluates transforms
 
 ## Quick start
 

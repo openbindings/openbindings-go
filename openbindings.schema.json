@@ -73,16 +73,6 @@
       "additionalProperties": {
         "$ref": "#/$defs/BindingEntry"
       }
-    },
-    "transforms": {
-      "type": "object",
-      "description": "Named transforms. Each value is a JSONata expression string (JSONata 2.1 per §5.5).",
-      "propertyNames": {
-        "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
-      },
-      "additionalProperties": {
-        "type": "string"
-      }
     }
   },
   "patternProperties": { "^x-": true },
@@ -234,8 +224,8 @@
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
           "description": "Source key from sources."
         },
-        "selector": {
-          "description": "Selection of the binding's target, as any JSON value the source's binding specification defines, including what its absence means. Member presence is distinct from value: selector carrying JSON null is a present member."
+        "content": {
+          "description": "What the binding carries for its source's binding specification, as any JSON value: typically which target realizes the operation and how values are adapted to it. The binding specification wholly defines it: whether it may be absent, which values it accepts, and what they mean. Member presence is distinct from value: content carrying JSON null is a present member."
         },
         "preference": {
           "type": "integer",
@@ -250,40 +240,10 @@
         "deprecated": {
           "type": "boolean",
           "description": "Author recommends migration away from this binding. Deprecation does not remove the binding or change what it declares; no ordering relationship with preference is mandated."
-        },
-        "inputTransform": {
-          "$ref": "#/$defs/TransformOrRef",
-          "description": "Per-value transform from a caller-facing operation input value toward the source's expected input representation."
-        },
-        "outputTransform": {
-          "$ref": "#/$defs/TransformOrRef",
-          "description": "Per-value transform from a source output value toward the operation's output contract."
         }
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false
-    },
-    "TransformOrRef": {
-      "oneOf": [
-        {
-          "type": "string",
-          "description": "An inline JSONata expression."
-        },
-        {
-          "type": "object",
-          "required": ["$ref"],
-          "properties": {
-            "$ref": {
-              "type": "string",
-              "pattern": "^#/transforms/[A-Za-z0-9_][A-Za-z0-9_.-]*$",
-              "description": "Same-document JSON Pointer reference in literal form to a named transform (e.g., '#/transforms/myTransform')."
-            }
-          },
-          "patternProperties": { "^x-": true },
-          "additionalProperties": false
-        }
-      ],
-      "description": "Either an inline JSONata expression or a reference to a named transform."
     }
   }
 }

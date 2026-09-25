@@ -27,12 +27,12 @@ const (
 )
 
 // documentRules is every document rule the core specification defines
-// (§10.2), in identifier order. OBI-D-13, OBI-D-14, OBI-D-15, and OBI-D-18
-// are retired (§10.6).
+// (§10.2), in identifier order. OBI-D-10, OBI-D-13, OBI-D-14, OBI-D-15, and
+// OBI-D-18 are retired (§10.6).
 var documentRules = []string{
 	"OBI-D-01", "OBI-D-02", "OBI-D-03", "OBI-D-04", "OBI-D-05", "OBI-D-06",
-	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-10", "OBI-D-11", "OBI-D-12",
-	"OBI-D-16", "OBI-D-17", "OBI-D-19",
+	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-11", "OBI-D-12", "OBI-D-16",
+	"OBI-D-17", "OBI-D-19",
 }
 
 // DocumentRules returns the identifiers of every document rule the core

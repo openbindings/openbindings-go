@@ -1,7 +1,6 @@
 package openbindings
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -51,7 +50,7 @@ func Present[T any](v T) *T { return &v }
 // Value returns the value of an optional member, or the zero value when the
 // member is absent. It suits a reader for whom absence and the zero value mean
 // the same thing, such as a description shown to a person; a reader for whom
-// they differ, as a binding specification's selector semantics do, tests for
+// they differ, as a binding specification's content semantics do, tests for
 // nil instead.
 func Value[T any](member *T) T {
 	if member == nil {
@@ -151,119 +150,26 @@ func (s Source) MarshalJSON() ([]byte, error) {
 	return encodeObject(sourceMembers(s), s.LosslessFields)
 }
 
-// Transform is a JSONata expression string in the transform language §5.5
-// pins. Tools that evaluate transforms do so under that language contract
-// (OBI-T-10).
-type Transform = string
-
-// TransformOrRef is a binding's inputTransform or outputTransform (§5.5): an
-// InlineTransform expression, or a *TransformReference naming an entry of the
-// document's transforms map. A nil TransformOrRef is an absent member. A
-// binding holding any other type that satisfies the interface, as one
-// embedding InlineTransform would, does not encode.
-type TransformOrRef interface {
-	// Resolve returns the JSONata expression the transform denotes: an inline
-	// expression itself, or the transforms entry a reference names. It
-	// reports false when a reference does not resolve.
-	Resolve(transforms map[string]Transform) (expression string, ok bool)
-
-	transformOrRef()
-}
-
-// InlineTransform is a transform written in place, as a JSONata expression.
-type InlineTransform string
-
-// Resolve returns the expression itself.
-func (t InlineTransform) Resolve(map[string]Transform) (string, bool) { return string(t), true }
-
-func (InlineTransform) transformOrRef() {}
-
-// TransformReference is the object form of a binding transform,
-// {"$ref": "#/transforms/<name>"}. Its members beyond $ref, extensions and
-// unknown fields alike, are preserved (§12, OBI-T-02).
-type TransformReference struct {
-	// Ref is the same-document fragment naming a transforms entry.
-	Ref string `json:"$ref"`
-
-	LosslessFields
-}
-
-type transformReferenceMembers TransformReference
-
-// Resolve returns the transforms entry Ref names.
-func (r *TransformReference) Resolve(transforms map[string]Transform) (string, bool) {
-	if r == nil {
-		return "", false
-	}
-	name, problem := transformReferenceName(r.Ref)
-	if problem != "" {
-		return "", false
-	}
-	expression, ok := transforms[name]
-	return expression, ok
-}
-
-func (*TransformReference) transformOrRef() {}
-
-func (r *TransformReference) UnmarshalJSON(b []byte) error {
-	return decodeExact(b, "transform reference", r)
-}
-
-func (r *TransformReference) decodeVerified(b []byte) error {
-	return decodeObject(b, "transform reference", (*transformReferenceMembers)(r))
-}
-
-func (r TransformReference) MarshalJSON() ([]byte, error) {
-	return encodeObject(transformReferenceMembers(r), r.LosslessFields)
-}
-
-// decodeTransform decodes a binding transform member: a string is an inline
-// expression, an object a reference.
-func decodeTransform(raw json.RawMessage) (TransformOrRef, error) {
-	trimmed := bytes.TrimSpace(raw)
-	switch {
-	case len(trimmed) > 0 && trimmed[0] == '"':
-		var expression string
-		if err := json.Unmarshal(trimmed, &expression); err != nil {
-			return nil, err
-		}
-		return InlineTransform(expression), nil
-	case len(trimmed) > 0 && trimmed[0] == '{':
-		reference := &TransformReference{}
-		if err := reference.decodeVerified(trimmed); err != nil {
-			return nil, err
-		}
-		return reference, nil
-	default:
-		return nil, fmt.Errorf("a transform is a JSONata expression string or a $ref object")
-	}
-}
-
 // BindingEntry is an author-declared realization of an operation through a
 // source (§5.3).
 type BindingEntry struct {
 	Operation string `json:"operation"`
 	Source    string `json:"source"`
-	// Selector selects the binding's target: any JSON value, carried as raw
-	// JSON because member presence is distinct from value (§5.3). Nil means
-	// the member is absent, which the governing binding specification gives
-	// its own meaning; the bytes `null` are a present null. An empty, non-nil
-	// json.RawMessage holds no value and encodes as absent. The core gives a
-	// selector no meaning; the source's binding specification defines which
-	// values it accepts and what they mean.
-	Selector json.RawMessage `json:"selector,omitempty"`
+	// Content is what the binding carries for its source's binding
+	// specification: any JSON value, typically which target realizes the
+	// operation and how values are adapted to it (§5.3). It is carried as raw
+	// JSON because member presence is distinct from value. Nil means the
+	// member is absent, which the governing binding specification gives its
+	// own meaning; the bytes `null` are a present null. An empty, non-nil
+	// json.RawMessage holds no value and encodes as absent. The core gives
+	// binding content no meaning; the source's binding specification defines
+	// which values it accepts and what they mean.
+	Content json.RawMessage `json:"content,omitempty"`
 	// Preference is the author's signed integer preference among bindings of
 	// the same operation, nil when absent (no preference, not zero).
 	Preference  *int64  `json:"preference,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Deprecated  *bool   `json:"deprecated,omitempty"`
-
-	// InputTransform maps each caller-facing input value toward the source's
-	// expected input representation (§5.5).
-	InputTransform TransformOrRef `json:"inputTransform,omitempty"`
-	// OutputTransform maps each source output value toward the operation's
-	// output contract (§5.5).
-	OutputTransform TransformOrRef `json:"outputTransform,omitempty"`
 
 	LosslessFields
 }
@@ -281,27 +187,11 @@ func (be *BindingEntry) decodeVerified(b []byte) error {
 }
 
 func (be BindingEntry) MarshalJSON() ([]byte, error) {
-	for _, member := range []struct {
-		name      string
-		transform TransformOrRef
-	}{{"inputTransform", be.InputTransform}, {"outputTransform", be.OutputTransform}} {
-		switch transform := member.transform.(type) {
-		case nil, InlineTransform:
-		case *TransformReference:
-			if transform == nil {
-				return nil, fmt.Errorf("binding: %s holds a nil *TransformReference, which is neither transform form", member.name)
-			}
-		default:
-			// A type embedding InlineTransform satisfies the interface but is
-			// neither form (§5.5).
-			return nil, fmt.Errorf("binding: %s holds a %T, which is neither transform form", member.name, transform)
-		}
-	}
 	return encodeObject(bindingEntryMembers(be), be.LosslessFields)
 }
 
 // DependencyEntry names an operation contract consumed at a local
-// consumption point (§5.6). BindingSpecs, when present, is an unordered any-of list
+// consumption point (§5.5). BindingSpecs, when present, is an unordered any-of list
 // of exact binding-specification identifiers accepted at that point. A nil
 // slice leaves the dependency unconstrained by binding family. Operation is
 // the canonical key of an operation in the same document.
@@ -343,9 +233,6 @@ type Interface struct {
 
 	Sources  map[string]Source       `json:"sources,omitzero"`
 	Bindings map[string]BindingEntry `json:"bindings,omitzero"`
-
-	// Transforms contains named transforms that can be referenced by bindings.
-	Transforms map[string]Transform `json:"transforms,omitzero"`
 
 	LosslessFields
 }

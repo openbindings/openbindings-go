@@ -34,7 +34,7 @@ type ValidateOptions struct{}
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
 // conformant or conformance undetermined. No rule takes binding-specification
-// knowledge: a source's content and a binding's selector are the binding
+// knowledge: a source's and a binding's content are the binding
 // specification's, and no core rule judges them. OBI-D-17 is inconclusive
 // for the subschemas a schema nests deeper than 256 levels, where the
 // meta-schema check meets a resource limit (§10.5).
@@ -226,13 +226,12 @@ func versionRefusalOf(version string) *VersionRefusalError {
 // Known members of each OBI-defined object, for OBI-T-02's diagnostics, are
 // the typed members of the document model.
 var (
-	rootMembersKnown         = membersOf(reflect.TypeFor[Interface]()).typed
-	operationMembersKnown    = membersOf(reflect.TypeFor[Operation]()).typed
-	exampleMembersKnown      = membersOf(reflect.TypeFor[OperationExample]()).typed
-	dependencyMembersKnown   = membersOf(reflect.TypeFor[DependencyEntry]()).typed
-	sourceMembersKnown       = membersOf(reflect.TypeFor[Source]()).typed
-	bindingMembersKnown      = membersOf(reflect.TypeFor[BindingEntry]()).typed
-	transformRefMembersKnown = membersOf(reflect.TypeFor[TransformReference]()).typed
+	rootMembersKnown       = membersOf(reflect.TypeFor[Interface]()).typed
+	operationMembersKnown  = membersOf(reflect.TypeFor[Operation]()).typed
+	exampleMembersKnown    = membersOf(reflect.TypeFor[OperationExample]()).typed
+	dependencyMembersKnown = membersOf(reflect.TypeFor[DependencyEntry]()).typed
+	sourceMembersKnown     = membersOf(reflect.TypeFor[Source]()).typed
+	bindingMembersKnown    = membersOf(reflect.TypeFor[BindingEntry]()).typed
 )
 
 // checkDocument records evidence for OBI-D-02 through OBI-D-19 on the generic
@@ -261,12 +260,6 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 	operations, _ := root["operations"].(map[string]any)
 	d.checkOperations(operations)
 	d.checkDuplicateIDs()
-
-	transforms, _ := root["transforms"].(map[string]any)
-	for _, key := range sortedKeys(transforms) {
-		path := jsonpointer.Format("transforms", key)
-		validateIdent(c, path, key)
-	}
 
 	dependencies, _ := root["dependencies"].(map[string]any)
 	for _, key := range sortedKeys(dependencies) {
@@ -299,11 +292,6 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 		}
 		d.checkReference(binding, path, "operation", "OBI-D-08", operations, "operation key")
 		d.checkReference(binding, path, "source", "OBI-D-09", sources, "source")
-		for _, member := range []string{"inputTransform", "outputTransform"} {
-			if value, present := binding[member]; present {
-				d.checkBindingTransform(jsonpointer.Format("bindings", key, member), value, transforms)
-			}
-		}
 		diagnoseUnknownFields(c, path, binding, bindingMembersKnown)
 	}
 
@@ -418,34 +406,6 @@ func (d *documentCheck) checkSchema(path string, schema any) {
 	d.walkSchema(&schemaPath{start: path}, schema, false, false)
 }
 
-// checkBindingTransform records evidence for a binding's inputTransform or
-// outputTransform written as a named-transform $ref: a same-document fragment
-// in literal form (OBI-D-05) that resolves into the transforms map
-// (OBI-D-10). An inline expression's syntax is no document rule (§5.5), and a
-// value that is neither form is outside both rules.
-func (d *documentCheck) checkBindingTransform(path string, value any, transforms map[string]any) {
-	switch transform := value.(type) {
-	case map[string]any:
-		refPath := path + jsonpointer.Format("$ref")
-		if value, present := transform["$ref"]; present {
-			ref, ok := value.(string)
-			switch {
-			case !ok:
-				d.c.violated("OBI-D-05", refPath, fmt.Sprintf("a named-transform $ref is a same-document fragment string; got %s", jsonTypeName(value)))
-				d.c.violated("OBI-D-10", refPath, "names no transforms entry")
-			default:
-				if problem := literalFragmentProblem(ref); problem != "" {
-					d.c.violated("OBI-D-05", refPath, problem)
-				}
-				if problem := transformRefProblem(ref, transforms); problem != "" {
-					d.c.violated("OBI-D-10", refPath, problem)
-				}
-			}
-		}
-		diagnoseUnknownFields(d.c, path, transform, transformRefMembersKnown)
-	}
-}
-
 // literalFragmentProblem states why ref is not a same-document fragment in
 // JSON Pointer form and literal form (§7), or returns "" when it is one.
 func literalFragmentProblem(ref string) string {
@@ -498,19 +458,6 @@ func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, kn
 		noun = "field"
 	}
 	c.diagnose("OBI-T-02", path, fmt.Sprintf("unknown %s ignored: %s; extensions use the x- prefix", noun, strings.Join(unknown, ", ")))
-}
-
-// transformRefProblem states why a named-transform $ref does not resolve to a
-// key in the document's transforms map (OBI-D-10), or returns "" when it does.
-func transformRefProblem(ref string, transforms map[string]any) string {
-	name, problem := transformReferenceName(ref)
-	if problem != "" {
-		return problem
-	}
-	if _, ok := transforms[name]; !ok {
-		return fmt.Sprintf("references unknown transform %q", name)
-	}
-	return ""
 }
 
 // identPattern enforces OBI-D-03: every map key and every operation alias must

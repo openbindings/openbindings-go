@@ -163,11 +163,11 @@ func containsProblem(err error, want string) bool {
 }
 
 // A source is its binding specification's identifier and optional content the
-// core gives no meaning (§5.4), and a selector is any JSON value its binding
-// specification defines (§5.3): a source without content, content and
-// selectors of every JSON type, and anything within them, relative addresses
-// and $ref members included, break no core rule.
-func TestInterfaceValidate_ContentAndSelectorAreTheBindingSpecifications(t *testing.T) {
+// core gives no meaning (§5.4), and a binding's content is likewise any JSON
+// value its source's binding specification defines (§5.3): a source without
+// content, source and binding content of every JSON type, and anything within
+// them, relative addresses and $ref members included, break no core rule.
+func TestInterfaceValidate_SourceAndBindingContentAreTheBindingSpecifications(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"a": {}},
@@ -179,14 +179,14 @@ func TestInterfaceValidate_ContentAndSelectorAreTheBindingSpecifications(t *test
 		},
 		Bindings: map[string]BindingEntry{
 			"a.bare":     {Operation: "a", Source: "bare"},
-			"a.null":     {Operation: "a", Source: "null", Selector: json.RawMessage(`null`)},
-			"a.relative": {Operation: "a", Source: "relative", Selector: json.RawMessage(`{"$ref":"other.json"}`)},
-			"a.text":     {Operation: "a", Source: "text", Selector: json.RawMessage(`["a",1,true]`)},
+			"a.null":     {Operation: "a", Source: "null", Content: json.RawMessage(`null`)},
+			"a.relative": {Operation: "a", Source: "relative", Content: json.RawMessage(`{"$ref":"other.json"}`)},
+			"a.text":     {Operation: "a", Source: "text", Content: json.RawMessage(`["a",1,true]`)},
 		},
 	}
 	report, err := i.Validate(ValidateOptions{})
 	if err != nil {
-		t.Fatalf("content and selectors are the binding specification's, got %v", err)
+		t.Fatalf("source and binding content are the binding specification's, got %v", err)
 	}
 	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
 		t.Fatalf("only OBI-D-01, decided on bytes, may be inconclusive for a host object, got %v", report.Inconclusive)
@@ -455,32 +455,6 @@ func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.2.0",
-		Operations: map[string]Operation{
-			"op": {},
-		},
-		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1"},
-		},
-		Bindings: map[string]BindingEntry{
-			"op.api": {
-				Operation:      "op",
-				Source:         "api",
-				InputTransform: &TransformReference{Ref: "#/transforms/nonexistent"},
-			},
-		},
-	}
-	_, err := i.Validate(ValidateOptions{})
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !containsProblem(err, `/bindings/op.api/inputTransform/$ref: references unknown transform "nonexistent" (OBI-D-10)`) {
-		t.Fatalf("expected transform ref error, got %v", err)
-	}
-}
-
 func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
@@ -525,31 +499,6 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	}
 	if !containsProblem(err, `/bindings/op.nonexistent/source: references unknown source "nonexistent" (OBI-D-09)`) {
 		t.Fatalf("expected source ref error, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.2.0",
-		Operations: map[string]Operation{
-			"pay": {},
-		},
-		Transforms: map[string]Transform{
-			"toApi": "{ amount: total * 100 }",
-		},
-		Sources: map[string]Source{
-			"stripe": {BindingSpec: "openapi@3.1"},
-		},
-		Bindings: map[string]BindingEntry{
-			"pay.stripe": {
-				Operation:      "pay",
-				Source:         "stripe",
-				InputTransform: &TransformReference{Ref: "#/transforms/toApi"},
-			},
-		},
-	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
-		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
@@ -761,29 +710,21 @@ func TestParseDocument_UnknownTopLevelFieldViolatesD02(t *testing.T) {
 	}
 }
 
-func TestParseDocument_TransformRefWithExtensionKeyValidates_OBI_T_03(t *testing.T) {
-	// OBI-T-03: x- prefixed fields are extensions and must not fail
-	// validation; the v0.2.0 schema allows additional properties on the
-	// transform $ref object form.
-	doc := []byte(`{
-		"openbindings": "0.2.0",
-		"operations": {"op": {}},
-		"transforms": {"t": "$.payload"},
-		"sources": {"api": {"bindingSpec": "openbindings.openapi-3.1@1"}},
-		"bindings": {
-			"op.api": {
-				"operation": "op",
-				"source": "api",
-				"inputTransform": {"$ref": "#/transforms/t", "x-note": "hi"}
-			}
+func TestParseDocument_RemovedTransformMembersViolateOBI_D_02(t *testing.T) {
+	// The core defines no transforms and a binding carries content, not a
+	// selector (§5.3): the draft's transforms map and binding selector and
+	// transform members are unprefixed names the specification does not
+	// define, so each makes the document non-conformant (§12).
+	for member, doc := range map[string]string{
+		"transforms":      `{"openbindings":"0.2.0","operations":{"op":{}},"transforms":{"t":"$.payload"}}`,
+		"selector":        `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","selector":"#/paths/~1op/get"}}}`,
+		"inputTransform":  `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","inputTransform":"$"}}}`,
+		"outputTransform": `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","outputTransform":{"$ref":"#/transforms/t"}}}}`,
+	} {
+		var violation *ValidationError
+		if _, err := ParseDocument([]byte(doc)); !errors.As(err, &violation) || !strings.Contains(err.Error(), member) || !strings.Contains(err.Error(), "OBI-D-02") {
+			t.Fatalf("%s: want an OBI-D-02 violation naming it, got %v", member, err)
 		}
-	}`)
-	iface, err := ParseDocument(doc)
-	if err != nil {
-		t.Fatalf("expected transform $ref with x- key to parse, got %v", err)
-	}
-	if _, err := iface.Validate(ValidateOptions{}); err != nil {
-		t.Fatalf("expected transform $ref with x- key to validate (OBI-T-03), got %v", err)
 	}
 }
 
