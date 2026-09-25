@@ -36,7 +36,11 @@ type TransformEvaluator interface {
 	// map[string]any. Every other outcome is a transform-evaluation failure
 	// (clause 4): an expression that yields no result returns an error
 	// wrapping ErrTransformNoResult; a syntax error, a dynamic error, or a
-	// result that is not a JSON value returns any other error.
+	// result that is not a JSON value returns any other error. The language's
+	// meaning applies to the values given, evaluated natively: where the
+	// implementation cannot compute it, such as a number beyond its range or
+	// precision, it returns an error wrapping ErrTransformUndecided, never a
+	// different value (§5.5 clause 2).
 	Evaluate(ctx context.Context, expression string, input any, bindings map[string]any) (any, error)
 }
 

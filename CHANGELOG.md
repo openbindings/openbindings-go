@@ -285,15 +285,20 @@
   at the whole document.
 ### Changed
 
-- **A value a schema `$ref` resolves to is judged as a schema.** OBI-D-17
-  now covers every value a `$ref` at an OBI position resolves to within the
-  document, wherever it sits, following the core draft: a reference to the
-  document's `name` string, or to a schema inside `x-` data that is malformed,
-  declares another dialect, or holds `$vocabulary`, is a violation at the
-  reference, where the document was conformant. A target at
-  a schema position is judged where it sits, and a target many references
-  reach is checked once. The transform capability's doc calls the values a
-  binding specification supplies "variable bindings", as the draft does.
+- **A schema `$ref` reaches only a schema the document model places**,
+  following the core draft. A `$ref` at an OBI position that resolves to the
+  document itself (`#`), a string, `x-` data, a source's `content`, an
+  annotation, `const`, `enum`, or a legacy `definitions` or `dependencies`
+  entry violates OBI-D-16, as does a same-document pointer into a schema
+  resource that declares its own `$id` (reach it through its `$id`); a
+  schemas entry declaring `$id` is still reachable as `#/schemas/<name>`.
+  Contract validation reports such a graph unavailable instead of evaluating
+  the value as a schema, since JSON Schema 2020-12 leaves those targets
+  undefined. Two schema resources declaring the same `$id` violate OBI-D-05
+  at each declaration. The transform capability's doc calls the values a
+  binding specification supplies "variable bindings", as the draft does, and
+  says an evaluator that cannot compute an expression's meaning for the
+  values given returns an error, never a different value.
 
 - **A source is its binding specification's identifier and the content that
   specification defines** (breaking, pre-1.0), following the core

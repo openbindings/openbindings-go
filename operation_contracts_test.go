@@ -56,17 +56,17 @@ func TestOperationContracts_DependenciesAreNotSchemas(t *testing.T) {
 	}
 }
 
-// A same-document reference into any root member not named like a schema
-// keyword resolves, for validation as for OBI-D-16.
-func TestOperationContracts_ReferencesIntoUnknownMembersResolve(t *testing.T) {
+// A same-document reference into a root member the document model does not
+// define reaches no schema: OBI-D-16 is violated, and a value gets no verdict.
+func TestOperationContracts_ReferencesIntoUnknownMembersReachNoSchema(t *testing.T) {
 	document := `{"openbindings":"0.2.0","defs":{"S":{"type":"string"}},
 		"operations":{"a":{"input":{"$ref":"#/defs/S"},"examples":{"e":{"input":5}}}}}`
 	report := validateBytes(t, document)
-	if report.Evidence["OBI-D-16"] != EvidenceSatisfied || report.Evidence["OBI-D-11"] != EvidenceViolated {
+	if report.Evidence["OBI-D-16"] != EvidenceViolated || report.Evidence["OBI-D-11"] != EvidenceInconclusive {
 		t.Fatalf("OBI-D-16 %q, OBI-D-11 %q", report.Evidence["OBI-D-16"], report.Evidence["OBI-D-11"])
 	}
-	if err := ValidateOperationInput("x", mustDecodeInterface(t, document), "a"); err != nil {
-		t.Fatal(err)
+	if got := outcome(ValidateOperationInput("x", mustDecodeInterface(t, document), "a")); got != "unavailable" {
+		t.Fatalf("got %s", got)
 	}
 }
 
@@ -86,8 +86,8 @@ func TestOperationContracts_NumericLimitsCoverOnlyTheReachableGraph(t *testing.T
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	reached := mustDecodeInterface(t, `{"openbindings":"0.2.0","x-lib":{"S":{"maximum":1e10001}},"operations":{"op":{"input":{"$ref":"#/x-lib/S"}}}}`)
-	if err := ValidateOperationInput(1, reached, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) || !strings.Contains(err.Error(), "/x-lib/S/maximum") {
+	reached := mustDecodeInterface(t, `{"openbindings":"0.2.0","schemas":{"S":{"maximum":1e10001}},"operations":{"op":{"input":{"$ref":"#/schemas/S"}}}}`)
+	if err := ValidateOperationInput(1, reached, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) || !strings.Contains(err.Error(), "/schemas/S/maximum") {
 		t.Fatalf("a reached schema beyond the limits leaves no verdict, located: %v", err)
 	}
 }

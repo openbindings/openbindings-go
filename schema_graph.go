@@ -397,12 +397,6 @@ func gather(component []int, count int, successors func(int) []int, value func(i
 // schema position, or reached from one through the positions 2020-12
 // evaluates.
 func atSchemaPosition(location string) bool {
-	return belowSchemaPosition(location, false)
-}
-
-// belowSchemaPosition reports whether a location is an OBI schema position or
-// reached from one along a keyword path; carried is as for keywordPath.
-func belowSchemaPosition(location string, carried bool) bool {
 	tokens, _ := jsonpointer.Parse(location)
 	var i int
 	switch {
@@ -413,7 +407,7 @@ func belowSchemaPosition(location string, carried bool) bool {
 	default:
 		return false
 	}
-	return keywordPath(tokens[i:], carried)
+	return keywordPath(tokens[i:], false)
 }
 
 // keywordPath reports whether reference tokens lead from a schema to a
@@ -448,8 +442,8 @@ func reachedByKeywords(from, location string) bool {
 
 // rootOf returns the root the schema library compiles the schema at a
 // location from: the copy holding it (copiedAt), when the copy's keywords
-// reach it, or the location itself, as for a schema a reference names in an
-// annotation, which the library compiles as a schema of its own.
+// reach it, or the location itself, which is then no schema position, so the
+// root has a problem (rootProblem) and its graph reaches no verdict.
 func rootOf(location string) string {
 	if copy := copiedAt(location); reachedByKeywords(copy, location) {
 		return copy

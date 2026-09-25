@@ -507,40 +507,59 @@ func TestValidateDocument_ReferencesFollowTheURIGrammar(t *testing.T) {
 }
 
 // OBI-D-16 covers an absolute $ref that matches an embedded schema's $id.
-// A value a schema $ref at an OBI position resolves to is read as a schema,
-// wherever it sits, so OBI-D-17 judges it by its value: a finding at each
-// reference to one that is not well-formed, none for one that is, and none
-// added for a target at a schema position, which is judged where it sits.
-func TestValidateDocument_ReferenceTargetsAreWellFormedSchemas(t *testing.T) {
-	d17 := func(document string) []Finding {
+// A schema $ref at an OBI position resolves only to a schema the document
+// model places (OBI-D-16): a same-document fragment to a schema at an OBI
+// position outside every resource declaring its own $id, and an absolute
+// reference through an embedded $id to that schema or a subschema below it.
+// JSON Schema 2020-12 leaves any other target undefined (§9.4.2) and advises
+// against pointers into an embedded resource (§9.2.1).
+func TestValidateDocument_ReferencesReachSchemaPlaces(t *testing.T) {
+	d16 := func(document string) []Finding {
 		var out []Finding
 		for _, finding := range mustValidateDocument(t, document).Findings {
-			if finding.Rule == "OBI-D-17" {
+			if finding.Rule == "OBI-D-16" {
 				out = append(out, finding)
 			}
 		}
 		return out
 	}
-	if got := d17(`{"openbindings":"0.2.0","name":"Task Manager","operations":{"a":{"input":{"$ref":"#/name"}}}}`); len(got) != 1 || got[0].Path != "/operations/a/input/$ref" || !strings.Contains(got[0].Message, "resolves to /name") {
-		t.Fatalf("a $ref to a string: want one OBI-D-17 finding at the reference, got %+v", got)
+	for name, document := range map[string]string{
+		"the document root":          `{"openbindings":"0.2.0","operations":{"a":{"input":{"$ref":"#"}}}}`,
+		"a string":                   `{"openbindings":"0.2.0","name":"Task Manager","operations":{"a":{"input":{"$ref":"#/name"}}}}`,
+		"x- data":                    `{"openbindings":"0.2.0","x-s":{"T":{"type":"object"}},"operations":{"a":{"input":{"$ref":"#/x-s/T"}}}}`,
+		"a legacy definitions entry": `{"openbindings":"0.2.0","schemas":{"T":{"definitions":{"I":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/definitions/I"}}}}`,
+		"into a resource":            `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/properties/i"}}}}`,
+		"a non-schema in a resource": `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","x":1}},"operations":{"a":{"input":{"$ref":"https://e.com/t#/x"}}}}`,
+	} {
+		if got := d16(document); len(got) != 1 || got[0].Path != "/operations/a/input/$ref" {
+			t.Errorf("%s: want one OBI-D-16 finding at the reference, got %+v", name, got)
+		}
 	}
-	if got := d17(`{"openbindings":"0.2.0","x-s":{"B":{"type":42}},"operations":{"a":{"input":{"$ref":"#/x-s/B"},"output":{"$ref":"#/x-s/B"}}}}`); len(got) != 2 || got[0].Path == got[1].Path {
-		t.Fatalf("two references to one malformed target: want a finding at each, got %+v", got)
+	for name, document := range map[string]string{
+		"another operation's input":                 `{"openbindings":"0.2.0","operations":{"a":{"input":{"type":"object"}},"b":{"input":{"$ref":"#/operations/a/input"}}}}`,
+		"a subschema":                               `{"openbindings":"0.2.0","schemas":{"T":{"properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/properties/i"}}}}`,
+		"a subschema by $id":                        `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"https://e.com/t#/properties/i"}}}}`,
+		"a resource by $id":                         `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t"}},"operations":{"a":{"input":{"$ref":"https://e.com/t"}}}}`,
+		"a schemas entry declaring $id, by pointer": `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t"}},"operations":{"a":{"input":{"$ref":"#/schemas/T"}}}}`,
+	} {
+		if got := d16(document); len(got) != 0 {
+			t.Errorf("%s: want no OBI-D-16 finding, got %+v", name, got)
+		}
 	}
-	if got := d17(`{"openbindings":"0.2.0","x-s":{"O":{"$schema":"https://json-schema.org/draft/2019-09/schema"}},"operations":{"a":{"input":{"$ref":"#/x-s/O"}}}}`); len(got) != 1 || !strings.Contains(got[0].Message, "2020-12 dialect") {
-		t.Fatalf("a target declaring another dialect: want one finding, got %+v", got)
+}
+
+// No two schema resources declare the same $id (OBI-D-05; JSON Schema
+// 2020-12 §9.1.2): each declaration is a finding.
+func TestValidateDocument_DuplicateIDsViolateD05(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"A":{"$id":"https://e.com/t"},"B":{"$id":"https://e.com/t"}},"operations":{}}`)
+	var paths []string
+	for _, finding := range report.Violations() {
+		if finding.Rule == "OBI-D-05" {
+			paths = append(paths, finding.Path)
+		}
 	}
-	if got := d17(`{"openbindings":"0.2.0","x-s":{"V":{"properties":{"a":{"$vocabulary":{}}}}},"operations":{"a":{"input":{"$ref":"#/x-s/V"}}}}`); len(got) != 1 || !strings.Contains(got[0].Message, "/x-s/V/properties/a") {
-		t.Fatalf("a target holding a nested $vocabulary: want one finding naming it, got %+v", got)
-	}
-	if got := d17(`{"openbindings":"0.2.0","x-s":{"T":{"type":"object"}},"operations":{"a":{"input":{"$ref":"#/x-s/T"}}}}`); len(got) != 0 {
-		t.Fatalf("a well-formed target outside the schema positions: want no finding, got %+v", got)
-	}
-	if got := d17(`{"openbindings":"0.2.0","schemas":{"A":{"type":42}},"operations":{"a":{"input":{"$ref":"#/schemas/A"}}}}`); len(got) != 1 || got[0].Path != "/schemas/A/type" {
-		t.Fatalf("a malformed target at a schema position: want only the finding where it sits, got %+v", got)
-	}
-	if got := d17(`{"openbindings":"0.2.0","schemas":{"S":{"$id":"https://e.com/s","x":1}},"operations":{"a":{"input":{"$ref":"https://e.com/s#/x"}}}}`); len(got) != 1 || !strings.Contains(got[0].Message, "resolves to /schemas/S/x") {
-		t.Fatalf("an absolute reference into an embedded resource reaching a number: want one finding, got %+v", got)
+	if !reflect.DeepEqual(paths, []string{"/schemas/A/$id", "/schemas/B/$id"}) {
+		t.Fatalf("want an OBI-D-05 finding at each declaration, got %v; findings %+v", paths, report.Findings)
 	}
 }
 
