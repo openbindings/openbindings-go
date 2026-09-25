@@ -701,21 +701,3 @@ func (b schemaBundle) copiedLocation(tokens []string) (location, copied string) 
 	}
 	return tokens[1] + jsonpointer.Format(tokens[2:]...), tokens[1]
 }
-
-// location returns the document location a bundle URI names, or the URI when
-// it names none.
-func (b schemaBundle) location(uri string) string {
-	resource, encoded, _ := strings.Cut(uri, "#")
-	if resource != bundleURI {
-		return uri
-	}
-	pointer, err := url.PathUnescape(encoded)
-	if err != nil {
-		return uri
-	}
-	tokens, ok := jsonpointer.Parse(pointer)
-	if !ok || len(tokens) < 2 || tokens[0] != "$defs" {
-		return uri
-	}
-	return tokens[1] + jsonpointer.Format(tokens[2:]...)
-}
