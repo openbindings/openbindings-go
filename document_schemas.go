@@ -13,43 +13,127 @@ import (
 )
 
 // documentSchemas is what an OBI document holds as schema resources (§5.2,
-// §7): every schema at an OBI schema position, or a subschema of one, that
-// declares its own $id. The rest of the document is not a schema, whatever
-// its members are named, and declares no resource.
+// §7): every schema at a schema position that declares its own $id. A schema
+// position is an OBI schema position (an operation's input or output, or an
+// entry of schemas) or a subschema of one, as JSON Schema 2020-12 evaluates
+// subschemas (forEachSubschema). The rest of the document is not a schema,
+// whatever its members are named, and declares no resource.
 type documentSchemas struct {
-	// resources maps the absolute URI of every embedded schema resource,
-	// without fragment, to where it is.
-	resources map[string]schemaResource
+	// at maps the location of every resource to it.
+	at map[string]*schemaResource
+	// resources maps the absolute URI of every resource that one schema alone
+	// declares, without fragment, to it.
+	resources map[string]*schemaResource
 	// ambiguous maps an absolute URI that more than one schema declares as its
-	// $id to why it names no one resource. Such a URI is in no graph's reach.
+	// $id to why it names no one resource, and claimants to those schemas.
 	ambiguous map[string]string
-	// claimants holds, for each ambiguous URI, every resource declaring it.
-	claimants map[string][]schemaResource
-	// shadowed holds embedded resources whose $id is a JSON Schema
-	// meta-schema's URI. The document embeds them (§7), but the schema
-	// library resolves that URI to the meta-schema it carries, so it cannot
-	// evaluate them.
-	shadowed map[string]bool
+	claimants map[string][]*schemaResource
+	// documentDynamicAnchor is true when a schema outside every resource
+	// declares $dynamicAnchor, which OBI-D-05 excludes.
+	documentDynamicAnchor bool
 }
 
 type schemaResource struct {
 	location string
 	schema   map[string]any
-	// parent is the base in effect where the resource sits, against which its
-	// own $id resolves; nil at an OBI schema position.
-	parent *url.URL
-	// node is where the resource sits, and anchors maps each plain-name
-	// anchor the resource declares, by $anchor or $dynamicAnchor, to where
-	// every schema declaring it sits, in document order; anchorLocation
-	// spells one out. A nested resource's anchors are its own.
-	node    *pathNode
+	// uri is the absolute URI the resource's $id resolves to, without
+	// fragment; nil when it resolves to none, as a relative $id at an OBI
+	// position does. Such a resource is still a boundary: what lies within it
+	// is its own business (§7), and it can be addressed only from within.
+	uri *url.URL
+	// anchors maps each plain-name anchor the resource declares, by $anchor or
+	// $dynamicAnchor, to where every schema declaring it sits, in document
+	// order, spelled out only when used. A nested resource's anchors are its
+	// own.
 	anchors map[string][]*pathNode
 }
 
-// anchorLocation returns where a schema declaring one of the resource's
-// anchors sits, as a JSON Pointer from the resource.
-func (r schemaResource) anchorLocation(anchor *pathNode) string {
-	return anchor.from(r.node)
+// collectDocumentSchemas walks the schema positions of a document's generic
+// view.
+func collectDocumentSchemas(view any) documentSchemas {
+	d := documentSchemas{at: map[string]*schemaResource{}, resources: map[string]*schemaResource{}}
+	claimants := map[string][]*schemaResource{}
+	var walk func(node any, at *pathNode, resource *schemaResource)
+	walk = func(node any, at *pathNode, resource *schemaResource) {
+		object, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		if raw, declares := declaredID(object); declares {
+			var base *url.URL
+			if resource != nil {
+				base = resource.uri
+			}
+			location := at.from(nil)
+			resource = &schemaResource{location: location, schema: object, uri: resolveID(raw, base), anchors: map[string][]*pathNode{}}
+			d.at[location] = resource
+			if resource.uri != nil {
+				key := resource.uri.String()
+				claimants[key] = append(claimants[key], resource)
+			}
+		}
+		names := anchorNames(object)
+		switch {
+		case resource != nil:
+			for _, name := range names {
+				resource.anchors[name] = append(resource.anchors[name], at)
+			}
+		case object["$dynamicAnchor"] != nil:
+			d.documentDynamicAnchor = true
+		}
+		forEachSubschema(object, func(child any, tokens ...string) {
+			walk(child, at.child(tokens...), resource)
+		})
+	}
+
+	root, _ := view.(map[string]any)
+	schemas, _ := root["schemas"].(map[string]any)
+	for _, key := range sortedKeys(schemas) {
+		walk(schemas[key], (*pathNode)(nil).child("schemas", key), nil)
+	}
+	operations, _ := root["operations"].(map[string]any)
+	for _, key := range sortedKeys(operations) {
+		operation, _ := operations[key].(map[string]any)
+		for _, position := range []string{"input", "output"} {
+			if schema, present := operation[position]; present {
+				walk(schema, (*pathNode)(nil).child("operations", key, position), nil)
+			}
+		}
+	}
+	for id, resources := range claimants {
+		if len(resources) == 1 {
+			d.resources[id] = resources[0]
+			continue
+		}
+		var locations []string
+		for _, resource := range resources {
+			locations = append(locations, resource.location)
+		}
+		sort.Strings(locations)
+		if d.ambiguous == nil {
+			d.ambiguous, d.claimants = map[string]string{}, map[string][]*schemaResource{}
+		}
+		d.ambiguous[id] = fmt.Sprintf("the schemas at %s all declare it", strings.Join(locations, ", "))
+		d.claimants[id] = resources
+	}
+	return d
+}
+
+// resourceAt returns the innermost resource holding a location, or nil for the
+// document resource: every schema no resource encloses, whose base is the OBI
+// document root (§7). A location's resource is found by its prefixes, so a
+// location inside a resource belongs to it however it is reached, through
+// objects and arrays alike.
+func (d documentSchemas) resourceAt(location string) *schemaResource {
+	for end := len(location); end >= 0; end = strings.LastIndexByte(location[:end], '/') {
+		if resource, ok := d.at[location[:end]]; ok {
+			return resource
+		}
+		if end == 0 {
+			break
+		}
+	}
+	return nil
 }
 
 // pathNode is one reference token of a location, linked to the location it
@@ -79,80 +163,9 @@ func (n *pathNode) from(base *pathNode) string {
 	return jsonpointer.Format(tokens...)
 }
 
-// collectDocumentSchemas walks the schema positions of a document's generic
-// view and every subschema of them.
-func collectDocumentSchemas(view any) documentSchemas {
-	d := documentSchemas{resources: map[string]schemaResource{}}
-	claimants := map[string][]schemaResource{}
-	// anchors indexes the anchors of the resource the walk is in, whose root
-	// is at the node from; nil outside a resource, or within a nested $id
-	// that declares none (its anchors are not the outer resource's).
-	var walk func(node any, at *pathNode, base *url.URL, anchors map[string][]*pathNode)
-	walk = func(node any, at *pathNode, base *url.URL, anchors map[string][]*pathNode) {
-		object, ok := node.(map[string]any)
-		if !ok {
-			return
-		}
-		if id, declared := resourceID(object, base); declared {
-			key := id.String()
-			anchors = map[string][]*pathNode{}
-			resource := schemaResource{location: at.from(nil), schema: object, parent: base, node: at, anchors: anchors}
-			claimants[key] = append(claimants[key], resource)
-			d.resources[key] = resource
-			base = id
-		} else if _, declares := declaredID(object); declares {
-			anchors = nil
-		}
-		if anchors != nil {
-			for _, name := range anchorNames(object) {
-				anchors[name] = append(anchors[name], at)
-			}
-		}
-		forEachSubschema(object, func(child any, tokens ...string) {
-			walk(child, at.child(tokens...), base, anchors)
-		})
-	}
-
-	root, _ := view.(map[string]any)
-	schemas, _ := root["schemas"].(map[string]any)
-	for _, key := range sortedKeys(schemas) {
-		walk(schemas[key], (*pathNode)(nil).child("schemas", key), nil, nil)
-	}
-	operations, _ := root["operations"].(map[string]any)
-	for _, key := range sortedKeys(operations) {
-		operation, _ := operations[key].(map[string]any)
-		for _, position := range []string{"input", "output"} {
-			if schema, present := operation[position]; present {
-				walk(schema, (*pathNode)(nil).child("operations", key, position), nil, nil)
-			}
-		}
-	}
-	for id, resources := range claimants {
-		switch {
-		case len(resources) > 1:
-			var locations []string
-			for _, resource := range resources {
-				locations = append(locations, resource.location)
-			}
-			sort.Strings(locations)
-			if d.ambiguous == nil {
-				d.ambiguous, d.claimants = map[string]string{}, map[string][]schemaResource{}
-			}
-			d.ambiguous[id] = fmt.Sprintf("the schemas at %s all declare it", strings.Join(locations, ", "))
-			d.claimants[id] = resources
-			delete(d.resources, id)
-		case isBuiltInMetaSchema(id):
-			if d.shadowed == nil {
-				d.shadowed = map[string]bool{}
-			}
-			d.shadowed[id] = true
-		}
-	}
-	return d
-}
-
 // anchorNames returns the plain-name anchors a schema object declares, by
-// $anchor or $dynamicAnchor, each once.
+// $anchor or $dynamicAnchor, each once: one schema declaring a name both ways
+// declares it at one location.
 func anchorNames(object map[string]any) []string {
 	var names []string
 	for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
@@ -163,61 +176,139 @@ func anchorNames(object map[string]any) []string {
 	return names
 }
 
-// resourceID returns the absolute URI, without fragment, of the resource a
-// schema object declares by $id, resolved against base. declared is false
-// when the object declares no resource with an absolute URI.
-func resourceID(object map[string]any, base *url.URL) (id *url.URL, declared bool) {
-	raw, ok := declaredID(object)
-	if !ok {
-		return nil, false
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return nil, false
-	}
-	parsed = resolveURI(base, parsed)
-	if !parsed.IsAbs() {
-		return nil, false
-	}
-	parsed.Fragment, parsed.RawFragment = "", ""
-	return parsed, true
-}
-
 // declaredID returns the $id a schema object declares a resource by, its
-// fragment removed, as the schema library reads it: an $id that is empty
-// once its fragment is removed ("" or "#") declares nothing.
+// fragment removed: an $id that is empty once its fragment is removed ("" or
+// "#") declares nothing, as JSON Schema libraries read it.
 func declaredID(object map[string]any) (string, bool) {
 	raw, _ := object["$id"].(string)
 	id, _, _ := strings.Cut(raw, "#")
 	return id, id != ""
 }
 
-// resolveURI resolves ref against base as the schema library does for every
-// $id and $ref, which follows RFC 3986 §5.2: dot segments are removed even
-// from an absolute reference, so https://example.com/x/../a names
-// https://example.com/a. base may be nil when ref is absolute. One exception
-// departs from RFC 3986: a relative reference against an opaque base (a
-// urn:, say) keeps the base's opaque part, as the library keeps it, where
-// RFC 3986 would replace it.
+// resolveID returns the absolute URI, without fragment, that a declared $id
+// resolves to against base, or nil when it resolves to none.
+func resolveID(raw string, base *url.URL) *url.URL {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil
+	}
+	parsed = resolveURI(base, parsed)
+	if !parsed.IsAbs() {
+		return nil
+	}
+	parsed.Fragment, parsed.RawFragment = "", ""
+	return parsed
+}
+
+// resolveURI resolves ref against base by RFC 3986 §5.2. base may be nil when
+// ref is absolute. net/url follows the RFC except against a base whose path is
+// rootless (urn:x:y), where it would give urn:///b for b; the RFC merges the
+// paths, giving urn:b.
 func resolveURI(base, ref *url.URL) *url.URL {
 	if base == nil {
 		base = &url.URL{}
 	}
-	target := base.ResolveReference(ref)
-	if !ref.IsAbs() && base.Opaque != "" {
-		target.Opaque = base.Opaque
+	if base.Opaque == "" || ref.Scheme != "" || ref.Host != "" || ref.User != nil || ref.Path == "" || strings.HasPrefix(ref.Path, "/") {
+		return base.ResolveReference(ref)
 	}
-	return target
+	directory := base.Opaque[:strings.LastIndexByte(base.Opaque, '/')+1]
+	return &url.URL{
+		Scheme:      base.Scheme,
+		Opaque:      removeDotSegments(directory + ref.Path),
+		RawQuery:    ref.RawQuery,
+		Fragment:    ref.Fragment,
+		RawFragment: ref.RawFragment,
+	}
+}
+
+// removeDotSegments removes the "." and ".." segments of a path (RFC 3986
+// §5.2.4).
+func removeDotSegments(path string) string {
+	var out []string
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		last := i == len(segments)-1
+		switch segment {
+		case ".":
+			if last {
+				out = append(out, "")
+			}
+		case "..":
+			if len(out) > 0 {
+				out = out[:len(out)-1]
+			}
+			if last {
+				out = append(out, "")
+			}
+		default:
+			out = append(out, segment)
+		}
+	}
+	return strings.Join(out, "/")
+}
+
+// Keyword tables. JSON Schema 2020-12 evaluates the subschemas at these
+// positions; definitions and dependencies are the pre-2019 spellings the
+// 2020-12 meta-schema still describes, and checks the shape of, but 2020-12
+// neither evaluates them nor finds resources or anchors in them.
+
+// schemaMapKeywords hold { name -> schema } maps.
+var schemaMapKeywords = map[string]bool{
+	"properties":        true,
+	"patternProperties": true,
+	"$defs":             true,
+	"dependentSchemas":  true,
+}
+
+// describedMapKeywords hold { name -> schema } maps the meta-schema describes
+// but 2020-12 does not evaluate.
+var describedMapKeywords = map[string]bool{
+	"definitions":  true,
+	"dependencies": true,
+}
+
+// singleSchemaKeywords hold one schema.
+var singleSchemaKeywords = map[string]bool{
+	"additionalProperties":  true,
+	"propertyNames":         true,
+	"unevaluatedProperties": true,
+	"items":                 true,
+	"contains":              true,
+	"unevaluatedItems":      true,
+	"not":                   true,
+	"if":                    true,
+	"then":                  true,
+	"else":                  true,
+	"contentSchema":         true,
+}
+
+// arraySchemaKeywords hold an array of schemas.
+var arraySchemaKeywords = map[string]bool{
+	"allOf":       true,
+	"anyOf":       true,
+	"oneOf":       true,
+	"prefixItems": true,
 }
 
 // forEachSubschema calls fn for every direct subschema of a schema object, as
 // JSON Schema 2020-12 defines them, with the reference tokens that reach it
 // from the object: the applicators' subschemas and the definitions in $defs.
 func forEachSubschema(object map[string]any, fn func(child any, tokens ...string)) {
+	forEachPosition(object, false, fn)
+}
+
+// forEachDescribedSubschema calls fn for every direct subschema of a schema
+// object the 2020-12 meta-schema describes: forEachSubschema's, and the
+// entries of definitions and dependencies.
+func forEachDescribedSubschema(object map[string]any, fn func(child any, tokens ...string)) {
+	forEachPosition(object, true, fn)
+}
+
+func forEachPosition(object map[string]any, described bool, fn func(child any, tokens ...string)) {
 	for _, keyword := range sortedKeys(object) {
 		value := object[keyword]
 		switch {
-		case schemaMapKeywords[keyword]:
+		case schemaMapKeywords[keyword], described && describedMapKeywords[keyword]:
 			entries, _ := value.(map[string]any)
 			for _, name := range sortedKeys(entries) {
 				fn(entries[name], keyword, name)
@@ -233,16 +324,17 @@ func forEachSubschema(object map[string]any, fn func(child any, tokens ...string
 	}
 }
 
-// schemaDepth returns how deeply a schema nests subschemas, as JSON Schema
-// 2020-12 defines them: 0 for a schema with none. Values that are not
-// subschemas, such as const, enum, default, and examples, do not count.
+// schemaDepth returns how deeply a schema nests the subschemas the 2020-12
+// meta-schema checks, which is what its check's cost grows with: 0 for a
+// schema with none. Values that are not subschemas, such as const, enum,
+// default, and examples, do not count.
 func schemaDepth(schema any) int {
 	object, ok := schema.(map[string]any)
 	if !ok {
 		return 0
 	}
 	deepest := 0
-	forEachSubschema(object, func(child any, _ ...string) {
+	forEachDescribedSubschema(object, func(child any, _ ...string) {
 		deepest = max(deepest, schemaDepth(child)+1)
 	})
 	return deepest
@@ -267,41 +359,4 @@ func isBuiltInMetaSchema(id string) bool {
 	}
 	builtInMetaSchemas.Store(id, struct{}{})
 	return true
-}
-
-// resolution is what a fragment resolves to within a resource.
-type resolution int
-
-const (
-	resolved resolution = iota
-	missing
-	ambiguousAnchor
-)
-
-// resolveInResource resolves a fragment within an embedded resource: the
-// resource itself, a JSON Pointer from it, or a plain-name anchor it declares
-// (OBI-D-16).
-func resolveInResource(resource schemaResource, fragment string) resolution {
-	switch {
-	case fragment == "":
-		return resolved
-	case strings.HasPrefix(fragment, "/"):
-		tokens, ok := jsonpointer.Parse(fragment)
-		if !ok {
-			return missing
-		}
-		if _, ok := jsonpointer.Resolve(resource.schema, jsonpointer.Format(tokens...)); !ok {
-			return missing
-		}
-		return resolved
-	default:
-		switch found := resource.anchors[fragment]; {
-		case len(found) == 0:
-			return missing
-		case len(found) > 1:
-			return ambiguousAnchor
-		default:
-			return resolved
-		}
-	}
 }

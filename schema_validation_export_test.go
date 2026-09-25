@@ -345,24 +345,26 @@ func TestValidateOperationInput_ApplicatorsTheEvaluatorSkipsStillCount(t *testin
 	}
 }
 
-// The schema library evaluates the pre-2019 dependencies and $recursiveRef in
-// 2020-12 schemas, for compatibility the JSON Schema test suite lists as
-// optional. This is the library's behavior, accepted rather than patched:
-// 2020-12 treats them as unknown keywords.
-func TestValidateOperationInput_PreviousDialectKeywordsAreEvaluated(t *testing.T) {
+// dependencies, $recursiveRef, and $recursiveAnchor are not 2020-12 keywords,
+// so they constrain nothing (§5.2), though the schema library would evaluate
+// them: the bundle it is given leaves them out. A property named like one is
+// still a property.
+func TestValidateOperationInput_PreviousDialectKeywordsAreNotEvaluated(t *testing.T) {
 	for name, input := range map[string]string{
 		"dependencies":  `{"type":"object","dependencies":{"a":["b"]}}`,
 		"$recursiveRef": `{"$recursiveRef":"#/schemas/S"}`,
 	} {
 		iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"S":{"type":"integer"}},"operations":{"op":{"input":`+input+`}}}`)
-		if err := ValidateOperationInput(map[string]any{"a": 1.0}, iface, "op"); !errors.As(err, new(*SchemaValidationError)) {
-			t.Errorf("%s: want a mismatch, got %v", name, err)
+		if err := ValidateOperationInput(map[string]any{"a": 1.0}, iface, "op"); err != nil {
+			t.Errorf("%s: want the value valid, got %v", name, err)
 		}
+	}
+	named := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"properties":{"dependencies":{"type":"string"}}}}}}`)
+	if err := ValidateOperationInput(map[string]any{"dependencies": 1.0}, named, "op"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Errorf("a property named dependencies is still checked, got %v", err)
 	}
 }
 
-// A graph must be well-formed: another dialect, a vocabulary, or a keyword
-// value the meta-schemas refuse leaves no verdict.
 func TestValidateOperationInput_IllFormedGraphsAreUnavailable(t *testing.T) {
 	var unavailable *SchemaGraphUnavailableError
 	for name, input := range map[string]string{
@@ -513,11 +515,17 @@ func TestValidateOperationInput_DynamicReferencesReachEveryDynamicAnchor(t *test
 	}
 }
 
-// A relative $id at an OBI position has no base to resolve against (§7).
-func TestValidateOperationInput_RelativeIDAtAnOBIPositionIsUnavailable(t *testing.T) {
-	iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$id":"rel","type":"string"}}}}`)
-	if err := ValidateOperationInput("s", iface, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
-		t.Fatalf("want graph unavailable, got %v", err)
+// A relative $id at an OBI position, which OBI-D-05 excludes, gives its
+// resource no URI (§7). What resolves without one is evaluated; a relative
+// reference within it, which needs that URI as its base, leaves no verdict.
+func TestValidateOperationInput_RelativeIDAtAnOBIPosition(t *testing.T) {
+	alone := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$id":"rel","type":"string","properties":{"a":{"$ref":"#/$defs/n"}},"$defs":{"n":{"type":"number"}}}}}}`)
+	if err := ValidateOperationInput(map[string]any{"a": "x"}, alone, "op"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Errorf("want a mismatch, got %v", err)
+	}
+	relative := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$id":"rel","$ref":"other"}}}}`)
+	if err := ValidateOperationInput("s", relative, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Errorf("want graph unavailable, got %v", err)
 	}
 }
 

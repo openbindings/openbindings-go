@@ -391,3 +391,55 @@ func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 		t.Fatalf("want an encoding error, got %v", err)
 	}
 }
+
+// Encoding refuses a model it could not write as held: a string or name
+// holding invalid UTF-8, which encoding/json would replace with U+FFFD (two
+// keys could even become one name); a member name both Extensions and Unknown
+// hold; and raw JSON in a schema that decoding would refuse. Validate returns
+// the encoding error, never a report on another document.
+func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
+	text := func(s string) *string { return &s }
+	for name, iface := range map[string]Interface{
+		"invalid UTF-8 in a typed string":    {OpenBindings: "0.2.0", Description: text("caf\xff")},
+		"a lone surrogate in a typed string": {OpenBindings: "0.2.0", Name: text("\xed\xa0\x80")},
+		"operation keys that would become one name": {OpenBindings: "0.2.0", Operations: map[string]Operation{
+			"a\xff": {Input: map[string]any{"type": "integer"}}, "a\xfe": {Input: map[string]any{"type": "string"}}}},
+		"schema member names that would become one name": {OpenBindings: "0.2.0", Operations: map[string]Operation{
+			"op": {Input: map[string]any{"type\xff": "y", "type\xfe": "x"}}}},
+		"invalid UTF-8 in a schema string": {OpenBindings: "0.2.0", Schemas: map[string]JSONSchema{"S": map[string]any{"const": "\xff"}}},
+		"an extension name with invalid UTF-8": {OpenBindings: "0.2.0", LosslessFields: LosslessFields{
+			Extensions: map[string]json.RawMessage{"x-\xff": json.RawMessage(`1`)}}},
+		"a name in both Extensions and Unknown": {OpenBindings: "0.2.0", LosslessFields: LosslessFields{
+			Extensions: map[string]json.RawMessage{"x-a": json.RawMessage(`1`)}, Unknown: map[string]json.RawMessage{"x-a": json.RawMessage(`2`)}}},
+		"raw JSON in a schema repeating a name": {OpenBindings: "0.2.0", Operations: map[string]Operation{
+			"op": {Input: json.RawMessage(`{"type":"string","type":"integer"}`)}}},
+		"raw JSON in a schema escaping a lone surrogate": {OpenBindings: "0.2.0", Operations: map[string]Operation{
+			"op": {Input: json.RawMessage(`{"const":"\ud800"}`)}}},
+	} {
+		if data, err := json.Marshal(iface); err == nil {
+			t.Errorf("%s: encoded %s", name, data)
+		}
+		if report, err := iface.Validate(ValidateOptions{}); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
+			t.Errorf("%s: want the encoding error and no report, got %v", name, err)
+		}
+	}
+
+	held := Interface{OpenBindings: "0.2.0", Description: text("café �"), Operations: map[string]Operation{
+		"op": {Input: json.RawMessage(`{"type":"string","const":"�"}`)}},
+		LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": json.RawMessage(`1`)}, Unknown: map[string]json.RawMessage{"other": json.RawMessage(`2`)}}}
+	data, err := json.Marshal(held)
+	if err != nil {
+		t.Fatalf("a model holding valid UTF-8 encodes: %v", err)
+	}
+	var back Interface
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("and decodes back: %v", err)
+	}
+	again, _ := json.Marshal(back)
+	var before, after any
+	_ = json.Unmarshal(data, &before)
+	_ = json.Unmarshal(again, &after)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("round trip changed\n%s\ninto\n%s", data, again)
+	}
+}

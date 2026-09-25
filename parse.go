@@ -15,12 +15,11 @@ import (
 // judged against rules it does not claim (§10.1). A refusal is a
 // *VersionRefusalError, and violations of OBI-D-01 or the document schema are
 // a *ValidationError, as from Interface.Validate and ValidateDocument. A
-// document the document schema could not be applied to (an operation's
-// aliases or a dependency's bindingSpecs holding a number beyond the numeric
-// limits of schema evaluation) is not parsed, and returns another error, as
-// is one the document model does not carry: input nested deeper than the
-// decoder reads, or holding an escape of a lone UTF-16 surrogate. OBI-D-01
-// and the declared version are read however deep the input nests.
+// document the model does not carry is not parsed, and returns another error:
+// input nested deeper than the decoder reads, or holding an escape of a lone
+// UTF-16 surrogate. So is one on which the schema library reaches no verdict
+// against the document schema, should it ever. OBI-D-01 and the declared version are read
+// however deep the input nests.
 func ParseDocument(data []byte) (*Interface, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {

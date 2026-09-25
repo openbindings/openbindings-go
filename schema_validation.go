@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
@@ -61,10 +63,10 @@ func init() {
 // found well-formed, by their encoding.
 //
 // The meta-schema validator's work grows faster than linearly with a
-// schema's depth, so a schema holding a number beyond the numeric limits of
-// schema evaluation, or nesting subschemas deeper than schemaDepthLimit, meets
-// a resource limit and leaves the rule inconclusive there (§10.5), as it does
-// for an operation's schema graph.
+// schema's depth, so the subschemas a schema nests deeper than
+// schemaDepthLimit are not checked, which leaves the rule inconclusive there
+// (§10.5). The rest of the schema is checked all the same: the meta-schemas
+// judge each subschema by what it holds, whatever its subschemas hold.
 func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
 	case bool:
@@ -74,24 +76,19 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 		if key != "" && knownValid[key] {
 			return
 		}
-		if at, err := schemacompiler.NumericLimit(v); err != nil {
-			c.inconclusive("OBI-D-17", prefix+at, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+		checked, cut := cutSchema(v, schemaDepthLimit)
+		problems, err := checkAgainstMetaSchema(checked)
+		if err != nil {
+			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
 			return
 		}
-		if schemaDepth(v) > schemaDepthLimit {
-			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: it nests subschemas deeper than %d levels", schemaDepthLimit))
-			return
+		for _, problem := range problems {
+			c.violated("OBI-D-17", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
 		}
-		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
-			problems, mismatch := schemacompiler.Outcome(verr)
-			if !mismatch {
-				c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", verr))
-				return
-			}
-			for _, problem := range problems {
-				c.violated("OBI-D-17", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
-			}
-		} else if key != "" {
+		switch {
+		case cut != "":
+			c.inconclusive("OBI-D-17", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
+		case len(problems) == 0 && key != "":
 			knownValid[key] = true
 		}
 	default:
@@ -99,52 +96,101 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 	}
 }
 
-// numericMembers are the members of an OBI document the document schema does
-// numeric work on, as reference tokens where "*" is every entry of a map: a
-// binding's preference, held to its integer range (§5.3), and the items of an
-// operation's aliases and of a dependency's bindingSpecs, which uniqueItems
-// compares as numbers when they are numbers.
-// TestDocumentSchema_NumericWorkIsOnNumericMembers holds this list to the
-// embedded schema.
-var numericMembers = [][]string{
-	{"bindings", "*", "preference"},
-	{"operations", "*", "aliases"},
-	{"dependencies", "*", "bindingSpecs"},
+// checkAgainstMetaSchema validates a schema against the 2020-12 meta-schemas,
+// returning the problems found, or an error when no verdict was reached. A
+// number beyond the numeric limits of schema evaluation is checked as a
+// stand-in (schemacompiler.Substitute): the meta-schemas tell numbers apart
+// only by type, by equality, and by comparison with zero
+// (TestMetaSchema_ComparesNumbersOnlyWithZero).
+func checkAgainstMetaSchema(schema any) ([]schemacompiler.Problem, error) {
+	checked := schemacompiler.Substitute(schema)
+	err := compiledMetaSchema.Validate(checked.Value)
+	if err == nil {
+		return nil, nil
+	}
+	problems, mismatch := checked.Outcome(err)
+	if !mismatch {
+		return nil, err
+	}
+	return problems, nil
+}
+
+// cutSchema returns a schema with each subschema object it nests deeper than
+// limit levels replaced by true, and the location of the first replaced, or
+// the schema itself and "" when it nests none so deep. schema is not changed.
+func cutSchema(schema map[string]any, limit int) (map[string]any, string) {
+	if schemaDepth(schema) <= limit {
+		return schema, ""
+	}
+	first := ""
+	var path []string
+	var cut func(object map[string]any, level int) map[string]any
+	cut = func(object map[string]any, level int) map[string]any {
+		out := maps.Clone(object)
+		copied := map[string]bool{}
+		forEachDescribedSubschema(object, func(child any, tokens ...string) {
+			path = append(path, tokens...)
+			defer func() { path = path[:len(path)-len(tokens)] }()
+			childObject, isObject := child.(map[string]any)
+			if !isObject {
+				return
+			}
+			var replaced any = true
+			if level < limit {
+				replaced = cut(childObject, level+1)
+			} else if first == "" {
+				first = jsonpointer.Format(path...)
+			}
+			keyword := tokens[0]
+			if len(tokens) == 1 {
+				out[keyword] = replaced
+				return
+			}
+			switch container := out[keyword].(type) {
+			case map[string]any:
+				if !copied[keyword] {
+					container, copied[keyword] = maps.Clone(container), true
+					out[keyword] = container
+				}
+				container[tokens[1]] = replaced
+			case []any:
+				if !copied[keyword] {
+					container, copied[keyword] = slices.Clone(container), true
+					out[keyword] = container
+				}
+				index, _ := strconv.Atoi(tokens[1])
+				container[index] = replaced
+			}
+		})
+		return out
+	}
+	return cut(schema, 0), first
 }
 
 // validateAgainstOBISchema records OBI-D-02 evidence: whether the document's
 // generic view validates against openbindings.schema.json.
 //
-// The schema library is not handed a number beyond the numeric limits of
-// schema evaluation where the document schema does numeric work
-// (numericMembers). A member holding one is set aside, and the rest of the
-// document is still checked: a preference is decided here exactly, and an
-// array is left inconclusive.
+// The document schema tells numbers apart only by type and equality, except
+// that it holds a binding's preference to its integer range (§5.3;
+// TestDocumentSchema_ComparesNumbersOnlyAtAPreference). So the schema library
+// is never handed a number beyond the numeric limits of schema evaluation: a
+// preference holding one is decided exactly here, and any other is checked
+// as a stand-in (schemacompiler.Substitute).
 func validateAgainstOBISchema(c *ruleChecks, view any) {
-	var setAside [][]string
-	for _, pattern := range numericMembers {
-		for _, member := range membersAt(view, pattern, nil) {
-			at, err := schemacompiler.NumericLimit(member.value)
-			if err == nil {
-				continue
-			}
-			path := jsonpointer.Format(member.tokens...)
-			if member.tokens[len(member.tokens)-1] == "preference" {
-				inRange := false
-				if number, isNumber := member.value.(json.Number); isNumber {
-					_, inRange = preferenceValue(string(number))
-				}
-				if !inRange {
-					c.violated("OBI-D-02", path, fmt.Sprintf("does not validate against the document schema: a preference is an integer from -%d through %d", maxPreference, maxPreference))
-				}
-			} else {
-				c.inconclusive("OBI-D-02", path, fmt.Sprintf("could not be checked against the document schema: it holds, at %q, %v", at, err))
-			}
-			setAside = append(setAside, member.tokens)
+	var decided [][]string
+	for _, member := range membersAt(view, []string{"bindings", "*", "preference"}, nil) {
+		number, isNumber := member.value.(json.Number)
+		if _, err := schemacompiler.NumericLimit(number); !isNumber || err == nil {
+			continue
 		}
+		if _, inRange := preferenceValue(string(number)); !inRange {
+			c.violated("OBI-D-02", jsonpointer.Format(member.tokens...), fmt.Sprintf("does not validate against the document schema: a preference is an integer from -%d through %d", maxPreference, maxPreference))
+		}
+		decided = append(decided, member.tokens)
 	}
-	if verr := compiledOBISchema.Validate(withoutMembers(view, setAside)); verr != nil {
-		problems, mismatch := schemacompiler.Outcome(verr)
+	checked := schemacompiler.Substitute(withoutMembers(view, decided))
+	if verr := compiledOBISchema.Validate(checked.Value); verr != nil {
+		problems, mismatch := checked.Outcome(verr)
 		if !mismatch {
 			// An exceeded resource limit is not evidence of violation (§10.5).
 			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
@@ -235,45 +281,68 @@ func metaSchemaCacheKey(schema map[string]any) string {
 // that the examples conform. Operations and examples that are not objects
 // hold no example values.
 func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas documentSchemas) {
-	contracts := newOperationContracts(view, schemas)
+	o := newOperationSchemas(view, schemas)
+	type position struct {
+		path, name string
+		examples   map[string]any
+		provided   []string
+	}
+	var candidates []position
+	var paths []string
 	for _, opKey := range sortedKeys(operations) {
 		operation, _ := operations[opKey].(map[string]any)
 		examples, _ := operation["examples"].(map[string]any)
-		for _, position := range []string{"input", "output"} {
-			if _, specified := operation[position]; !specified {
+		for _, name := range []string{"input", "output"} {
+			if _, specified := operation[name]; !specified {
 				continue
 			}
 			var provided []string
 			for _, exampleKey := range sortedKeys(examples) {
-				if example, ok := examples[exampleKey].(map[string]any); ok && hasKey(example, position) {
+				if example, ok := examples[exampleKey].(map[string]any); ok && hasKey(example, name) {
 					provided = append(provided, exampleKey)
 				}
 			}
 			if len(provided) == 0 {
 				continue
 			}
-			path := jsonpointer.Format("operations", opKey, position)
-			compiled, outside, err := contracts.compile(opKey, position)
-			if outside != "" {
-				// The graph reaches outside the document.
-				continue
-			}
-			if err != nil {
-				c.inconclusive("OBI-D-11", path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", err))
-				continue
-			}
-			for _, exampleKey := range provided {
-				examplePath := jsonpointer.Format("operations", opKey, "examples", exampleKey, position)
-				var mismatch *SchemaValidationError
-				switch err := compiled.Validate(examples[exampleKey].(map[string]any)[position]); {
-				case err == nil:
-				case errors.As(err, &mismatch):
-					for _, problem := range mismatch.Problems {
-						c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+position+" schema: "+problem.Message)
-					}
-				default:
-					c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
+			path := jsonpointer.Format("operations", opKey, name)
+			candidates = append(candidates, position{path: path, name: name, examples: examples, provided: provided})
+			paths = append(paths, path)
+		}
+	}
+	o.analyze(paths)
+	var checked []position
+	var starts []string
+	for _, p := range candidates {
+		if f := o.facts(p.path); f.outside != "" || f.metaSchema != "" {
+			// The graph reaches outside the document.
+			continue
+		}
+		if problem := o.graphProblem(p.path); problem != "" {
+			c.inconclusive("OBI-D-11", p.path, "the schema graph could not be evaluated, so its examples were not checked: "+problem)
+			continue
+		}
+		checked = append(checked, p)
+		starts = append(starts, p.path)
+	}
+	results := o.compile(starts)
+	for _, p := range checked {
+		result := results[p.path]
+		if result.err != nil {
+			c.inconclusive("OBI-D-11", p.path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", result.err))
+			continue
+		}
+		for _, exampleKey := range p.provided {
+			examplePath := p.path[:strings.LastIndexByte(p.path, '/')] + jsonpointer.Format("examples", exampleKey, p.name)
+			var mismatch *SchemaValidationError
+			switch err := result.schema.Validate(p.examples[exampleKey].(map[string]any)[p.name]); {
+			case err == nil:
+			case errors.As(err, &mismatch):
+				for _, problem := range mismatch.Problems {
+					c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+p.name+" schema: "+problem.Message)
 				}
+			default:
+				c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
 			}
 		}
 	}
@@ -288,17 +357,27 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // resource.
 //
 // The schema graph statically reachable from the operation's schema must be
-// complete: a graph that reaches a resource the document does not embed, has
-// a reference that does not resolve, or holds a schema that is not
-// well-formed yields a *SchemaGraphUnavailableError, even where no value
-// would exercise that part of it. A JSON Schema meta-schema is outside the
+// available, well-formed, and evaluable, even where no value would exercise
+// part of it; otherwise a *SchemaGraphUnavailableError says why. A graph is
+// unavailable when it reaches a resource the document does not embed, has a
+// reference that does not resolve, or holds a schema that is not well-formed.
+// It cannot be evaluated here when it meets one of this SDK's limits (§10.5):
+// a schema nesting subschemas deeper than 256 levels, a number beyond the
+// numeric limits of schema evaluation where the schema library reads one (a
+// comparison or count keyword's value, or const or enum), a pattern Go's
+// regexp cannot compile, or a cycle of references that never advances into
+// the value. The schema library is given the schemas the
+// graph uses as a JSON Schema 2020-12 bundle, never the OBI document itself,
+// and evaluates strictly as 2020-12: dependencies, $recursiveRef, and
+// $recursiveAnchor constrain nothing. A JSON Schema meta-schema is outside the
 // document but available: the schema library carries it. A document is
 // interpreted only under a supported version: one declaring a well-formed
 // version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
 // no valid version returns an error (OBI-D-12). Any other error means nothing
-// was compiled: there is no interface, the name resolves to no one operation
-// (wrapping ErrOperationNotFound), the operation specifies no schema at that
-// position, or the interface cannot be encoded.
+// was compiled: there is no interface, the position is neither "input" nor
+// "output", the name resolves to no one operation (wrapping
+// ErrOperationNotFound), the operation specifies no schema at that position,
+// or the interface cannot be encoded.
 func CompileOperationSchema(i *Interface, operation, position string) (*CompiledSchema, error) {
 	if i == nil {
 		return nil, errors.New("openbindings: interface is nil")
@@ -329,11 +408,17 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 	if err != nil {
 		return nil, err
 	}
-	compiled, _, err := newOperationContracts(view, collectDocumentSchemas(view)).compile(key, position)
-	if err != nil {
-		return nil, &SchemaGraphUnavailableError{Cause: err}
+	o := newOperationSchemas(view, collectDocumentSchemas(view))
+	path := jsonpointer.Format("operations", key, position)
+	o.analyze([]string{path})
+	if problem := o.graphProblem(path); problem != "" {
+		return nil, &SchemaGraphUnavailableError{Cause: errors.New(problem)}
 	}
-	return compiled, nil
+	result := o.compileAlone(path)
+	if result.err != nil {
+		return nil, &SchemaGraphUnavailableError{Cause: result.err}
+	}
+	return result.schema, nil
 }
 
 // ValidateOperationInput validates a value against an operation's input
@@ -342,8 +427,8 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 // compile once with CompileOperationSchema and use CompiledSchema.Validate.
 //
 // A nil error means the value validates. A *SchemaValidationError is an
-// established mismatch; a *SchemaGraphUnavailableError means the schema's
-// graph could not be fully resolved, so no verdict was reached. Any other
+// established mismatch; a *SchemaGraphUnavailableError means no verdict was
+// reached (see CompileOperationSchema and CompiledSchema.Validate). Any other
 // error means nothing was validated: see CompileOperationSchema.
 func ValidateOperationInput(value any, iface *Interface, operationName string) error {
 	compiled, err := CompileOperationSchema(iface, operationName, "input")
@@ -365,7 +450,9 @@ func ValidateOperationOutput(value any, iface *Interface, operationName string) 
 
 // SchemaGraphUnavailableError reports that no verdict was reached because the
 // governing schema's complete statically reachable graph was not available,
-// well-formed, and evaluable. It is distinct from a mismatch, as OBI-T-16
+// well-formed, and evaluable, or, from CompiledSchema.Validate, because the
+// value holds a number this SDK cannot check against that graph or the
+// schema was not compiled. It is distinct from a mismatch, as OBI-T-16
 // requires of validation against an operation's contract.
 //
 // Callers can use errors.As rather than parsing diagnostic text. Cause remains
@@ -430,12 +517,14 @@ func (e *SchemaValidationError) Unwrap() error {
 
 // schemaValidationError projects a backend validation error onto the SDK's
 // outcomes: a *SchemaValidationError for an established mismatch, and a
-// *SchemaGraphUnavailableError for anything that reached no verdict.
-func schemaValidationError(err error) error {
+// *SchemaGraphUnavailableError for anything that reached no verdict. checked
+// is what was validated, whose findings state the numbers its stand-ins
+// stand for.
+func schemaValidationError(err error, checked schemacompiler.Substitution) error {
 	if err == nil {
 		return nil
 	}
-	problems, mismatch := schemacompiler.Outcome(err)
+	problems, mismatch := checked.Outcome(err)
 	if !mismatch {
 		return &SchemaGraphUnavailableError{Cause: err}
 	}

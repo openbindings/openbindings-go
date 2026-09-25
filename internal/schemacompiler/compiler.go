@@ -23,7 +23,7 @@ import (
 // validates nothing (OBI-T-16), so every external reference, file: and
 // http(s) alike, is unavailable. The JSON Schema meta-schemas are built into
 // the library and resolve without a loader. Patterns use Go's regexp, the
-// library's own engine; see UncompiledPattern for one it cannot compile.
+// library's own engine, through compilePattern.
 //
 // format never rejects a value: §5.2 makes it an annotation at an operation
 // boundary whatever dialect a subschema declares, and the library otherwise
@@ -50,10 +50,10 @@ var libraryFormats = []string{
 }
 
 // compilePattern compiles a pattern with Go's regexp. A pattern Go's regexp
-// does not support, such as an ECMAScript lookahead, does not stop the
-// compilation: it compiles to an UncompiledPattern, so the rest of the schema
-// graph is still resolved and the caller can tell from the compiled graph
-// that a pattern in it cannot be evaluated.
+// does not support, such as an ECMAScript lookahead, compiles to an
+// UncompiledPattern rather than failing: the library checks format "regex"
+// with this engine, and a format never rejects a value. A caller refuses a
+// schema holding such a pattern before the library evaluates it.
 func compilePattern(expression string) (jsonschema.Regexp, error) {
 	re, err := regexp.Compile(expression)
 	if err != nil {
@@ -63,8 +63,8 @@ func compilePattern(expression string) (jsonschema.Regexp, error) {
 }
 
 // UncompiledPattern is a pattern Go's regexp could not compile. A schema
-// graph holding one cannot be evaluated; the caller refuses it rather than
-// validating against it, so MatchString is never consulted for a verdict.
+// holding one cannot be evaluated, and its caller refuses it before
+// validating, so MatchString is never consulted for a verdict.
 type UncompiledPattern struct {
 	Source string
 	Cause  error
