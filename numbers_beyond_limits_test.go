@@ -81,15 +81,15 @@ func TestValidateDocument_WellFormednessWithNumbersBeyondTheLimits(t *testing.T)
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+schema+`}}`)
 		var got []Finding
 		for _, finding := range report.Findings {
-			if finding.Rule == "OBI-D-17" {
+			if finding.Rule == "OBI-D-13" {
 				if finding.Status != EvidenceViolated {
-					t.Errorf("%s: OBI-D-17 %s at %s: %s", schema, finding.Status, finding.Path, finding.Message)
+					t.Errorf("%s: OBI-D-13 %s at %s: %s", schema, finding.Status, finding.Path, finding.Message)
 				}
 				got = append(got, finding)
 			}
 		}
 		if len(got) != len(want) {
-			t.Errorf("%s: OBI-D-17 findings %+v", schema, got)
+			t.Errorf("%s: OBI-D-13 findings %+v", schema, got)
 			continue
 		}
 		for i := range want {
@@ -103,7 +103,7 @@ func TestValidateDocument_WellFormednessWithNumbersBeyondTheLimits(t *testing.T)
 // A value holding a number beyond the numeric limits is validated as a
 // stand-in where what the library compiles compares no number by order or
 // divisibility, holds none in const or enum, and reaches no meta-schema;
-// otherwise no verdict is reached. The same holds of an example (OBI-D-11).
+// otherwise no verdict is reached. The same holds of an example (OBI-D-10).
 func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 	for _, tc := range []struct {
 		input, value, want string
@@ -128,8 +128,8 @@ func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 			t.Errorf("%s against %s: %v", tc.value, tc.input, err)
 		}
 		example := map[string]RuleEvidenceStatus{"valid": EvidenceSatisfied, "mismatch": EvidenceViolated, "unavailable": EvidenceInconclusive}[tc.want]
-		if got := mustValidateDocument(t, document).Evidence["OBI-D-11"]; got != example {
-			t.Errorf("%s against %s: OBI-D-11 %s, want %s", tc.value, tc.input, got, example)
+		if got := mustValidateDocument(t, document).Evidence["OBI-D-10"]; got != example {
+			t.Errorf("%s against %s: OBI-D-10 %s, want %s", tc.value, tc.input, got, example)
 		}
 	}
 }
@@ -152,8 +152,8 @@ func TestValidateOperationInput_CarriedNumbersAreNeverRead(t *testing.T) {
 		document := `{"openbindings":"0.2.0","schemas":{"S":{"type":"string","default":` + unreadable + `}},
 			"operations":{"op":{"input":` + input + `,"examples":{"e":{"input":5}}}}}`
 		report := mustValidateDocument(t, document)
-		if report.Evidence["OBI-D-17"] != EvidenceSatisfied || report.Evidence["OBI-D-11"] == EvidenceInconclusive {
-			t.Errorf("%s: OBI-D-17 %s, OBI-D-11 %s; findings %+v", input, report.Evidence["OBI-D-17"], report.Evidence["OBI-D-11"], report.Findings)
+		if report.Evidence["OBI-D-13"] != EvidenceSatisfied || report.Evidence["OBI-D-10"] == EvidenceInconclusive {
+			t.Errorf("%s: OBI-D-13 %s, OBI-D-10 %s; findings %+v", input, report.Evidence["OBI-D-13"], report.Evidence["OBI-D-10"], report.Findings)
 		}
 		iface := mustDecodeInterface(t, document)
 		if got := outcome(ValidateOperationInput(decodeValue(t, []byte(`"s"`)), iface, "op")); got != "valid" {

@@ -57,7 +57,7 @@ func init() {
 //
 // A malformed (non-SemVer) v is no version at all: IsSupportedVersion
 // returns false and a parse error, while validation reports such a document
-// under OBI-D-12 rather than refusing it.
+// under OBI-D-11 rather than refusing it.
 func IsSupportedVersion(v string) (bool, error) {
 	_, refused, err := versionRefusal(v)
 	if err != nil {

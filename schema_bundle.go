@@ -258,10 +258,10 @@ func forEachSchemaReference(root any, at string, fn func(holder, ref string)) {
 // which only a schema position declares (§7).
 func (o *operationSchemas) rootProblem(at string) string {
 	// A schema $ref reaches only a schema the document model places
-	// (OBI-D-16); JSON Schema 2020-12 leaves any other target undefined
+	// (OBI-D-12); JSON Schema 2020-12 leaves any other target undefined
 	// (§9.4.2), so nothing elsewhere is evaluated as a schema.
 	if !atSchemaPosition(at) {
-		return fmt.Sprintf("%s is not a schema position; a schema $ref reaches only a schema the document model places (OBI-D-16)", describeLocation(at))
+		return fmt.Sprintf("%s is not a schema position; a schema $ref reaches only a schema the document model places (OBI-D-12)", describeLocation(at))
 	}
 	if problem := o.limitProblem(at); problem != "" {
 		return problem

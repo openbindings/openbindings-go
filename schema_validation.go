@@ -27,7 +27,7 @@ var compiledOBISchema *jsonschema.Schema
 
 // compiledMetaSchema is the JSON Schema 2020-12 meta-schema, compiled once at
 // init from the validator library's locally embedded copy (never fetched from
-// the network, per OBI-D-17's validation note), for OBI-D-17 (every schema in
+// the network, per OBI-D-13's validation note), for OBI-D-13 (every schema in
 // the document is well-formed).
 var compiledMetaSchema *jsonschema.Schema
 
@@ -53,7 +53,7 @@ func init() {
 	compiledMetaSchema = meta
 }
 
-// validateSchemaWellFormedness records OBI-D-17 violations at one schema
+// validateSchemaWellFormedness records OBI-D-13 violations at one schema
 // position: the value must be a JSON Schema 2020-12 schema in object or
 // boolean form, and the object form must validate against the 2020-12
 // meta-schemas (which cover subschemas recursively). The check is
@@ -79,20 +79,20 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 		checked, cut := cutSchema(v, schemaDepthLimit)
 		problems, err := checkAgainstMetaSchema(checked)
 		if err != nil {
-			c.inconclusive("OBI-D-17", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+			c.inconclusive("OBI-D-13", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
 			return
 		}
 		for _, problem := range problems {
-			c.violated("OBI-D-17", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
+			c.violated("OBI-D-13", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
 		}
 		switch {
 		case cut != "":
-			c.inconclusive("OBI-D-17", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
+			c.inconclusive("OBI-D-13", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
 		case len(problems) == 0 && key != "":
 			knownValid[key] = true
 		}
 	default:
-		c.violated("OBI-D-17", prefix, fmt.Sprintf("a schema is a JSON Schema 2020-12 object or boolean; got %s", jsonTypeName(v)))
+		c.violated("OBI-D-13", prefix, fmt.Sprintf("a schema is a JSON Schema 2020-12 object or boolean; got %s", jsonTypeName(v)))
 	}
 }
 
@@ -267,7 +267,7 @@ func metaSchemaCacheKey(schema map[string]any) string {
 	return string(data)
 }
 
-// checkExamples records OBI-D-11 evidence: every provided example value
+// checkExamples records OBI-D-10 evidence: every provided example value
 // (including an explicit JSON null) must validate against its operation's
 // corresponding schema, where that schema is specified and the schema graph
 // statically reachable from it resolves entirely within the document.
@@ -319,7 +319,7 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 			continue
 		}
 		if problem := o.graphProblem(p.path); problem != "" {
-			c.inconclusive("OBI-D-11", p.path, "the schema graph could not be evaluated, so its examples were not checked: "+problem)
+			c.inconclusive("OBI-D-10", p.path, "the schema graph could not be evaluated, so its examples were not checked: "+problem)
 			continue
 		}
 		checked = append(checked, p)
@@ -329,7 +329,7 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 	for _, p := range checked {
 		result := results[p.path]
 		if result.err != nil {
-			c.inconclusive("OBI-D-11", p.path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", result.err))
+			c.inconclusive("OBI-D-10", p.path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", result.err))
 			continue
 		}
 		for _, exampleKey := range p.provided {
@@ -339,19 +339,19 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 			case err == nil:
 			case errors.As(err, &mismatch):
 				for _, problem := range mismatch.Problems {
-					c.violated("OBI-D-11", examplePath+problem.Path, "does not validate against the operation's "+p.name+" schema: "+problem.Message)
+					c.violated("OBI-D-10", examplePath+problem.Path, "does not validate against the operation's "+p.name+" schema: "+problem.Message)
 				}
 			default:
-				c.inconclusive("OBI-D-11", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
+				c.inconclusive("OBI-D-10", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
 			}
 		}
 	}
 }
 
 // CompileOperationSchema compiles an operation's input or output schema, for
-// validating values against the operation's contract (OBI-T-16). The
+// validating values against the operation's contract (OBI-T-08). The
 // operation is named by any of its identifiers, its key or an alias
-// (OBI-T-12). The OBI document is the resolution root of same-document
+// (OBI-T-07). The OBI document is the resolution root of same-document
 // references (§7), and only the schemas the document holds are schemas: an
 // unknown document member never acts as a schema keyword or declares a
 // resource.
@@ -373,7 +373,7 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // document but available: the schema library carries it. A document is
 // interpreted only under a supported version: one declaring a well-formed
 // version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
-// no valid version returns an error (OBI-D-12). Any other error means nothing
+// no valid version returns an error (OBI-D-11). Any other error means nothing
 // was compiled: there is no interface, the position is neither "input" nor
 // "output", the name resolves to no one operation (wrapping
 // ErrOperationNotFound), the operation specifies no schema at that position,
@@ -386,7 +386,7 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 		return nil, refusal
 	}
 	if !IsValidSemver(i.OpenBindings) {
-		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-12), so it is not interpreted", i.OpenBindings)
+		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-11), so it is not interpreted", i.OpenBindings)
 	}
 	key, target, ok := ResolveOperation(i, operation)
 	if !ok {
@@ -422,7 +422,7 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 }
 
 // ValidateOperationInput validates a value against an operation's input
-// schema, with the complete OBI document as the resolution root (OBI-T-16).
+// schema, with the complete OBI document as the resolution root (OBI-T-08).
 // It compiles the document's schemas on every call; to validate many values,
 // compile once with CompileOperationSchema and use CompiledSchema.Validate.
 //
@@ -452,7 +452,7 @@ func ValidateOperationOutput(value any, iface *Interface, operationName string) 
 // governing schema's complete statically reachable graph was not available,
 // well-formed, and evaluable, or, from CompiledSchema.Validate, because the
 // value holds a number this SDK cannot check against that graph or the
-// schema was not compiled. It is distinct from a mismatch, as OBI-T-16
+// schema was not compiled. It is distinct from a mismatch, as OBI-T-08
 // requires of validation against an operation's contract.
 //
 // Callers can use errors.As rather than parsing diagnostic text. Cause remains
@@ -477,7 +477,7 @@ func (e *SchemaGraphUnavailableError) Unwrap() error {
 
 // SchemaValidationError is an established mismatch between a value and a
 // schema. Use errors.As to distinguish it from a *SchemaGraphUnavailableError,
-// where no verdict was reached; OBI-T-16 requires the two outcomes to stay
+// where no verdict was reached; OBI-T-08 requires the two outcomes to stay
 // distinct when a value is validated against an operation's contract. Cause
 // is the validator's own error.
 type SchemaValidationError struct {

@@ -3,7 +3,7 @@ package openbindings
 import "slices"
 
 // ResolveOperation resolves an operation by name against an interface, per
-// OBI-T-12.
+// OBI-T-07.
 //
 // An operation's identifiers are its key plus its Aliases; together they form
 // one flat namespace in which key and alias matches are equally authoritative.

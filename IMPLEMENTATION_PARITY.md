@@ -14,7 +14,7 @@ branch; each rebuilt layer brings its parity entries back with it.
 Document validation reports the core's §10.5 conformance conclusion in Go:
 `Interface.Validate(options)` and `ValidateDocument(data, options)` return a
 `ValidationReport` with per-rule evidence, findings, and OBI-T-02
-diagnostics. TypeScript applies OBI-T-17 to caller evidence through
+diagnostics. TypeScript applies OBI-T-09 to caller evidence through
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
@@ -40,7 +40,7 @@ each of these observable behaviors:
 | Concept | Go | TypeScript |
 |---|---|---|
 | validate a document, with its conformance conclusion | `Interface.Validate(options)` / `ValidateDocument(data, options)` | `validateInterface(...)` (report pending) |
-| apply OBI-T-17 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
+| apply OBI-T-09 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |
 

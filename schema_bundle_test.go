@@ -31,13 +31,13 @@ func inputOutcome(t *testing.T, document string, value any) string {
 // entries 2020-12 neither evaluates nor finds resources or anchors in.
 func TestStrictDefinitions(t *testing.T) {
 	// An $id under definitions embeds nothing: an absolute reference to it
-	// points outside the document, so its example is outside OBI-D-11, and
-	// OBI-D-16 does not judge it.
+	// points outside the document, so its example is outside OBI-D-10, and
+	// OBI-D-12 does not judge it.
 	external := `{"openbindings":"0.2.0","schemas":{"A":{"definitions":{"d":{"$id":"https://ex.test/d","type":"string"}}}},
 		"operations":{"op":{"input":{"$ref":"https://ex.test/d#/nope"},"examples":{"e":{"input":5}}}}}`
 	report := validateBytes(t, external)
-	if report.Evidence["OBI-D-11"] != EvidenceSatisfied || report.Evidence["OBI-D-16"] != EvidenceSatisfied {
-		t.Errorf("an $id under definitions: OBI-D-11 %q, OBI-D-16 %q", report.Evidence["OBI-D-11"], report.Evidence["OBI-D-16"])
+	if report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Evidence["OBI-D-12"] != EvidenceSatisfied {
+		t.Errorf("an $id under definitions: OBI-D-10 %q, OBI-D-12 %q", report.Evidence["OBI-D-10"], report.Evidence["OBI-D-12"])
 	}
 
 	// The reference rules do not look inside definitions or dependencies.
@@ -50,8 +50,8 @@ func TestStrictDefinitions(t *testing.T) {
 		for _, keyword := range []string{"definitions", "dependencies"} {
 			document := `{"openbindings":"0.2.0","schemas":{"A":{"` + keyword + `":{"d":` + entry + `}}},"operations":{}}`
 			report := validateBytes(t, document)
-			if report.Evidence["OBI-D-05"] != EvidenceSatisfied || report.Evidence["OBI-D-16"] != EvidenceSatisfied {
-				t.Errorf("%s under %s: OBI-D-05 %q, OBI-D-16 %q", name, keyword, report.Evidence["OBI-D-05"], report.Evidence["OBI-D-16"])
+			if report.Evidence["OBI-D-05"] != EvidenceSatisfied || report.Evidence["OBI-D-12"] != EvidenceSatisfied {
+				t.Errorf("%s under %s: OBI-D-05 %q, OBI-D-12 %q", name, keyword, report.Evidence["OBI-D-05"], report.Evidence["OBI-D-12"])
 			}
 		}
 	}
@@ -64,8 +64,8 @@ func TestStrictDefinitions(t *testing.T) {
 	// An anchor under definitions is not its resource's.
 	anchor := validateBytes(t, `{"openbindings":"0.2.0","schemas":{"R":{"$id":"https://ex.test/r","definitions":{"d":{"$anchor":"a"}}}},
 		"operations":{"op":{"input":{"$ref":"https://ex.test/r#a"}}}}`)
-	if anchor.Evidence["OBI-D-16"] != EvidenceViolated {
-		t.Errorf("an anchor under definitions: OBI-D-16 %q", anchor.Evidence["OBI-D-16"])
+	if anchor.Evidence["OBI-D-12"] != EvidenceViolated {
+		t.Errorf("an anchor under definitions: OBI-D-12 %q", anchor.Evidence["OBI-D-12"])
 	}
 }
 
@@ -76,11 +76,11 @@ func TestReferencesResolveByRFC3986(t *testing.T) {
 		return `{"openbindings":"0.2.0","schemas":{"A":{"$id":"urn:x:y","$defs":{"b":{"$id":"b","type":"string"}}}},
 			"operations":{"op":{"input":{"$ref":"` + ref + `"}}}}`
 	}
-	if report := validateBytes(t, document("urn:b#/nope")); report.Evidence["OBI-D-16"] != EvidenceViolated {
-		t.Errorf("urn:b#/nope: OBI-D-16 %q", report.Evidence["OBI-D-16"])
+	if report := validateBytes(t, document("urn:b#/nope")); report.Evidence["OBI-D-12"] != EvidenceViolated {
+		t.Errorf("urn:b#/nope: OBI-D-12 %q", report.Evidence["OBI-D-12"])
 	}
-	if report := validateBytes(t, document("urn:x:y#/$defs/b")); report.Evidence["OBI-D-16"] != EvidenceSatisfied {
-		t.Errorf("urn:x:y#/$defs/b: OBI-D-16 %q", report.Evidence["OBI-D-16"])
+	if report := validateBytes(t, document("urn:x:y#/$defs/b")); report.Evidence["OBI-D-12"] != EvidenceSatisfied {
+		t.Errorf("urn:x:y#/$defs/b: OBI-D-12 %q", report.Evidence["OBI-D-12"])
 	}
 	// The schema library resolves a relative reference under such a base
 	// differently, so a graph holding one gets no verdict.
@@ -190,12 +190,12 @@ func TestSchemasHeldInAnnotations(t *testing.T) {
 		report := validateBytes(t, document)
 		var examples RuleEvidenceStatus = EvidenceSatisfied
 		for _, f := range report.Findings {
-			if f.Rule == "OBI-D-11" && strings.HasPrefix(f.Path, "/operations/"+c.op+"/") && examples != EvidenceViolated {
+			if f.Rule == "OBI-D-10" && strings.HasPrefix(f.Path, "/operations/"+c.op+"/") && examples != EvidenceViolated {
 				examples = f.Status
 			}
 		}
 		if examples != c.examples {
-			t.Errorf("%s: the example's OBI-D-11 evidence is %s, want %s; findings %+v", c.name, examples, c.examples, report.Findings)
+			t.Errorf("%s: the example's OBI-D-10 evidence is %s, want %s; findings %+v", c.name, examples, c.examples, report.Findings)
 		}
 	}
 }
@@ -262,12 +262,12 @@ func TestAnUnreachableReferenceStaysWithItsOperation(t *testing.T) {
 		              "b":{"input":{"$ref":"#/schemas/M"},"examples":{"e":{"input":5}}}}}`
 	evidence := map[string]RuleEvidenceStatus{}
 	for _, f := range validateBytes(t, document).Findings {
-		if f.Rule == "OBI-D-11" {
+		if f.Rule == "OBI-D-10" {
 			evidence[strings.Split(f.Path, "/")[2]] = f.Status
 		}
 	}
 	if evidence["a"] != EvidenceInconclusive || evidence["b"] != EvidenceViolated {
-		t.Errorf("OBI-D-11 evidence %v", evidence)
+		t.Errorf("OBI-D-10 evidence %v", evidence)
 	}
 	iface := mustDecodeInterface(t, document)
 	if got := outcome(ValidateOperationInput(json.Number("5"), iface, "b")); got != "mismatch" {
@@ -346,14 +346,14 @@ func TestSchemaGraphIsolation(t *testing.T) {
 		direct := outcome(ValidateOperationInput(example, iface, key))
 		var d11 []string
 		for _, f := range together.Findings {
-			if f.Rule == "OBI-D-11" && strings.HasPrefix(f.Path, "/operations/"+key+"/") {
+			if f.Rule == "OBI-D-10" && strings.HasPrefix(f.Path, "/operations/"+key+"/") {
 				d11 = append(d11, string(f.Status))
 			}
 		}
 		var want string
 		switch {
 		case len(d11) == 0 && key == "external":
-			want = "unavailable" // outside OBI-D-11; the graph is not available
+			want = "unavailable" // outside OBI-D-10; the graph is not available
 		case len(d11) == 0:
 			want = "valid"
 		case d11[0] == string(EvidenceViolated):

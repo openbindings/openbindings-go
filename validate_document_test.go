@@ -181,42 +181,42 @@ func TestValidateDocument_ExampleScope(t *testing.T) {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{
 			"input":{"$ref":"https://schemas.example.com/task.json"},
 			"examples":{"one":{"input":42}}}}}`)
-		if report.Evidence["OBI-D-11"] != EvidenceSatisfied || len(report.Findings) != 0 {
-			t.Fatalf("OBI-D-11 = %s, findings %+v; want out of scope and silent", report.Evidence["OBI-D-11"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceSatisfied || len(report.Findings) != 0 {
+			t.Fatalf("OBI-D-10 = %s, findings %+v; want out of scope and silent", report.Evidence["OBI-D-10"], report.Findings)
 		}
 	})
 	t.Run("an unrelated external reference no longer hides an in-scope mismatch", func(t *testing.T) {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0",
 			"schemas":{"Remote":{"$ref":"https://schemas.example.com/remote.json"}},
 			"operations":{"a":{"input":{"type":"string"},"examples":{"one":{"input":42}}}}}`)
-		if report.Evidence["OBI-D-11"] != EvidenceViolated {
-			t.Fatalf("OBI-D-11 = %s, want violated; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceViolated {
+			t.Fatalf("OBI-D-10 = %s, want violated; findings %+v", report.Evidence["OBI-D-10"], report.Findings)
 		}
 	})
 	t.Run("a reference through the schemas map is followed", func(t *testing.T) {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0",
 			"schemas":{"Title":{"type":"string"}},
 			"operations":{"a":{"input":{"$ref":"#/schemas/Title"},"examples":{"one":{"input":42}}}}}`)
-		if report.Evidence["OBI-D-11"] != EvidenceViolated {
-			t.Fatalf("OBI-D-11 = %s, want violated; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceViolated {
+			t.Fatalf("OBI-D-10 = %s, want violated; findings %+v", report.Evidence["OBI-D-10"], report.Findings)
 		}
 	})
 	t.Run("a reference into an embedded schema resource stays within the document", func(t *testing.T) {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0",
 			"schemas":{"Title":{"$id":"https://schemas.example.com/title.json","type":"string"}},
 			"operations":{"a":{"input":{"$ref":"https://schemas.example.com/title.json"},"examples":{"one":{"input":42}}}}}`)
-		if report.Evidence["OBI-D-11"] != EvidenceViolated {
-			t.Fatalf("OBI-D-11 = %s, want violated; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceViolated {
+			t.Fatalf("OBI-D-10 = %s, want violated; findings %+v", report.Evidence["OBI-D-10"], report.Findings)
 		}
 	})
 	t.Run("an unresolvable reference leaves the examples inconclusive, not passed", func(t *testing.T) {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{
 			"input":{"$ref":"#/schemas/Missing"},"examples":{"one":{"input":42}}}}}`)
-		if report.Evidence["OBI-D-16"] != EvidenceViolated {
-			t.Fatalf("OBI-D-16 = %s, want violated", report.Evidence["OBI-D-16"])
+		if report.Evidence["OBI-D-12"] != EvidenceViolated {
+			t.Fatalf("OBI-D-12 = %s, want violated", report.Evidence["OBI-D-12"])
 		}
-		if report.Evidence["OBI-D-11"] != EvidenceInconclusive {
-			t.Fatalf("OBI-D-11 = %s, want inconclusive; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceInconclusive {
+			t.Fatalf("OBI-D-10 = %s, want inconclusive; findings %+v", report.Evidence["OBI-D-10"], report.Findings)
 		}
 	})
 }
@@ -258,8 +258,8 @@ func TestValidateDocument_ReferencesInsideASchemaResourceAreItsOwn(t *testing.T)
 func TestValidateDocument_WhitespaceAroundTheVersionViolatesD12(t *testing.T) {
 	for _, version := range []string{" 0.2.0", "0.2.0 ", "0.2.0\n"} {
 		report := mustValidateDocument(t, `{"openbindings":`+strconv.Quote(version)+`,"operations":{}}`)
-		if report.Evidence["OBI-D-12"] != EvidenceViolated {
-			t.Fatalf("%q: OBI-D-12 = %s, want violated", version, report.Evidence["OBI-D-12"])
+		if report.Evidence["OBI-D-11"] != EvidenceViolated {
+			t.Fatalf("%q: OBI-D-11 = %s, want violated", version, report.Evidence["OBI-D-11"])
 		}
 	}
 }
@@ -271,8 +271,8 @@ func TestFindingPaths_AreJSONPointers(t *testing.T) {
 		              "b":{"input":{"type":"object","properties":{"n":{"type":"integer"}}},"examples":{"two":{"input":{"n":"x"}}}}},
 		"sources":{"s":{"bindingSpec":""}}}`)
 	want := map[string]string{
-		"/schemas/T/properties/a~1b~0c/minLength": "OBI-D-17",
-		"/operations/b/examples/two/input/n":      "OBI-D-11",
+		"/schemas/T/properties/a~1b~0c/minLength": "OBI-D-13",
+		"/operations/b/examples/two/input/n":      "OBI-D-10",
 		"/sources/s/bindingSpec":                  "OBI-D-02",
 	}
 	got := map[string]string{}
@@ -341,9 +341,9 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 		"OBI-D-02": EvidenceViolated,
 		"OBI-D-05": EvidenceViolated,
 		"OBI-D-08": EvidenceViolated,
-		"OBI-D-12": EvidenceSatisfied,
-		"OBI-D-17": EvidenceViolated,
-		"OBI-D-19": EvidenceSatisfied,
+		"OBI-D-11": EvidenceSatisfied,
+		"OBI-D-13": EvidenceViolated,
+		"OBI-D-14": EvidenceSatisfied,
 	} {
 		if got := report.Evidence[rule]; got != want {
 			t.Errorf("%s = %s, want %s", rule, got, want)
@@ -371,21 +371,21 @@ func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 			t.Errorf("%s = %q, want %s; findings %+v", key, got, want, report.Findings)
 		}
 	}
-	for _, rule := range []string{"OBI-D-03", "OBI-D-04", "OBI-D-11", "OBI-D-17"} {
+	for _, rule := range []string{"OBI-D-03", "OBI-D-04", "OBI-D-10", "OBI-D-13"} {
 		if report.Evidence[rule] != EvidenceSatisfied {
 			t.Errorf("%s = %s: an operations member that is not an object holds nothing it judges", rule, report.Evidence[rule])
 		}
 	}
 }
 
-// OBI-D-11 follows an absolute reference with a fragment into a resource the
+// OBI-D-10 follows an absolute reference with a fragment into a resource the
 // document embeds.
 func TestValidateDocument_ExamplesThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0",
 		"schemas":{"T":{"$id":"https://example.com/t","$defs":{"S":{"type":"string"}}}},
 		"operations":{"a":{"input":{"$ref":"https://example.com/t#/$defs/S"},"examples":{"one":{"input":42}}}}}`)
-	if report.Evidence["OBI-D-11"] != EvidenceViolated {
-		t.Fatalf("OBI-D-11 = %s, want violated; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+	if report.Evidence["OBI-D-10"] != EvidenceViolated {
+		t.Fatalf("OBI-D-10 = %s, want violated; findings %+v", report.Evidence["OBI-D-10"], report.Findings)
 	}
 }
 
@@ -434,25 +434,25 @@ func TestValidateDocument_DialectRulesReachEverySchema(t *testing.T) {
 	}
 }
 
-// Reference cycles terminate in every walk (OBI-T-11): a recursive type is
+// Reference cycles terminate in every walk (OBI-T-06): a recursive type is
 // judged, and a pure loop with no schema in it leaves its examples undecided
 // rather than hanging.
 func TestValidateDocument_ReferenceCyclesTerminate(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0",
 		"schemas":{"Node":{"type":"object","properties":{"next":{"$ref":"#/schemas/Node"}}}},
 		"operations":{"a":{"input":{"$ref":"#/schemas/Node"},"examples":{"one":{"input":{"next":{"next":5}}}}}}}`)
-	if report.Evidence["OBI-D-11"] != EvidenceViolated {
-		t.Fatalf("OBI-D-11 = %s, want violated; findings %+v", report.Evidence["OBI-D-11"], report.Findings)
+	if report.Evidence["OBI-D-10"] != EvidenceViolated {
+		t.Fatalf("OBI-D-10 = %s, want violated; findings %+v", report.Evidence["OBI-D-10"], report.Findings)
 	}
 	report = mustValidateDocument(t, `{"openbindings":"0.2.0",
 		"schemas":{"A":{"$ref":"#/schemas/B"},"B":{"$ref":"#/schemas/A"}},
 		"operations":{"a":{"input":{"$ref":"#/schemas/A"},"examples":{"one":{"input":1}}}}}`)
-	if report.Evidence["OBI-D-11"] == EvidenceSatisfied {
-		t.Fatalf("a pure reference loop established no verdict, yet OBI-D-11 = satisfied")
+	if report.Evidence["OBI-D-10"] == EvidenceSatisfied {
+		t.Fatalf("a pure reference loop established no verdict, yet OBI-D-10 = satisfied")
 	}
 }
 
-// OBI-D-11's graph is what evaluation applies: an unreferenced definition is
+// OBI-D-10's graph is what evaluation applies: an unreferenced definition is
 // not part of it, and a plain-name anchor inside an embedded resource
 // resolves.
 func TestValidateDocument_ExampleGraphIsWhatEvaluationApplies(t *testing.T) {
@@ -465,14 +465,14 @@ func TestValidateDocument_ExampleGraphIsWhatEvaluationApplies(t *testing.T) {
 			"operations":{"op":{"input":{"type":"string"},"examples":{"bad":{"input":7}}}}}`,
 	} {
 		report := mustValidateDocument(t, document)
-		if report.Evidence["OBI-D-11"] != EvidenceViolated {
-			t.Errorf("%s: OBI-D-11 = %s, want violated; findings %+v", name, report.Evidence["OBI-D-11"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceViolated {
+			t.Errorf("%s: OBI-D-10 = %s, want violated; findings %+v", name, report.Evidence["OBI-D-10"], report.Findings)
 		}
 	}
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"A":{"$id":"https://e.test/S"},"B":{"$id":"https://e.test/S"}},
 		"operations":{"op":{"input":{"$ref":"https://e.test/S"},"examples":{"one":{"input":7}}}}}`)
-	if report.Evidence["OBI-D-11"] != EvidenceInconclusive {
-		t.Fatalf("a graph reaching an ambiguous $id is undecided; OBI-D-11 = %s", report.Evidence["OBI-D-11"])
+	if report.Evidence["OBI-D-10"] != EvidenceInconclusive {
+		t.Fatalf("a graph reaching an ambiguous $id is undecided; OBI-D-10 = %s", report.Evidence["OBI-D-10"])
 	}
 }
 
@@ -497,9 +497,9 @@ func TestValidateDocument_ReferencesFollowTheURIGrammar(t *testing.T) {
 	}
 }
 
-// OBI-D-16 covers an absolute $ref that matches an embedded schema's $id.
+// OBI-D-12 covers an absolute $ref that matches an embedded schema's $id.
 // A schema $ref at an OBI position resolves only to a schema the document
-// model places (OBI-D-16): a same-document fragment to a schema at an OBI
+// model places (OBI-D-12): a same-document fragment to a schema at an OBI
 // position outside every resource declaring its own $id, and an absolute
 // reference through an embedded $id to that schema or a subschema below it.
 // JSON Schema 2020-12 leaves any other target undefined (§9.4.2) and advises
@@ -508,7 +508,7 @@ func TestValidateDocument_ReferencesReachSchemaPlaces(t *testing.T) {
 	d16 := func(document string) []Finding {
 		var out []Finding
 		for _, finding := range mustValidateDocument(t, document).Findings {
-			if finding.Rule == "OBI-D-16" {
+			if finding.Rule == "OBI-D-12" {
 				out = append(out, finding)
 			}
 		}
@@ -523,7 +523,7 @@ func TestValidateDocument_ReferencesReachSchemaPlaces(t *testing.T) {
 		"a non-schema in a resource": `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","x":1}},"operations":{"a":{"input":{"$ref":"https://e.com/t#/x"}}}}`,
 	} {
 		if got := d16(document); len(got) != 1 || got[0].Path != "/operations/a/input/$ref" {
-			t.Errorf("%s: want one OBI-D-16 finding at the reference, got %+v", name, got)
+			t.Errorf("%s: want one OBI-D-12 finding at the reference, got %+v", name, got)
 		}
 	}
 	for name, document := range map[string]string{
@@ -534,7 +534,7 @@ func TestValidateDocument_ReferencesReachSchemaPlaces(t *testing.T) {
 		"a schemas entry declaring $id, by pointer": `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t"}},"operations":{"a":{"input":{"$ref":"#/schemas/T"}}}}`,
 	} {
 		if got := d16(document); len(got) != 0 {
-			t.Errorf("%s: want no OBI-D-16 finding, got %+v", name, got)
+			t.Errorf("%s: want no OBI-D-12 finding, got %+v", name, got)
 		}
 	}
 }
@@ -564,8 +564,8 @@ func TestValidateDocument_AbsoluteReferencesIntoEmbeddedResourcesResolve(t *test
 		"https://example.com/t#/$defs/Missing": EvidenceViolated,
 		"https://other.example/x#/nope":        EvidenceSatisfied,
 	} {
-		if got := mustValidateDocument(t, document(ref)).Evidence["OBI-D-16"]; got != want {
-			t.Errorf("%s: OBI-D-16 = %s, want %s", ref, got, want)
+		if got := mustValidateDocument(t, document(ref)).Evidence["OBI-D-12"]; got != want {
+			t.Errorf("%s: OBI-D-12 = %s, want %s", ref, got, want)
 		}
 	}
 }
@@ -576,8 +576,8 @@ func TestValidateDocument_AbsoluteReferencesIntoEmbeddedResourcesResolve(t *test
 // well-formed: the meta-schemas are checked against a stand-in.
 func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"input":{"minLength":1e999999},"examples":{"e":{"input":"x"}}}}}`)
-	if report.Evidence["OBI-D-17"] != EvidenceSatisfied || report.Evidence["OBI-D-11"] != EvidenceInconclusive {
-		t.Fatalf("OBI-D-17 = %s, OBI-D-11 = %s; findings %+v", report.Evidence["OBI-D-17"], report.Evidence["OBI-D-11"], report.Findings)
+	if report.Evidence["OBI-D-13"] != EvidenceSatisfied || report.Evidence["OBI-D-10"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-13 = %s, OBI-D-10 = %s; findings %+v", report.Evidence["OBI-D-13"], report.Evidence["OBI-D-10"], report.Findings)
 	}
 }
 
@@ -618,7 +618,7 @@ func TestValidateDocument_RepeatedVersionIsNotRead(t *testing.T) {
 	}
 }
 
-// OBI-D-16 judges every same-document fragment, whatever OBI-D-05 says of its
+// OBI-D-12 judges every same-document fragment, whatever OBI-D-05 says of its
 // spelling, and an anchor declared twice leaves a reference to it undecided.
 func TestValidateDocument_ReferenceResolutionIsJudgedForEveryFragment(t *testing.T) {
 	for ref, want := range map[string]RuleEvidenceStatus{
@@ -628,15 +628,15 @@ func TestValidateDocument_ReferenceResolutionIsJudgedForEveryFragment(t *testing
 		"#nothere":           EvidenceViolated,
 	} {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"Task":{}},"operations":{"a":{"input":{"$ref":"`+ref+`"}}}}`)
-		if got := report.Evidence["OBI-D-16"]; got != want {
-			t.Errorf("%s: OBI-D-16 = %s, want %s", ref, got, want)
+		if got := report.Evidence["OBI-D-12"]; got != want {
+			t.Errorf("%s: OBI-D-12 = %s, want %s", ref, got, want)
 		}
 	}
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0",
 		"schemas":{"A":{"$id":"https://ex.test/a","$defs":{"p":{"$anchor":"dup"},"q":{"$anchor":"dup"}}}},
 		"operations":{"a":{"input":{"$ref":"https://ex.test/a#dup"}}}}`)
-	if report.Evidence["OBI-D-16"] != EvidenceInconclusive {
-		t.Fatalf("an anchor declared twice: OBI-D-16 = %s, want inconclusive", report.Evidence["OBI-D-16"])
+	if report.Evidence["OBI-D-12"] != EvidenceInconclusive {
+		t.Fatalf("an anchor declared twice: OBI-D-12 = %s, want inconclusive", report.Evidence["OBI-D-12"])
 	}
 }
 
@@ -657,21 +657,21 @@ func TestParseDocument_ChecksNumbersBeyondTheLimits(t *testing.T) {
 }
 
 // Input nested deeper than the decoder reads is still read in full for
-// OBI-D-01, a token at a time, but cannot be decoded: every rule but OBI-D-12
+// OBI-D-01, a token at a time, but cannot be decoded: every rule but OBI-D-11
 // meets a resource limit and is inconclusive (§10.5). Its declared version is
 // read however deep the input and wherever the member lies, so an unsupported
-// one is refused (OBI-T-04) and a missing or malformed one violates OBI-D-12.
+// one is refused (OBI-T-04) and a missing or malformed one violates OBI-D-11.
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 	nested := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
 	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + nested + `}`
 	_, report, err := ValidateDocument([]byte(deep), ValidateOptions{})
-	if err != nil || report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-12"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("err %v, OBI-D-01 %q, OBI-D-12 %q, OBI-D-02 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Evidence["OBI-D-12"], report.Evidence["OBI-D-02"], report.Conclusion)
+	if err != nil || report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-11"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+		t.Fatalf("err %v, OBI-D-01 %q, OBI-D-11 %q, OBI-D-02 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Evidence["OBI-D-11"], report.Evidence["OBI-D-02"], report.Conclusion)
 	}
 	for member, want := range map[string]Finding{
-		``:                                 {Rule: "OBI-D-12", Status: EvidenceViolated, Message: "missing the required openbindings member"},
-		`"openbindings":"0.2",`:            {Rule: "OBI-D-12", Status: EvidenceViolated, Path: "/openbindings", Message: `"0.2" is not a valid SemVer 2.0.0 string`},
-		`"openbindings":[` + nested + `],`: {Rule: "OBI-D-12", Status: EvidenceViolated, Path: "/openbindings", Message: "must be a SemVer 2.0.0 string; got array"},
+		``:                                 {Rule: "OBI-D-11", Status: EvidenceViolated, Message: "missing the required openbindings member"},
+		`"openbindings":"0.2",`:            {Rule: "OBI-D-11", Status: EvidenceViolated, Path: "/openbindings", Message: `"0.2" is not a valid SemVer 2.0.0 string`},
+		`"openbindings":[` + nested + `],`: {Rule: "OBI-D-11", Status: EvidenceViolated, Path: "/openbindings", Message: "must be a SemVer 2.0.0 string; got array"},
 	} {
 		_, report, err := ValidateDocument([]byte(`{`+member+`"operations":{},"x-deep":`+nested+`}`), ValidateOptions{})
 		if !errors.As(err, new(*ValidationError)) || !reflect.DeepEqual(report.Violations(), []Finding{want}) {
@@ -831,15 +831,15 @@ func TestValidateDocument_ByteOrderMarkIsNamed(t *testing.T) {
 }
 
 // A dialect constraint of §5.2 is part of well-formedness, so breaking it
-// violates OBI-D-17 beside OBI-D-06 or OBI-D-07.
+// violates OBI-D-13 beside OBI-D-06 or OBI-D-07.
 func TestValidateDocument_DialectConstraintsAreWellFormedness(t *testing.T) {
 	for input, rule := range map[string]string{
 		`{"properties":{"a":{"$schema":"http://json-schema.org/draft-07/schema#"}}}`: "OBI-D-06",
 		`{"$vocabulary":{}}`: "OBI-D-07",
 	} {
 		_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"a":{"input":`+input+`}}}`), ValidateOptions{})
-		if report.Evidence[rule] != EvidenceViolated || report.Evidence["OBI-D-17"] != EvidenceViolated {
-			t.Errorf("%s: %s %q, OBI-D-17 %q", input, rule, report.Evidence[rule], report.Evidence["OBI-D-17"])
+		if report.Evidence[rule] != EvidenceViolated || report.Evidence["OBI-D-13"] != EvidenceViolated {
+			t.Errorf("%s: %s %q, OBI-D-13 %q", input, rule, report.Evidence[rule], report.Evidence["OBI-D-13"])
 		}
 	}
 }
@@ -904,7 +904,7 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 }
 
 // A subschema nested deeper than the meta-schema validator checks quickly
-// meets a resource limit: OBI-D-17 is inconclusive there, not decided
+// meets a resource limit: OBI-D-13 is inconclusive there, not decided
 // (§10.5). What the schema holds above it is still checked.
 func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
 	nested := strings.Repeat(`{"not":`, 300) + `{"type":42}` + strings.Repeat(`}`, 300)
@@ -921,20 +921,20 @@ func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
 		var inconclusive, violated []string
 		for _, finding := range report.Findings {
 			switch {
-			case finding.Rule != "OBI-D-17":
+			case finding.Rule != "OBI-D-13":
 			case finding.Status == EvidenceViolated:
 				violated = append(violated, finding.Path)
 			default:
 				inconclusive = append(inconclusive, finding.Path)
 			}
 		}
-		if report.Evidence["OBI-D-17"] != tc.evidence || !slices.Equal(violated, tc.violated) || !slices.Equal(inconclusive, []string{cut}) {
-			t.Fatalf("OBI-D-17 %q, violated at %v, inconclusive at %v", report.Evidence["OBI-D-17"], violated, inconclusive)
+		if report.Evidence["OBI-D-13"] != tc.evidence || !slices.Equal(violated, tc.violated) || !slices.Equal(inconclusive, []string{cut}) {
+			t.Fatalf("OBI-D-13 %q, violated at %v, inconclusive at %v", report.Evidence["OBI-D-13"], violated, inconclusive)
 		}
 	}
 }
 
-// OBI-D-16 judges a same-document fragment even when it is not a
+// OBI-D-12 judges a same-document fragment even when it is not a
 // well-formed URI reference, which OBI-D-05 reports.
 func TestValidateDocument_MalformedFragmentsAreStillResolved(t *testing.T) {
 	for ref, resolves := range map[string]bool{"#/schemas/Missing Thing": false, "#/schemas/A B": true} {
@@ -943,8 +943,8 @@ func TestValidateDocument_MalformedFragmentsAreStillResolved(t *testing.T) {
 		if resolves {
 			want = EvidenceSatisfied
 		}
-		if report.Evidence["OBI-D-05"] != EvidenceViolated || report.Evidence["OBI-D-16"] != want {
-			t.Errorf("%s: OBI-D-05 %q, OBI-D-16 %q", ref, report.Evidence["OBI-D-05"], report.Evidence["OBI-D-16"])
+		if report.Evidence["OBI-D-05"] != EvidenceViolated || report.Evidence["OBI-D-12"] != want {
+			t.Errorf("%s: OBI-D-05 %q, OBI-D-12 %q", ref, report.Evidence["OBI-D-05"], report.Evidence["OBI-D-12"])
 		}
 	}
 }
@@ -960,8 +960,8 @@ func TestValidateDocument_DepthCountsSubschemasOnly(t *testing.T) {
 		`{"x-meta":` + deep + `}`:            EvidenceSatisfied,
 	} {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+schema+`}}`)
-		if report.Evidence["OBI-D-17"] != want {
-			t.Errorf("%.30s: OBI-D-17 %q, want %q", schema, report.Evidence["OBI-D-17"], want)
+		if report.Evidence["OBI-D-13"] != want {
+			t.Errorf("%.30s: OBI-D-13 %q, want %q", schema, report.Evidence["OBI-D-13"], want)
 		}
 	}
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"array","const":` + deep + `,"$defs":{"u":{"default":` + deep + `}}}}}}`
@@ -977,8 +977,8 @@ func TestValidateDocument_EmptyIDsDeclareNothing(t *testing.T) {
 	for _, id := range []string{"", "#"} {
 		document := `{"openbindings":"0.2.0","schemas":{"R":{"$id":"https://example.com/r","properties":{"a":{"$id":"` + id + `","type":"string"}}}},
 			"operations":{"op":{"input":{"$ref":"https://example.com/r"},"examples":{"e":{"input":{"a":1}}}}}}`
-		if report := mustValidateDocument(t, document); report.Evidence["OBI-D-11"] != EvidenceViolated || report.Evidence["OBI-D-16"] != EvidenceSatisfied {
-			t.Errorf("$id %q: OBI-D-11 %q, OBI-D-16 %q", id, report.Evidence["OBI-D-11"], report.Evidence["OBI-D-16"])
+		if report := mustValidateDocument(t, document); report.Evidence["OBI-D-10"] != EvidenceViolated || report.Evidence["OBI-D-12"] != EvidenceSatisfied {
+			t.Errorf("$id %q: OBI-D-10 %q, OBI-D-12 %q", id, report.Evidence["OBI-D-10"], report.Evidence["OBI-D-12"])
 		}
 		if err := ValidateOperationInput(map[string]any{"a": json.Number("1")}, mustDecodeInterface(t, document), "op"); !errors.As(err, new(*SchemaValidationError)) {
 			t.Errorf("$id %q: want a mismatch, got %v", id, err)
@@ -994,8 +994,8 @@ func TestValidateDocument_AmbiguousReferencesResolvingNowhere(t *testing.T) {
 			"A":{"$id":"https://example.com/a","$defs":{"d":{}}},
 			"B":{"$id":"https://example.com/x/../a","$defs":{"d":{}}}},
 			"operations":{"op":{"input":{"$ref":"https://example.com/a`+fragment+`"}}}}`)
-		if report.Evidence["OBI-D-16"] != want {
-			t.Errorf("%s: OBI-D-16 %q, want %q", fragment, report.Evidence["OBI-D-16"], want)
+		if report.Evidence["OBI-D-12"] != want {
+			t.Errorf("%s: OBI-D-12 %q, want %q", fragment, report.Evidence["OBI-D-12"], want)
 		}
 	}
 }

@@ -39,8 +39,8 @@ func TestValidateOperationInput_ResolvesNamedSchemasThroughTheDocument(t *testin
 	}
 }
 
-// TestValidateOperationInput_ExternalRefFailsClosed pins the OBI-T-07/T-08
-// clarification: validation is against the FULLY RESOLVED schema, so a
+// TestValidateOperationInput_ExternalRefFailsClosed pins OBI-T-08's
+// complete-graph requirement: validation is against the FULLY RESOLVED schema, so a
 // schema carrying an external $ref the tool cannot fetch is a validation
 // error (fail closed), never a partial pass.
 func TestValidateOperationInput_ExternalRefFailsClosed(t *testing.T) {
@@ -86,7 +86,7 @@ func TestValidateOperationInput_PatternDialect(t *testing.T) {
 // invocation-boundary compiler (the reachable-closure resolution performed
 // by the document-rooted compile, via the underlying jsonschema/v6 library) does
 // not choke on a legal $dynamicRef/$dynamicAnchor pair confined inside a
-// schema declaring its own $id (OBI-D-05's carve-out; OBI-D-16 notes
+// schema declaring its own $id (OBI-D-05's carve-out; OBI-D-12 notes
 // $dynamicRef does not participate in same-document reference resolution).
 // Full 2020-12 recursive-extension semantics apply within the resource.
 func TestValidateOperationInput_DynamicPairInsideEmbeddedID(t *testing.T) {
@@ -146,7 +146,7 @@ func TestValidateOperationInput_PercentEncodedFragmentResolves(t *testing.T) {
 // transitively). A lexically-present but unreachable entry — an
 // unreferenced $defs member, an unrelated document-schemas entry merged
 // into the compound — never participates in a verdict and must not poison
-// the boundary. A dangling same-document ref there is OBI-D-16's
+// the boundary. A dangling same-document ref there is OBI-D-12's
 // document-level concern, not an invocation refusal. Mirrors the TS SDK's
 // schema-conformance oracle.
 func TestValidateOperationInput_ReachableClosureOnly(t *testing.T) {
@@ -237,7 +237,7 @@ func TestValidateOperationInput_UnknownRootMembersAreNotSchemaKeywords(t *testin
 		t.Fatalf("a $id under an unknown root member is not embedded; want graph unavailable, got %v", err)
 	}
 	// A pointer into an unknown member addresses no schema position, so it
-	// reaches no schema (OBI-D-16; JSON Schema 2020-12 §9.4.2).
+	// reaches no schema (OBI-D-12; JSON Schema 2020-12 §9.4.2).
 	iface = mustDecode(t, `{"openbindings":"0.2.0","x-lib":{"s":{"type":"string"}},"operations":{"op":{"input":{"$ref":"#/x-lib/s"}}}}`)
 	if err := ValidateOperationInput("text", iface, "op"); !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "not a schema position") {
 		t.Fatalf("a same-document pointer into an extension reaches no schema; want graph unavailable, got %v", err)
@@ -245,7 +245,7 @@ func TestValidateOperationInput_UnknownRootMembersAreNotSchemaKeywords(t *testin
 }
 
 // format never asserts at an operation boundary, even through the built-in
-// meta-schemas of drafts that assert it by default (§5.2, OBI-T-16).
+// meta-schemas of drafts that assert it by default (§5.2, OBI-T-08).
 func TestValidateOperationInput_FormatIsAnnotationInEveryDialect(t *testing.T) {
 	for _, meta := range []string{"http://json-schema.org/draft-04/schema#", "http://json-schema.org/draft-06/schema#", "http://json-schema.org/draft-07/schema#"} {
 		iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"`+meta+`"}}}}`)
@@ -321,7 +321,7 @@ func TestValidateOperationInput_ConflictingIDsOnlyAffectGraphsThatReachThem(t *t
 
 // Success needs the whole statically reachable graph, whatever branches the
 // evaluator would skip for a value, a then or else no if selects included
-// (§5.2, OBI-T-16).
+// (§5.2, OBI-T-08).
 func TestValidateOperationInput_ApplicatorsTheEvaluatorSkipsStillCount(t *testing.T) {
 	var unavailable *SchemaGraphUnavailableError
 	for name, input := range map[string]string{
@@ -335,10 +335,10 @@ func TestValidateOperationInput_ApplicatorsTheEvaluatorSkipsStillCount(t *testin
 		}
 	}
 	// An example whose graph reaches outside the document is outside
-	// OBI-D-11, a then with no if notwithstanding.
+	// OBI-D-10, a then with no if notwithstanding.
 	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"$ref":"https://ext.example/x.json"}},"examples":{"e":{"input":5}}}}}`), ValidateOptions{})
-	if report.Evidence["OBI-D-11"] != EvidenceSatisfied {
-		t.Fatalf("OBI-D-11 %q", report.Evidence["OBI-D-11"])
+	if report.Evidence["OBI-D-10"] != EvidenceSatisfied {
+		t.Fatalf("OBI-D-10 %q", report.Evidence["OBI-D-10"])
 	}
 }
 
@@ -385,7 +385,7 @@ func TestValidateOperationInput_RefusesVersionsAndResolvesAliases(t *testing.T) 
 	}
 	aliased := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"aliases":["acme.op"],"input":{"type":"string"}}}}`)
 	if err := ValidateOperationInput("x", aliased, "acme.op"); err != nil {
-		t.Fatalf("an alias names the operation (OBI-T-12): %v", err)
+		t.Fatalf("an alias names the operation (OBI-T-07): %v", err)
 	}
 }
 
@@ -481,7 +481,7 @@ func TestValidateOperationInput_OnlyBuiltInMetaSchemaIDsAreReserved(t *testing.T
 
 // A cycle of references that never advances into the value leaves no
 // verdict wherever it sits in the graph, a branch evaluation might skip
-// included (OBI-T-16).
+// included (OBI-T-08).
 func TestValidateOperationInput_ProgresslessCyclesAnywhereAreUnavailable(t *testing.T) {
 	for name, input := range map[string]string{
 		"under not":   `{"not":{"$ref":"#/schemas/Loop"}}`,

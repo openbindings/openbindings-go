@@ -1,7 +1,7 @@
 // Package openbindings is the core OpenBindings SDK for Go: the OBI
 // document model, which carries a document exactly, the document rules and
 // their conformance report, operation resolution, validation of values
-// against operation contracts (OBI-T-16), and the Core-defined constants
+// against operation contracts (OBI-T-08), and the Core-defined constants
 // (versions and media type).
 //
 // The package covers what the core OpenBindings specification defines, and
@@ -72,7 +72,7 @@
 // the document holds is not established; a document holding a lone
 // surrogate, where it decides OBI-D-01 and leaves the other rules
 // inconclusive; and input nested deeper than encoding/json reads (10000
-// levels), where it decides OBI-D-01, and OBI-D-12 on the version it reads
+// levels), where it decides OBI-D-01, and OBI-D-11 on the version it reads
 // from the bytes, and leaves the other rules inconclusive.
 //
 // Encoding refuses the same inexact bytes in the members the model carries as

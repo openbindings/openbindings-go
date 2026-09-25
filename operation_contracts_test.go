@@ -37,8 +37,8 @@ func validateBytes(t *testing.T, document string) ValidationReport {
 func TestOperationContracts_DependenciesAreNotSchemas(t *testing.T) {
 	unknownMember := `{"openbindings":"0.2.0","operations":{"a":{"input":{"type":"string"},"examples":{"e":{"input":5}}}},
 		"dependencies":{"d":{"operation":"a","required":true}}}`
-	if report := validateBytes(t, unknownMember); report.Evidence["OBI-D-11"] != EvidenceViolated {
-		t.Fatalf("an unknown dependency member must not stop OBI-D-11: %q", report.Evidence["OBI-D-11"])
+	if report := validateBytes(t, unknownMember); report.Evidence["OBI-D-10"] != EvidenceViolated {
+		t.Fatalf("an unknown dependency member must not stop OBI-D-10: %q", report.Evidence["OBI-D-10"])
 	}
 	if err := ValidateOperationInput("x", mustDecodeInterface(t, unknownMember), "a"); err != nil {
 		t.Fatalf("an unknown dependency member must not stop validation: %v", err)
@@ -57,13 +57,13 @@ func TestOperationContracts_DependenciesAreNotSchemas(t *testing.T) {
 }
 
 // A same-document reference into a root member the document model does not
-// define reaches no schema: OBI-D-16 is violated, and a value gets no verdict.
+// define reaches no schema: OBI-D-12 is violated, and a value gets no verdict.
 func TestOperationContracts_ReferencesIntoUnknownMembersReachNoSchema(t *testing.T) {
 	document := `{"openbindings":"0.2.0","defs":{"S":{"type":"string"}},
 		"operations":{"a":{"input":{"$ref":"#/defs/S"},"examples":{"e":{"input":5}}}}}`
 	report := validateBytes(t, document)
-	if report.Evidence["OBI-D-16"] != EvidenceViolated || report.Evidence["OBI-D-11"] != EvidenceInconclusive {
-		t.Fatalf("OBI-D-16 %q, OBI-D-11 %q", report.Evidence["OBI-D-16"], report.Evidence["OBI-D-11"])
+	if report.Evidence["OBI-D-12"] != EvidenceViolated || report.Evidence["OBI-D-10"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-12 %q, OBI-D-10 %q", report.Evidence["OBI-D-12"], report.Evidence["OBI-D-10"])
 	}
 	if got := outcome(ValidateOperationInput("x", mustDecodeInterface(t, document), "a")); got != "unavailable" {
 		t.Fatalf("got %s", got)
@@ -79,8 +79,8 @@ func TestOperationContracts_NumericLimitsCoverOnlyTheReachableGraph(t *testing.T
 	} {
 		document := `{"openbindings":"0.2.0",` + member + `,"operations":{"op":{"input":{"type":"string"},"examples":{"e":{"input":5}}}}}`
 		report := validateBytes(t, document)
-		if report.Evidence["OBI-D-02"] == EvidenceInconclusive || report.Evidence["OBI-D-11"] != EvidenceViolated {
-			t.Errorf("%s: OBI-D-02 %q, OBI-D-11 %q", name, report.Evidence["OBI-D-02"], report.Evidence["OBI-D-11"])
+		if report.Evidence["OBI-D-02"] == EvidenceInconclusive || report.Evidence["OBI-D-10"] != EvidenceViolated {
+			t.Errorf("%s: OBI-D-02 %q, OBI-D-10 %q", name, report.Evidence["OBI-D-02"], report.Evidence["OBI-D-10"])
 		}
 		if err := ValidateOperationInput("ok", mustDecodeInterface(t, document), "op"); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -108,14 +108,14 @@ func TestOperationContracts_PercentEncodedTokens(t *testing.T) {
 }
 
 // A pattern Go's regexp cannot compile no longer stops compilation: a graph
-// that reaches outside the document is outside OBI-D-11 whatever else it
+// that reaches outside the document is outside OBI-D-10 whatever else it
 // holds, and one that does not leaves no verdict.
 func TestOperationContracts_UncompiledPatterns(t *testing.T) {
 	outside := `{"openbindings":"0.2.0","operations":{"op":{"input":{"properties":{
 		"a":{"pattern":"^(?=x)"},"b":{"$ref":"https://schemas.example.com/b.json"}}},
 		"examples":{"e":{"input":{}}}}}}`
-	if report := validateBytes(t, outside); report.Evidence["OBI-D-11"] != EvidenceSatisfied || report.Conclusion != ConclusionConformant {
-		t.Fatalf("OBI-D-11 %q, conclusion %q", report.Evidence["OBI-D-11"], report.Conclusion)
+	if report := validateBytes(t, outside); report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Conclusion != ConclusionConformant {
+		t.Fatalf("OBI-D-10 %q, conclusion %q", report.Evidence["OBI-D-10"], report.Conclusion)
 	}
 	for _, input := range []string{`{"pattern":"^(?=x)"}`, `{"patternProperties":{"^(?=x)":{}}}`} {
 		iface := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":`+input+`}}}`)
@@ -167,8 +167,8 @@ func TestOperationContracts_DepthLimit(t *testing.T) {
 	nested := strings.Repeat(`{"not":`, 2000) + `{}` + strings.Repeat(`}`, 2000)
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":` + nested + `,"examples":{"e":{"input":1}}}}}`
 	report := validateBytes(t, document)
-	if report.Evidence["OBI-D-11"] != EvidenceInconclusive {
-		t.Fatalf("OBI-D-11 %q", report.Evidence["OBI-D-11"])
+	if report.Evidence["OBI-D-10"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-10 %q", report.Evidence["OBI-D-10"])
 	}
 	if _, err := CompileOperationSchema(mustDecodeInterface(t, document), "op", "input"); !errors.As(err, new(*SchemaGraphUnavailableError)) || !strings.Contains(err.Error(), "deeper than") {
 		t.Fatalf("want the depth limit, got %v", err)
@@ -288,15 +288,15 @@ func TestOperationContracts_DotSegmentsAreRemoved(t *testing.T) {
 	} {
 		document := `{"openbindings":"0.2.0","schemas":{"A":{"$id":"` + spelling.id + `","type":"string"}},
 			"operations":{"op":{"input":{"$ref":"` + spelling.ref + `"},"examples":{"e":{"input":5}}}}}`
-		if report := validateBytes(t, document); report.Evidence["OBI-D-11"] != EvidenceViolated {
-			t.Errorf("%s from %s: OBI-D-11 %q, conclusion %q", spelling.ref, spelling.id, report.Evidence["OBI-D-11"], report.Conclusion)
+		if report := validateBytes(t, document); report.Evidence["OBI-D-10"] != EvidenceViolated {
+			t.Errorf("%s from %s: OBI-D-10 %q, conclusion %q", spelling.ref, spelling.id, report.Evidence["OBI-D-10"], report.Conclusion)
 		}
 		if err := ValidateOperationInput(json.Number("5"), mustDecodeInterface(t, document), "op"); !errors.As(err, new(*SchemaValidationError)) {
 			t.Errorf("%s from %s: want a mismatch, got %v", spelling.ref, spelling.id, err)
 		}
 		missing := strings.Replace(document, `"$ref":"`+spelling.ref+`"`, `"$ref":"`+spelling.ref+`#/nope"`, 1)
-		if report := validateBytes(t, missing); report.Evidence["OBI-D-16"] != EvidenceViolated {
-			t.Errorf("%s#/nope from %s: OBI-D-16 %q", spelling.ref, spelling.id, report.Evidence["OBI-D-16"])
+		if report := validateBytes(t, missing); report.Evidence["OBI-D-12"] != EvidenceViolated {
+			t.Errorf("%s#/nope from %s: OBI-D-12 %q", spelling.ref, spelling.id, report.Evidence["OBI-D-12"])
 		}
 	}
 }

@@ -60,7 +60,7 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 }
 
 // A name that several operations carry, in a document that violates
-// OBI-D-04, resolves to none of them: no match is privileged (OBI-T-12).
+// OBI-D-04, resolves to none of them: no match is privileged (OBI-T-07).
 func TestResolveOperation_AmbiguousNamesDoNotResolve(t *testing.T) {
 	iface := &Interface{Operations: map[string]Operation{
 		"a": {Aliases: []string{"shared"}},
