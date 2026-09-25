@@ -85,7 +85,8 @@
       }
     }
   },
-  "additionalProperties": true,
+  "patternProperties": { "^x-": true },
+  "additionalProperties": false,
   "$defs": {
     "JSONSchema": {
       "description": "JSON Schema 2020-12 schema: object or boolean form. Top-level constraints from §5.2 are enforced on the object form here ($schema value pinned, $vocabulary forbidden); recursive enforcement (OBI-D-06/07) and meta-schema well-formedness (OBI-D-17) are prose rules beyond this schema.",
@@ -155,7 +156,8 @@
           }
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "OperationExample": {
       "type": "object",
@@ -172,7 +174,8 @@
           "description": "Example output value."
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "DependencyEntry": {
       "type": "object",
@@ -194,7 +197,8 @@
           "description": "Optional unordered any-of constraint over exact, opaque binding specification identifiers acceptable at this consumption point. Omission declares no binding-family constraint."
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "Source": {
       "type": "object",
@@ -213,7 +217,8 @@
           "description": "Human-readable description of this source."
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "BindingEntry": {
       "type": "object",
@@ -255,7 +260,8 @@
           "description": "Per-value transform from a source output value toward the operation's output contract."
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "TransformOrRef": {
       "oneOf": [
@@ -273,7 +279,8 @@
               "description": "Same-document JSON Pointer reference in literal form to a named transform (e.g., '#/transforms/myTransform')."
             }
           },
-          "additionalProperties": true
+          "patternProperties": { "^x-": true },
+          "additionalProperties": false
         }
       ],
       "description": "Either an inline JSONata expression or a reference to a named transform."

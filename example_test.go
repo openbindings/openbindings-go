@@ -90,16 +90,20 @@ func ExampleInterface_Validate_unknownFields() {
 	var iface openbindings.Interface
 	_ = json.Unmarshal(data, &iface)
 
-	// Unknown fields are ignored, never rejected (OBI-T-02)...
+	// An unprefixed name the specification does not define is reserved for it
+	// (§12), so the document is non-conformant (OBI-D-02); a tool processing
+	// it still ignores the field (OBI-T-02), which the report notes too.
 	report, err := iface.Validate(openbindings.ValidateOptions{})
 	fmt.Println("violation established:", err != nil)
-
-	// ...but the report surfaces them as diagnostics so a typo is not silent.
+	for _, finding := range report.Violations() {
+		fmt.Println(finding.Rule, finding.Message)
+	}
 	for _, diagnostic := range report.Diagnostics {
 		fmt.Println(diagnostic.Rule, diagnostic.Message)
 	}
 	// Output:
-	// violation established: false
+	// violation established: true
+	// OBI-D-02 does not validate against the document schema: additional properties 'unknownFeild' not allowed
 	// OBI-T-02 unknown field ignored: unknownFeild; extensions use the x- prefix
 }
 

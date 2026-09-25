@@ -285,6 +285,14 @@
   at the whole document.
 ### Changed
 
+- **An unprefixed field the core does not define is a violation**, following
+  the core draft (§12): the embedded document schema closes the root and the
+  operation, example, dependency, source, binding, and named-transform `$ref`
+  objects to their defined fields and `x-` extensions, so such a field is an
+  OBI-D-02 violation, where it was only diagnosed. The report still carries
+  the OBI-T-02 diagnostic that processing ignores it, and the document model
+  still keeps it in `Unknown` for round-tripping.
+
 - **OBI-D-18 is retired, and with it the transform parser** (breaking,
   pre-1.0), following the core draft: expression syntax is no document rule,
   and an expression that does not parse fails when it is evaluated.
@@ -313,8 +321,8 @@
   specification's working draft. `Source.Location` is gone: the core no
   longer defines `location`, and whatever a source addresses is carried in
   `Content` as its binding specification defines. A `location` member in a
-  document is an unknown field, kept in `Unknown` and diagnosed under
-  OBI-T-02. `BindingEntry.Selector` is a `json.RawMessage`, since a selector
+  document is an unknown field, kept in `Unknown`, diagnosed under OBI-T-02,
+  and, since the unprefixed names are reserved, an OBI-D-02 violation. `BindingEntry.Selector` is a `json.RawMessage`, since a selector
   is any JSON value its source's binding specification defines; nil is
   absent and the bytes `null` are a present null. No core rule takes
   binding-specification knowledge any more: OBI-D-13 is retired and leaves
@@ -547,8 +555,9 @@
 - **`WithRejectUnknownTypedFields` and the exported `ValidateOption`**
   (breaking, pre-1.0). OBI-T-02 requires every processor to ignore unknown
   fields; the option turned them into rejections. Unknown non-`x-` fields
-  are now always surfaced as OBI-T-02 diagnostics in a `ValidationReport`,
-  which is what the rule asks for, and never affect validation.
+  are surfaced as OBI-T-02 diagnostics in a `ValidationReport`, which is
+  what the rule asks for; the draft's reserved unprefixed names (§12) make
+  them OBI-D-02 violations as well.
   The option is gone.
 
 - **The `security` surface, per spec 0.2.0**: the OBI `security` section

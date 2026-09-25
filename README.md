@@ -90,7 +90,7 @@ go get github.com/openbindings/openbindings-go
 - **Core types** for the OpenBindings interface document: operations,
   dependencies, bindings, sources, transforms, and schemas
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
-- **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, unknown fields surfaced as diagnostics rather than rejected, and a violation gate for acting on documents
+- **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
 - **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-16): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
 - **The transform capability** the specification names, as an interface an application implements: `TransformEvaluator` (§5.5, OBI-T-10). The SDK carries no transform engine; an application gives one implementation to every layer that evaluates transforms

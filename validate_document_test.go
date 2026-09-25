@@ -79,11 +79,12 @@ func TestValidateDocument_BindingsNeedNoBindingSpecificationKnowledge(t *testing
 }
 
 // A member the core no longer defines, such as a 0.1 source's location, is an
-// unknown field: diagnosed (OBI-T-02), never a violation.
-func TestValidateDocument_ASourceLocationIsAnUnknownField(t *testing.T) {
+// unprefixed name the specification reserves (§12): an OBI-D-02 violation,
+// and still diagnosed as ignored in processing (OBI-T-02).
+func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","location":"./openapi.json"}}}`)
-	if report.Conclusion != ConclusionConformant {
-		t.Fatalf("conclusion = %s, want conformant; findings %+v", report.Conclusion, report.Findings)
+	if violations := report.Violations(); len(violations) != 1 || violations[0].Rule != "OBI-D-02" || violations[0].Path != "/sources/s" || !strings.Contains(violations[0].Message, "location") {
+		t.Fatalf("want one OBI-D-02 violation at the source naming location, got %+v", violations)
 	}
 	if len(report.Diagnostics) != 1 || report.Diagnostics[0].Rule != "OBI-T-02" || report.Diagnostics[0].Path != "/sources/s" || !strings.Contains(report.Diagnostics[0].Message, "location") {
 		t.Fatalf("want one OBI-T-02 diagnostic at the source naming location, got %+v", report.Diagnostics)

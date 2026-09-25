@@ -751,17 +751,13 @@ func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 	}
 }
 
-func TestParseDocument_UnknownTopLevelFieldValidates_OBI_T_02(t *testing.T) {
-	// OBI-T-02: unknown non-x- fields are ignored, not fatal. The vendored
-	// v0.2.0 schema keeps additionalProperties open at the root; "security"
-	// (removed from the spec in 0.2.0) must validate as an unknown field.
+func TestParseDocument_UnknownTopLevelFieldViolatesD02(t *testing.T) {
+	// An unprefixed name the specification does not define is reserved for it
+	// (§12): "security", a 0.1 member, makes a 0.2 document non-conformant.
 	doc := []byte(`{"openbindings":"0.2.0","operations":{},"security":"abc"}`)
-	iface, err := ParseDocument(doc)
-	if err != nil {
-		t.Fatalf("expected unknown top-level field to parse, got %v", err)
-	}
-	if _, err := iface.Validate(ValidateOptions{}); err != nil {
-		t.Fatalf("expected unknown top-level field to validate (OBI-T-02), got %v", err)
+	var violation *ValidationError
+	if _, err := ParseDocument(doc); !errors.As(err, &violation) || !strings.Contains(err.Error(), "security") || !strings.Contains(err.Error(), "OBI-D-02") {
+		t.Fatalf("want an OBI-D-02 violation naming security, got %v", err)
 	}
 }
 
@@ -1094,18 +1090,18 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 }
 
 // unknownFieldDiagnostics validates iface and returns the OBI-T-02 diagnostics
-// by path, failing the test if the unknown fields established a violation:
-// OBI-T-02 makes unknown fields ignored, never rejected.
+// by path. An unknown field without the x- prefix violates OBI-D-02 (§12),
+// which requireUnknownFieldDiagnostic checks beside the diagnostic that
+// processing ignores it (OBI-T-02).
 func unknownFieldDiagnostics(t *testing.T, iface Interface) map[string]string {
 	t.Helper()
-	report, err := iface.Validate(ValidateOptions{})
-	if err != nil {
-		t.Fatalf("unknown fields must not fail validation (OBI-T-02): %v", err)
-	}
-	if report.Conclusion == ConclusionNonConformant {
-		t.Fatalf("unknown fields must not make a document non-conformant: %+v", report.Violations())
-	}
+	report, _ := iface.Validate(ValidateOptions{})
 	byPath := map[string]string{}
+	for _, finding := range report.Violations() {
+		if finding.Rule == "OBI-D-02" {
+			byPath["violation "+finding.Path] = finding.Message
+		}
+	}
 	for _, diagnostic := range report.Diagnostics {
 		if diagnostic.Rule != "OBI-T-02" {
 			t.Fatalf("unexpected diagnostic rule %q", diagnostic.Rule)
@@ -1117,9 +1113,11 @@ func unknownFieldDiagnostics(t *testing.T, iface Interface) map[string]string {
 
 func requireUnknownFieldDiagnostic(t *testing.T, byPath map[string]string, path, field string) {
 	t.Helper()
-	message, ok := byPath[path]
-	if !ok || !strings.Contains(message, field) {
+	if message, ok := byPath[path]; !ok || !strings.Contains(message, field) {
 		t.Fatalf("no OBI-T-02 diagnostic naming %q at %q; got %v", field, path, byPath)
+	}
+	if message, ok := byPath["violation "+path]; !ok || !strings.Contains(message, field) {
+		t.Fatalf("no OBI-D-02 violation naming %q at %q; got %v", field, path, byPath)
 	}
 }
 
@@ -1238,6 +1236,6 @@ func TestInterfaceValidate_ExtensionFieldsAreNotDiagnosed(t *testing.T) {
 		},
 	})
 	if len(byPath) != 0 {
-		t.Fatalf("x- extensions are not unknown fields; got diagnostics %v", byPath)
+		t.Fatalf("x- extensions are not unknown fields; got %v", byPath)
 	}
 }

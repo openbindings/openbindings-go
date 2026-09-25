@@ -480,7 +480,9 @@ func sortedKeys(object map[string]any) []string {
 }
 
 // diagnoseUnknownFields surfaces OBI-T-02's advice for the unknown non-`x-`
-// members of an OBI-defined object. They are ignored, never rejected.
+// members of an OBI-defined object: processing ignores them. The document
+// schema also refuses them (OBI-D-02, §12), since unprefixed names are
+// reserved for the specification.
 func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, known map[string]bool) {
 	var unknown []string
 	for _, name := range sortedKeys(object) {
