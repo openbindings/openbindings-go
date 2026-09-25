@@ -230,7 +230,7 @@
           "description": "Source key from sources."
         },
         "selector": {
-          "description": "Selection of a specific target within the governed source, whether an artifact entry, live-surface member, or another target form, as any JSON value. Accepted values and meaning, including the absent-selector case, are the governing binding specification's concern. Member presence is distinct from value: selector carrying JSON null is a present member."
+          "description": "Selection of the binding's target, as any JSON value the source's binding specification defines, including what its absence means. Member presence is distinct from value: selector carrying JSON null is a present member."
         },
         "preference": {
           "type": "integer",
@@ -244,7 +244,7 @@
         },
         "deprecated": {
           "type": "boolean",
-          "description": "Author recommends migration away from this binding. A deprecated binding remains discoverable and actionable; no ordering relationship with preference is mandated."
+          "description": "Author recommends migration away from this binding. Deprecation does not remove the binding or change what it declares; no ordering relationship with preference is mandated."
         },
         "inputTransform": {
           "$ref": "#/$defs/TransformOrRef",
