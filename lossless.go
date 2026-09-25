@@ -73,13 +73,12 @@ type losslessObject interface {
 type memberClass int
 
 const (
-	memberValue     memberClass = iota // refuses null
-	memberRequired                     // a string: required, refuses null
-	memberRaw                          // json.RawMessage: any value, null included
-	memberStrings                      // []string or map[string]string: no null elements
-	memberObjects                      // a map of OBI-defined objects
-	memberInteger                      // *int64: an exact preference-range integer
-	memberTransform                    // TransformOrRef
+	memberValue    memberClass = iota // refuses null
+	memberRequired                    // a string: required, refuses null
+	memberRaw                         // json.RawMessage: any value, null included
+	memberStrings                     // []string: no null elements
+	memberObjects                     // a map of OBI-defined objects
+	memberInteger                     // *int64: an exact preference-range integer
 )
 
 type memberField struct {
@@ -97,7 +96,6 @@ var (
 	memberTables        sync.Map // reflect.Type -> *memberTable
 	rawMessageType      = reflect.TypeFor[json.RawMessage]()
 	int64PointerType    = reflect.TypeFor[*int64]()
-	transformType       = reflect.TypeFor[TransformOrRef]()
 	marshalerType       = reflect.TypeFor[json.Marshaler]()
 	verifiedDecoderType = reflect.TypeFor[verifiedDecoder]()
 	errNotJSONObject    = errors.New("not a JSON object")
@@ -132,9 +130,7 @@ func classifyMember(t reflect.Type) memberClass {
 		return memberRequired
 	case t == int64PointerType:
 		return memberInteger
-	case t == transformType:
-		return memberTransform
-	case (t.Kind() == reflect.Slice || t.Kind() == reflect.Map) && t.Elem().Kind() == reflect.String:
+	case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.String:
 		return memberStrings
 	case t.Kind() == reflect.Map && reflect.PointerTo(t.Elem()).Implements(verifiedDecoderType):
 		return memberObjects
@@ -221,13 +217,6 @@ func decodeMember(raw json.RawMessage, class memberClass, field reflect.Value) e
 			return err
 		}
 		field.Set(reflect.ValueOf(&value))
-		return nil
-	case memberTransform:
-		transform, err := decodeTransform(raw)
-		if err != nil {
-			return err
-		}
-		field.Set(reflect.ValueOf(&transform).Elem())
 		return nil
 	case memberObjects:
 		entries, err := splitObject(raw)

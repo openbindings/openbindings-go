@@ -56,8 +56,9 @@ func copiedAt(location string) string {
 
 // copyGraph is the graph of what the schema library compiles from the bundle,
 // by root: where it compiles a schema from (rootOf). A root is a copy
-// (copiedAt), or a location in one that a reference names and the copy's
-// keywords do not reach, such as a schema held in an annotation; the schemas
+// (copiedAt), or a location a reference names that no copy's keywords reach,
+// such as a value in an annotation, which is no schema position and so a root
+// with a problem (rootProblem); the schemas
 // a root holds are what its keywords reach, and everything else in it is data
 // the library only carries. As a bundler would, the graph follows every
 // reference those schemas hold, reached by the operation schemas or not, since
@@ -256,21 +257,25 @@ func forEachSchemaReference(root any, at string, fn func(holder, ref string)) {
 // RFC 3986; or, for a root outside the schema positions, an identity keyword,
 // which only a schema position declares (§7).
 func (o *operationSchemas) rootProblem(at string) string {
+	// A schema $ref reaches only a schema the document model places
+	// (OBI-D-16); JSON Schema 2020-12 leaves any other target undefined
+	// (§9.4.2), so nothing elsewhere is evaluated as a schema.
+	if !atSchemaPosition(at) {
+		return fmt.Sprintf("%s is not a schema position; a schema $ref reaches only a schema the document model places (OBI-D-16)", describeLocation(at))
+	}
 	if problem := o.limitProblem(at); problem != "" {
 		return problem
 	}
 	value := mustResolve(o.view, at)
 	// The library checks what it is given against the meta-schema, but it is
-	// given each copy without the keywords strict 2020-12 drops, and a root
-	// in an annotation as the annotation's data; the document holds them as
-	// schemas, and they too must be well-formed.
+	// given each copy without the keywords strict 2020-12 drops; the document
+	// holds them as schemas, and they too must be well-formed.
 	if problems, err := checkAgainstMetaSchema(value); err != nil {
 		return fmt.Sprintf("the schema at %s could not be checked against the 2020-12 meta-schemas: %v", at, err)
 	} else if len(problems) > 0 {
 		return fmt.Sprintf("the schema at %s is not a well-formed JSON Schema 2020-12 schema: %s: %s", at, at+jsonpointer.Format(problems[0].Location...), problems[0].Message)
 	}
 	var problems []string
-	atPosition := atSchemaPosition(at)
 	walkSchemaObjects(value, func(object map[string]any, path []string) bool {
 		location := func() string { return at + jsonpointer.Format(path...) }
 		if dialect, present := object["$schema"]; present && dialect != draft202012URI {
@@ -287,9 +292,6 @@ func (o *operationSchemas) rootProblem(at string) string {
 			if _, err := regexp.Compile(pattern); err != nil {
 				problems = append(problems, fmt.Sprintf("the pattern %q at %s cannot be evaluated: Go's regexp does not support it (%v)", pattern, location(), err))
 			}
-		}
-		if keyword := identityKeyword(object); keyword != "" && !atPosition {
-			problems = append(problems, fmt.Sprintf("the schema at %s is not at a schema position, and it declares %s, which only a schema position declares; define it in schemas to use it", location(), keyword))
 		}
 		return true
 	})

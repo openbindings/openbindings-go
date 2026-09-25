@@ -28,12 +28,8 @@
 // only the exact bytes decide and Validate leaves inconclusive. Validate
 // returns a *ValidationError listing every violation it establishes, which
 // makes it a gate. A nil error is not conformance: a rule this SDK cannot
-// decide is inconclusive, not violated. OBI-D-18 takes a
-// [TransformParser], which the SDK does not carry: an application gives one
-// through [ValidateOptions], and without one the rule is inconclusive.
-// Evaluating transforms takes a [TransformEvaluator]; one implementation of
-// the pinned language usually provides both. The
-// report beside the error carries the conclusion:
+// decide is inconclusive, not violated. The report beside the error carries
+// the conclusion:
 //
 //	iface, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
 //	// report.Conclusion is conformant, non-conformant, or
@@ -50,27 +46,26 @@
 // # An Exact Document Model
 //
 // Re-encoding a decoded document reproduces every member:
-//   - An optional member is absent exactly when its Go value is nil. Optional
+//   - An optional member is absent exactly when its Go value is nil (a
+//     json.RawMessage also when empty, since it then holds no value). Optional
 //     strings and booleans are pointers (set them with [Present], read them
 //     with [Value] where absence and the zero value mean the same); optional
 //     collections distinguish nil (absent) from empty (present).
-//   - JSON null is carried where the model has a place for it: example values
-//     and source content are json.RawMessage, where the bytes `null` are a
-//     present null, and a schemas entry of null is a nil JSONSchema.
+//   - JSON null is carried where the model has a place for it: example
+//     values and source and binding content are json.RawMessage,
+//     where the bytes `null` are a present null, and a schemas entry of null
+//     is a nil JSONSchema.
 //   - Members are matched by exact name. Members the SDK does not model,
 //     case variants of modeled ones included, are kept:
 //     LosslessFields.Extensions for keys beginning with x-,
-//     LosslessFields.Unknown for other keys, at every OBI-defined object, a
-//     transform's $ref object included.
-//   - A binding transform is an [InlineTransform] or a *[TransformReference],
-//     never both.
+//     LosslessFields.Unknown for other keys, at every OBI-defined object.
 //
 // A document the model cannot carry exactly fails decoding instead of being
 // altered: input that is not valid UTF-8, a duplicate member name in any
 // object, a string escaping a lone UTF-16 surrogate (a Go string cannot hold
 // one, and encoding/json would replace it), a JSON null at a member, map
 // entry, or array element the model types (null inside a schema, an example
-// value, source content, or a kept member is carried), a missing required
+// value, source or binding content, or a kept member is carried), a missing required
 // string member, or a binding preference that is not an integer number in
 // range. ValidateDocument still judges such a document in full, except input
 // OBI-D-01 refuses (not UTF-8, or repeating a member name), where which values
@@ -81,7 +76,7 @@
 // from the bytes, and leaves the other rules inconclusive.
 //
 // Encoding refuses the same inexact bytes in the members the model carries as
-// raw JSON (example values, source content, and kept members), so the model
+// raw JSON (example values, source and binding content, and kept members), so the model
 // encodes only what it would decode back unchanged.
 //
 // A typed field alone states its member: an Unknown or Extensions entry

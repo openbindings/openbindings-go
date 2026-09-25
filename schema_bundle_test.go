@@ -89,11 +89,12 @@ func TestReferencesResolveByRFC3986(t *testing.T) {
 	}
 }
 
-// A reference into a root member named like a schema keyword resolves, since
-// core resolves it and the document root is never handed to the library.
+// A root member named like a schema keyword is still no schema position, so
+// a reference into it reaches no schema; the document root is never handed to
+// the library.
 func TestReferencesIntoRootMembersNamedLikeKeywords(t *testing.T) {
 	document := `{"openbindings":"0.2.0","$defs":{"a":{"type":"string"}},"operations":{"op":{"input":{"$ref":"#/$defs/a"}}}}`
-	if got := inputOutcome(t, document, 5); got != "mismatch" {
+	if got := inputOutcome(t, document, 5); got != "unavailable" {
 		t.Errorf("got %s", got)
 	}
 }
@@ -155,10 +156,11 @@ func TestSchemaGraphEdgeCases(t *testing.T) {
 	}
 }
 
-// A schema a reference names in an annotation is a schema the library
-// compiles on its own, so what it holds is checked as for any schema the
-// library is given; and a reference held in an annotation's data, which no
-// reference names, is data, which leads nowhere.
+// A value in an annotation is never a schema position, so a reference that
+// names one reaches no schema (JSON Schema 2020-12 §9.4.2): the graph is
+// unavailable and the example's check inconclusive, whatever the value
+// holds. A reference held in an annotation's data leads nowhere, and an
+// annotation no reference names is only carried.
 func TestSchemasHeldInAnnotations(t *testing.T) {
 	for _, c := range []struct {
 		name, operations string
@@ -167,30 +169,17 @@ func TestSchemasHeldInAnnotations(t *testing.T) {
 		want             string
 		examples         RuleEvidenceStatus
 	}{
-		{"a comparison in a named annotation keeps the stand-in from use",
-			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":100}},"examples":{"e":{"input":1e99999}}}`,
-			"op", json.Number("1e99999"), "unavailable", EvidenceInconclusive},
-		{"a named annotation is evaluated",
+		{"a named annotation reaches no schema",
 			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":100}},"examples":{"e":{"input":5}}}`,
-			"op", json.Number("5"), "mismatch", EvidenceViolated},
+			"op", json.Number("5"), "unavailable", EvidenceInconclusive},
 		{"a reference in an annotation's data leads nowhere",
 			`"op":{"input":{"type":"number","x-note":{"$ref":"#/x-memo"}},"examples":{"e":{"input":"bad"}}}`,
 			"op", "bad", "mismatch", EvidenceViolated},
-		{"a number the library would read in a named annotation meets the limits",
-			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":1e1000000000}},"examples":{"e":{"input":5}}}`,
-			"op", json.Number("5"), "unavailable", EvidenceInconclusive},
-		{"an ill-formed named annotation",
-			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"type":42}},"examples":{"e":{"input":5}}}`,
-			"op", json.Number("5"), "unavailable", EvidenceInconclusive},
-		{"a pattern Go's regexp cannot compile in a named annotation",
-			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"pattern":"^(?=a)"}},"examples":{"e":{"input":"a"}}}`,
-			"op", "a", "unavailable", EvidenceInconclusive},
 		{"an annotation no reference names is only carried",
-			`"op":{"input":{"type":"string","x-note":{"minimum":1e1000000000,"type":42}},"examples":{"e":{"input":"s"}}},
-			 "other":{"input":{"$ref":"#/operations/op/input/x-note"}}`,
+			`"op":{"input":{"type":"string","x-note":{"minimum":1e1000000000,"type":42}},"examples":{"e":{"input":"s"}}}`,
 			"op", "s", "valid", EvidenceSatisfied},
-		{"another operation naming the annotation meets its problem",
-			`"op":{"input":{"type":"string","x-note":{"minimum":1e1000000000}}},
+		{"another operation naming the annotation reaches no schema",
+			`"op":{"input":{"type":"string","x-note":{"minimum":1}}},
 			 "other":{"input":{"$ref":"#/operations/op/input/x-note"},"examples":{"e":{"input":5}}}`,
 			"other", json.Number("5"), "unavailable", EvidenceInconclusive},
 	} {
@@ -225,7 +214,9 @@ func TestCarriedDataIsLinear(t *testing.T) {
 		small, large := build(2000), build(8000)
 		compile := func(i *Interface) func() {
 			return func() {
-				if _, err := CompileOperationSchema(i, "op", "input"); err != nil {
+				// A reference into carried data reaches no schema position,
+				// so its graph is unavailable; either way the work is linear.
+				if _, err := CompileOperationSchema(i, "op", "input"); err != nil && !(referenced && errors.As(err, new(*SchemaGraphUnavailableError))) {
 					t.Fatal(err)
 				}
 			}
@@ -236,16 +227,16 @@ func TestCarriedDataIsLinear(t *testing.T) {
 	}
 }
 
-// Many schemas outside the schema positions, each its own copy, cost work in
-// proportion to their number.
-func TestManyCopiesOutsideTheSchemaPositionsAreLinear(t *testing.T) {
+// Many referenced schemas entries, each its own copy, cost work in proportion
+// to their number.
+func TestManyReferencedSchemasAreLinear(t *testing.T) {
 	build := func(n int) *Interface {
 		var lib, refs []string
 		for i := range n {
 			lib = append(lib, fmt.Sprintf(`"s%d":true`, i))
-			refs = append(refs, fmt.Sprintf(`{"$ref":"#/x-lib/s%d"}`, i))
+			refs = append(refs, fmt.Sprintf(`{"$ref":"#/schemas/s%d"}`, i))
 		}
-		return mustDecodeInterface(t, `{"openbindings":"0.2.0","x-lib":{`+strings.Join(lib, ",")+`},"operations":{"op":{"input":{"allOf":[`+strings.Join(refs, ",")+`]}}}}`)
+		return mustDecodeInterface(t, `{"openbindings":"0.2.0","schemas":{`+strings.Join(lib, ",")+`},"operations":{"op":{"input":{"allOf":[`+strings.Join(refs, ",")+`]}}}}`)
 	}
 	small, large := build(1000), build(4000)
 	compile := func(i *Interface) func() {
@@ -256,17 +247,17 @@ func TestManyCopiesOutsideTheSchemaPositionsAreLinear(t *testing.T) {
 		}
 	}
 	if ratio := float64(allocated(compile(large))) / float64(allocated(compile(small))); ratio > 6 {
-		t.Errorf("4 times the copies allocated %.1f times the memory", ratio)
+		t.Errorf("4 times the referenced schemas allocated %.1f times the memory", ratio)
 	}
 }
 
-// A schema compiled from two roots holds what each root holds: an operation
-// reaching it through its own root does not meet a problem of another root
-// that also holds it.
-func TestASchemaHeldByTwoRoots(t *testing.T) {
+// A reference into a value no schema position holds reaches no schema, while
+// the operations that reach only schema positions are judged as usual: one
+// operation's unreachable reference changes nothing for another.
+func TestAnUnreachableReferenceStaysWithItsOperation(t *testing.T) {
 	document := `{"openbindings":"0.2.0",
-		"schemas":{"M":{"$ref":"#/schemas/S/x-note/properties/p"},
-		           "S":{"x-note":{"pattern":"^(?=a)","properties":{"p":{"type":"string"}}}}},
+		"schemas":{"M":{"type":"string"},
+		           "S":{"x-note":{"properties":{"p":{"type":"string"}}}}},
 		"operations":{"a":{"input":{"$ref":"#/schemas/S/x-note"},"examples":{"e":{"input":"a"}}},
 		              "b":{"input":{"$ref":"#/schemas/M"},"examples":{"e":{"input":5}}}}}`
 	evidence := map[string]RuleEvidenceStatus{}
@@ -287,20 +278,18 @@ func TestASchemaHeldByTwoRoots(t *testing.T) {
 	}
 }
 
-// A schema a reference names within a value the bundle carries as written
-// (const, enum) or leaves out (dependencies) reaches no verdict where the
-// bundle cannot give it to the library as a schema, and is evaluated where it
-// can.
+// A value a keyword holds as data (const, enum) or as the legacy dependencies
+// is no schema position, so a reference into it reaches no schema, while a
+// property named like a keyword is a subschema and is evaluated.
 func TestSchemasTheBundleCarriesAsWritten(t *testing.T) {
 	for _, c := range []struct {
 		schemas, input string
 		want, says     string
 	}{
-		{`"A":{"const":{"$ref":"#/schemas/T"}},"T":{"type":"string"}`, `{"$ref":"#/schemas/A/const"}`, "unavailable", "carries as written"},
-		{`"A":{"const":{"type":"string"}}`, `{"$ref":"#/schemas/A/const"}`, "mismatch", ""},
-		{`"A":{"enum":[{"type":"string"}]}`, `{"$ref":"#/schemas/A/enum/0"}`, "mismatch", ""},
-		{`"A":{"dependencies":{"x":{"type":"string"}}}`, `{"$ref":"#/schemas/A/dependencies/x"}`, "unavailable", "leaves out"},
-		{`"A":{"const":{"dependencies":{"x":false}}}`, `{"$ref":"#/schemas/A/const"}`, "unavailable", "keeps dependencies"},
+		{`"A":{"const":{"$ref":"#/schemas/T"}},"T":{"type":"string"}`, `{"$ref":"#/schemas/A/const"}`, "unavailable", "not a schema position"},
+		{`"A":{"const":{"type":"string"}}`, `{"$ref":"#/schemas/A/const"}`, "unavailable", "not a schema position"},
+		{`"A":{"enum":[{"type":"string"}]}`, `{"$ref":"#/schemas/A/enum/0"}`, "unavailable", "not a schema position"},
+		{`"A":{"dependencies":{"x":{"type":"string"}}}`, `{"$ref":"#/schemas/A/dependencies/x"}`, "unavailable", "not a schema position"},
 		{`"A":{"properties":{"const":{"type":"string"}}}`, `{"$ref":"#/schemas/A/properties/const"}`, "mismatch", ""},
 	} {
 		document := `{"openbindings":"0.2.0","schemas":{` + c.schemas + `},"operations":{"op":{"input":` + c.input + `}}}`

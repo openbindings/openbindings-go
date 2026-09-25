@@ -206,8 +206,7 @@
 - **One defect is one finding.** Checks that restated the embedded document
   schema are gone, so OBI-D-02 has one owner. An `anyOf` or `oneOf` that no
   alternative satisfies is one finding at its own location that says what
-  each alternative lacked; a source with neither `location` nor `content`
-  was three findings.
+  each alternative lacked.
 - **Schema compilation never reads local files.** The schema backend's
   default loader read `file:` references from disk, so a document could make
   validation read the validating machine's files and a verdict could depend
@@ -261,8 +260,7 @@
 - **OBI-D-05 follows RFC 3986's grammar.** A character screen plus `net/url`
   passed `#/a[0]` and a second `#` in a fragment, and refused a
   percent-encoded host. A URI-form reference is now checked against the
-  URI-reference grammar; an empty location is relative in form. The
-  named-transform `$ref` clause is now checked. `dependencies` subschemas,
+  URI-reference grammar. The named-transform `$ref` clause is now checked. `dependencies` subschemas,
   which the 2020-12 meta-schema describes and the backend applies, are
   walked like `definitions`.
 - **OBI-D-16 covers absolute references into embedded resources.** An
@@ -286,6 +284,69 @@
 - **A document schema finding about a map key is located at the key**, not
   at the whole document.
 ### Changed
+
+- **Transforms leave the core, and a binding carries content** (breaking,
+  pre-1.0), following the core draft. `BindingEntry.Selector` is now
+  `BindingEntry.Content`, a `json.RawMessage` the source's binding
+  specification defines: typically which target realizes the operation and
+  how values are adapted to it. `Interface.Transforms`,
+  `BindingEntry.InputTransform`, and `BindingEntry.OutputTransform` are gone,
+  as are `Transform`, `TransformOrRef`, `InlineTransform`,
+  `TransformReference`, `TransformEvaluator`, `ErrTransformNoResult`, and
+  `ErrTransformUndecided`: the core defines no transforms, so the SDK carries
+  no transform capability. `DocumentRules` no longer lists OBI-D-10, and
+  OBI-D-05 checks schema references only. A document carrying `transforms`,
+  `selector`, `inputTransform`, or `outputTransform` violates OBI-D-02, and
+  the document model keeps those members in `Unknown` for round-tripping.
+  This supersedes what the entries below say about transforms,
+  `TransformEvaluator`, and `selector`.
+
+- **An unprefixed field the core does not define is a violation**, following
+  the core draft (§12): the embedded document schema closes the root and the
+  operation, example, dependency, source, binding, and named-transform `$ref`
+  objects to their defined fields and `x-` extensions, so such a field is an
+  OBI-D-02 violation, where it was only diagnosed. The report still carries
+  the OBI-T-02 diagnostic that processing ignores it, and the document model
+  still keeps it in `Unknown` for round-tripping.
+
+- **OBI-D-18 is retired, and with it the transform parser** (breaking,
+  pre-1.0), following the core draft: expression syntax is no document rule,
+  and an expression that does not parse fails when it is evaluated.
+  `TransformParser` and `ValidateOptions.Transforms` are gone, so a document
+  with transforms is conformant when every other rule is decided, where it
+  was conformance-undetermined without a parser. `DocumentRules` no longer
+  lists OBI-D-18. `ValidateOptions` has no fields.
+
+- **A schema `$ref` reaches only a schema the document model places**,
+  following the core draft. A `$ref` at an OBI position that resolves to the
+  document itself (`#`), a string, `x-` data, a source's `content`, an
+  annotation, `const`, `enum`, or a legacy `definitions` or `dependencies`
+  entry violates OBI-D-16, as does a same-document pointer into a schema
+  resource that declares its own `$id` (reach it through its `$id`); a
+  schemas entry declaring `$id` is still reachable as `#/schemas/<name>`.
+  Contract validation reports such a graph unavailable instead of evaluating
+  the value as a schema, since JSON Schema 2020-12 leaves those targets
+  undefined. Two schema resources declaring the same `$id` violate OBI-D-05
+  at each declaration. The transform capability's doc calls the values a
+  binding specification supplies "variable bindings", as the draft does, and
+  says an evaluator that cannot compute an expression's meaning for the
+  values given returns an error, never a different value.
+
+- **A source is its binding specification's identifier and the content that
+  specification defines** (breaking, pre-1.0), following the core
+  specification's working draft. `Source.Location` is gone: the core no
+  longer defines `location`, and whatever a source addresses is carried in
+  `Content` as its binding specification defines. A `location` member in a
+  document is an unknown field, kept in `Unknown`, diagnosed under OBI-T-02,
+  and, since the unprefixed names are reserved, an OBI-D-02 violation. `BindingEntry.Selector` is a `json.RawMessage`, since a selector
+  is any JSON value its source's binding specification defines; nil is
+  absent and the bytes `null` are a present null. No core rule takes
+  binding-specification knowledge any more: OBI-D-13 is retired and leaves
+  `DocumentRules`, OBI-D-05 judges only the core's own references, and a
+  source without `content` violates nothing. A document with bindings is
+  therefore conformant when every other rule is decided, where it was
+  conformance-undetermined; `Interface.Validate` still leaves OBI-D-01
+  inconclusive. The embedded document schema follows.
 
 - **Operation schemas reach the schema library as a bundle, and core
   resolves every reference** (breaking, pre-1.0). The OBI document is no
@@ -362,25 +423,15 @@
   document". `ErrOperationNotFound` reads "no one operation is named", which
   covers an ambiguous name too, and a version refusal names the release line
   the SDK supports (0.2.x) rather than the tested version.
-- **Validation takes the transform parser it is given** (breaking, pre-1.0).
-  Core defines the two capabilities the specification names over the pinned
-  transform language (§5.5), and carries neither: `TransformParser` decides
-  whether an expression is in the language, and `TransformEvaluator`
-  evaluates one with an input and the context bindings a binding
-  specification defines (§5.5 clause 5). One implementation of the language
-  usually provides both, and an application gives the same one to every
-  layer that parses or evaluates transforms, so the expression validation
-  accepts is the expression that runs. `Interface.Validate` and
-  `ValidateDocument` take a `ValidateOptions`, whose `Transforms` field is a
-  `TransformParser`. OBI-D-18 is decided by that parser; without one it is
-  inconclusive at every expression, as §10.2 provides for a validator
-  without a parser, so a document with transforms is
-  conformance-undetermined rather than conformant. Core no longer imports
-  the JSONata syntax package. `ErrTransformNoResult` marks an expression
-  that yields no result (JSONata's undefined), and `ErrTransformUndecided`
-  one that could not be decided (the implementation's own limits, not the
-  expression): from `Parse` it leaves OBI-D-18 inconclusive rather than
-  violated.
+- **Core carries no transform engine** (breaking, pre-1.0). The
+  specification names one capability over the pinned transform language
+  (§5.5): `TransformEvaluator` evaluates an expression with an input and the
+  variable bindings a binding specification defines (§5.5 clause 5), and an
+  application gives the same one to every layer that evaluates transforms.
+  Core no longer imports the JSONata syntax package. `ErrTransformNoResult`
+  marks an expression that yields no result (JSONata's undefined), and
+  `ErrTransformUndecided` one the evaluator could not decide (its own limits,
+  not the expression).
 - **The JSON Schema library is an ordinary dependency** (behavior changes in
   rare cases). Core validated with a private, patched copy of
   `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3; it now requires the
@@ -409,16 +460,15 @@
   Re-encoding a decoded document dropped members whose value is a Go zero value
   (`deprecated: false`, empty strings, empty arrays and maps) and every
   member of a transform's `$ref` object besides `$ref`, extensions included.
-  So `Interface.Validate()` missed violations its bytes carry, such as a
-  present empty `location`, and a present empty `selector` became an absent
-  one, which a binding specification can give a different meaning (§5.3).
-  Now an optional member is absent exactly when its Go value is nil:
-  optional strings and booleans are pointers (`Name`, `Version`,
-  `Description`, `Deprecated`, `Source.Location`, `BindingEntry.Selector`),
+  So `Interface.Validate()` missed violations its bytes carry, and a present
+  empty `selector` became an absent one, which a binding specification can
+  give a different meaning (§5.3). Now an optional member is absent exactly
+  when its Go value is nil: optional strings and booleans are pointers
+  (`Name`, `Version`, `Description`, `Deprecated`),
   set with `Present` and read with `Value` where absence and the zero value
   mean the same; optional collections encode `omitzero`, so nil is absent
   and empty is present. Example values are `json.RawMessage`, where `null` is
-  a present value, like `Source.Content`; `InputPresent`, `OutputPresent`,
+  a present value, like `Source.Content` and `BindingEntry.Selector`; `InputPresent`, `OutputPresent`,
   `HasInput`, `HasOutput`, and `Source.ContentPresent` are gone.
   `BindingEntry.Preference` is an exact `*int64`. `TransformOrRef` is a
   sealed union of `InlineTransform` and `*TransformReference`, which keeps
@@ -521,10 +571,10 @@
 - **`WithRejectUnknownTypedFields` and the exported `ValidateOption`**
   (breaking, pre-1.0). OBI-T-02 requires every processor to ignore unknown
   fields; the option turned them into rejections. Unknown non-`x-` fields
-  are now always surfaced as OBI-T-02 diagnostics in a `ValidationReport`,
-  which is what the rule asks for, and never affect validation.
-  The option is gone; `ValidateOptions` carries only capabilities validation
-  does not have itself.
+  are surfaced as OBI-T-02 diagnostics in a `ValidationReport`, which is
+  what the rule asks for; the draft's reserved unprefixed names (§12) make
+  them OBI-D-02 violations as well.
+  The option is gone.
 
 - **The `security` surface, per spec 0.2.0**: the OBI `security` section
   (`Interface.Security`), `BindingEntry.Security`, `SecurityMethod`,
@@ -570,16 +620,12 @@
   could not decide passed silently, so a nil error from `Validate` was
   indistinguishable from conformance; a tool reporting it as such violated
   OBI-T-17. The cases now recorded as inconclusive rather than passed:
-  OBI-D-13 for any document with bindings (only the governing binding
-  specification decides it), an OBI-D-05 source location that is
-  colon-bearing but not a well-formed URI (`10.0.0.1:443`), OBI-D-11
-  examples whose schema could not be compiled or whose graph's reach could
+  OBI-D-11 examples whose schema could not be compiled or whose graph's reach could
   not be established, and OBI-D-01 on a host object, which no longer carries
   the exact input bytes (`ValidateDocument` decides it). `ValidateDocument`
   decides OBI-D-12 from the raw document, so a non-string version is still
   identified. `DocumentRules()` lists the rules a report covers; a caller
-  holding evidence the SDK cannot produce, such as a binding specification
-  implementation deciding OBI-D-13, can amend `Evidence` and call
+  holding evidence the SDK cannot produce can amend `Evidence` and call
   `ConcludeConformance` again.
 
 - **CI corpus gating (`OB_CORPUS_REQUIRED`)**: CI checks out the spec's

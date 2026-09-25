@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -235,15 +236,11 @@ func TestValidateOperationInput_UnknownRootMembersAreNotSchemaKeywords(t *testin
 	if err := ValidateOperationInput("text", iface, "op"); !errors.As(err, &unavailable) {
 		t.Fatalf("a $id under an unknown root member is not embedded; want graph unavailable, got %v", err)
 	}
-	// A pointer into an unknown member addresses a location in the document,
-	// which becomes a schema by being referenced.
+	// A pointer into an unknown member addresses no schema position, so it
+	// reaches no schema (OBI-D-16; JSON Schema 2020-12 §9.4.2).
 	iface = mustDecode(t, `{"openbindings":"0.2.0","x-lib":{"s":{"type":"string"}},"operations":{"op":{"input":{"$ref":"#/x-lib/s"}}}}`)
-	if err := ValidateOperationInput("text", iface, "op"); err != nil {
-		t.Fatalf("a same-document pointer into an extension must resolve: %v", err)
-	}
-	var mismatch *SchemaValidationError
-	if err := ValidateOperationInput(5, iface, "op"); !errors.As(err, &mismatch) {
-		t.Fatalf("the referenced location must be enforced, got %v", err)
+	if err := ValidateOperationInput("text", iface, "op"); !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "not a schema position") {
+		t.Fatalf("a same-document pointer into an extension reaches no schema; want graph unavailable, got %v", err)
 	}
 }
 

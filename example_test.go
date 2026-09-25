@@ -90,16 +90,20 @@ func ExampleInterface_Validate_unknownFields() {
 	var iface openbindings.Interface
 	_ = json.Unmarshal(data, &iface)
 
-	// Unknown fields are ignored, never rejected (OBI-T-02)...
+	// An unprefixed name the specification does not define is reserved for it
+	// (§12), so the document is non-conformant (OBI-D-02); a tool processing
+	// it still ignores the field (OBI-T-02), which the report notes too.
 	report, err := iface.Validate(openbindings.ValidateOptions{})
 	fmt.Println("violation established:", err != nil)
-
-	// ...but the report surfaces them as diagnostics so a typo is not silent.
+	for _, finding := range report.Violations() {
+		fmt.Println(finding.Rule, finding.Message)
+	}
 	for _, diagnostic := range report.Diagnostics {
 		fmt.Println(diagnostic.Rule, diagnostic.Message)
 	}
 	// Output:
-	// violation established: false
+	// violation established: true
+	// OBI-D-02 does not validate against the document schema: additional properties 'unknownFeild' not allowed
 	// OBI-T-02 unknown field ignored: unknownFeild; extensions use the x- prefix
 }
 
@@ -143,56 +147,33 @@ func ExampleOperation() {
 }
 
 func ExampleSource() {
-	bs := openbindings.Source{
-		BindingSpec: "openapi@3.1",
-		Location:    openbindings.Present("https://api.example.com/openapi.yaml"),
+	// Content is whatever the source's binding specification defines; this
+	// shape is illustrative.
+	src := openbindings.Source{
+		BindingSpec: "openbindings.openapi-3.1@1",
+		Content:     json.RawMessage(`{"location":"https://api.example.com/openapi.yaml"}`),
 	}
 
-	fmt.Println(bs.BindingSpec)
-	fmt.Println(*bs.Location)
+	fmt.Println(src.BindingSpec)
+	fmt.Println(string(src.Content))
 	// Output:
-	// openapi@3.1
-	// https://api.example.com/openapi.yaml
+	// openbindings.openapi-3.1@1
+	// {"location":"https://api.example.com/openapi.yaml"}
 }
 
-func ExampleTransform() {
-	// Per v0.2 §5.5, transforms are JSONata 2.1 expression strings.
-	iface := openbindings.Interface{
-		OpenBindings: "0.2.0",
-		Operations: map[string]openbindings.Operation{
-			"processPayment": {},
-		},
-		Transforms: map[string]openbindings.Transform{
-			"toStripeInput": "{ charge_amount: amount * 100 }",
-		},
-		Sources: map[string]openbindings.Source{
-			"stripe": {BindingSpec: "openapi@3.1", Location: openbindings.Present("https://api.example.com/stripe.json")},
-		},
-		Bindings: map[string]openbindings.BindingEntry{
-			"processPayment.stripe": {
-				Operation:      "processPayment",
-				Source:         "stripe",
-				InputTransform: &openbindings.TransformReference{Ref: "#/transforms/toStripeInput"},
-			},
-		},
+func ExampleBindingEntry() {
+	// Content is whatever the source's binding specification defines for the
+	// binding, such as its target and any value adaptation; this shape is
+	// illustrative.
+	binding := openbindings.BindingEntry{
+		Operation: "processPayment",
+		Source:    "stripe",
+		Content:   json.RawMessage(`{"target":"#/paths/~1charges/post"}`),
 	}
 
-	binding := iface.Bindings["processPayment.stripe"]
-	expr, ok := binding.InputTransform.Resolve(iface.Transforms)
-
-	fmt.Println("Resolved:", ok)
-	fmt.Println("Expression:", expr)
+	fmt.Println(binding.Operation, binding.Source)
+	fmt.Println(string(binding.Content))
 	// Output:
-	// Resolved: true
-	// Expression: { charge_amount: amount * 100 }
-}
-
-func ExampleTransformOrRef_inline() {
-	// An inline transform is a bare JSONata expression string.
-	tor := openbindings.InlineTransform("{ total: price * quantity }")
-
-	expression, _ := tor.Resolve(nil)
-	fmt.Println("Expression:", expression)
-	// Output:
-	// Expression: { total: price * quantity }
+	// processPayment stripe
+	// {"target":"#/paths/~1charges/post"}
 }

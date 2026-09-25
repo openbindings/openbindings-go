@@ -3,6 +3,7 @@ package openbindings
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -161,95 +162,34 @@ func containsProblem(err error, want string) bool {
 	return false
 }
 
-func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
+// A source is its binding specification's identifier and optional content the
+// core gives no meaning (§5.4), and a binding's content is likewise any JSON
+// value its source's binding specification defines (§5.3): a source without
+// content, source and binding content of every JSON type, and anything within
+// them, relative addresses and $ref members included, break no core rule.
+func TestInterfaceValidate_SourceAndBindingContentAreTheBindingSpecifications(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
-		Operations:   map[string]Operation{},
+		Operations:   map[string]Operation{"a": {}},
 		Sources: map[string]Source{
-			"empty": {BindingSpec: "openapi@3.1"},
+			"bare":     {BindingSpec: "x@1"},
+			"null":     {BindingSpec: "x@1", Content: json.RawMessage(`null`)},
+			"relative": {BindingSpec: "x@1", Content: json.RawMessage(`{"location":"./openapi.json","$ref":"#anchor"}`)},
+			"text":     {BindingSpec: "x@1", Content: json.RawMessage(`"openapi: 3.1.0"`)},
+		},
+		Bindings: map[string]BindingEntry{
+			"a.bare":     {Operation: "a", Source: "bare"},
+			"a.null":     {Operation: "a", Source: "null", Content: json.RawMessage(`null`)},
+			"a.relative": {Operation: "a", Source: "relative", Content: json.RawMessage(`{"$ref":"other.json"}`)},
+			"a.text":     {Operation: "a", Source: "text", Content: json.RawMessage(`["a",1,true]`)},
 		},
 	}
-	_, err := i.Validate(ValidateOptions{})
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	// One defect is one finding: the document schema's anyOf reports that
-	// neither carriage member is present, at the source that lacks them.
-	var ve *ValidationError
-	if !errors.As(err, &ve) || len(ve.Findings) != 1 {
-		t.Fatalf("want exactly one problem, got %v", err)
-	}
-	problem := problemLines(ve)[0]
-	if !strings.HasPrefix(problem, "/sources/empty: ") || !strings.Contains(problem, "'location'") || !strings.Contains(problem, "'content'") || !strings.HasSuffix(problem, "(OBI-D-02)") {
-		t.Fatalf("want one OBI-D-02 problem at the source naming both members, got %q", problem)
-	}
-}
-
-func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.2.0",
-		Operations:   map[string]Operation{},
-		Sources: map[string]Source{
-			"both": {
-				BindingSpec: "openapi@3.1",
-				Location:    Present("https://api.example.com/api.json"),
-				Content:     json.RawMessage(`{"openapi": "3.1.0"}`),
-			},
-		},
-	}
-	_, err := i.Validate(ValidateOptions{})
+	report, err := i.Validate(ValidateOptions{})
 	if err != nil {
-		t.Fatalf("expected no error for source with both location and content, got %v", err)
+		t.Fatalf("source and binding content are the binding specification's, got %v", err)
 	}
-}
-
-func TestInterfaceValidate_SourceLocationFormatDefinedAddress(t *testing.T) {
-	// OBI-D-05: a sources[*].location may be a format-defined absolute address
-	// (e.g. a gRPC host:port), not only a URI. These need no base URI and must
-	// not be rejected as relative references, including IP-literal and IPv6
-	// hosts that net/url cannot parse as a URI.
-	for _, addr := range []string{
-		"grpc.example.com:443",
-		"localhost:50051",
-		"10.0.0.1:443",
-		"[::1]:443",
-		"dns:///grpc.example.com:443",
-		"https://api.example.com/openapi.json",
-	} {
-		t.Run(addr, func(t *testing.T) {
-			i := Interface{
-				OpenBindings: "0.2.0",
-				Operations:   map[string]Operation{},
-				Sources: map[string]Source{
-					"svc": {BindingSpec: "grpc@1.0", Location: Present(addr)},
-				},
-			}
-			if _, err := i.Validate(ValidateOptions{}); err != nil {
-				t.Fatalf("location %q should be accepted, got %v", addr, err)
-			}
-		})
-	}
-}
-
-func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
-	// OBI-D-05: a relative reference needs a base URI and is not allowed.
-	for _, loc := range []string{"./openapi.json", "openapi.json", "../api/openapi.json", "/abs/openapi.json"} {
-		t.Run(loc, func(t *testing.T) {
-			i := Interface{
-				OpenBindings: "0.2.0",
-				Operations:   map[string]Operation{},
-				Sources: map[string]Source{
-					"api": {BindingSpec: "openapi@3.1", Location: Present(loc)},
-				},
-			}
-			_, err := i.Validate(ValidateOptions{})
-			if err == nil {
-				t.Fatalf("relative location %q should be rejected", loc)
-			}
-			if !strings.Contains(err.Error(), "not a relative reference") || !strings.Contains(err.Error(), "(OBI-D-05)") {
-				t.Fatalf("expected OBI-D-05 relative-reference error for %q, got %v", loc, err)
-			}
-		})
+	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
+		t.Fatalf("only OBI-D-01, decided on bytes, may be inconclusive for a host object, got %v", report.Inconclusive)
 	}
 }
 
@@ -515,32 +455,6 @@ func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.2.0",
-		Operations: map[string]Operation{
-			"op": {},
-		},
-		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
-		},
-		Bindings: map[string]BindingEntry{
-			"op.api": {
-				Operation:      "op",
-				Source:         "api",
-				InputTransform: &TransformReference{Ref: "#/transforms/nonexistent"},
-			},
-		},
-	}
-	_, err := i.Validate(ValidateOptions{})
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !containsProblem(err, `/bindings/op.api/inputTransform/$ref: references unknown transform "nonexistent" (OBI-D-10)`) {
-		t.Fatalf("expected transform ref error, got %v", err)
-	}
-}
-
 func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
@@ -548,7 +462,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
+			"api": {BindingSpec: "openapi@3.1"},
 		},
 		Bindings: map[string]BindingEntry{
 			"nonexistent.api": {
@@ -585,31 +499,6 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	}
 	if !containsProblem(err, `/bindings/op.nonexistent/source: references unknown source "nonexistent" (OBI-D-09)`) {
 		t.Fatalf("expected source ref error, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.2.0",
-		Operations: map[string]Operation{
-			"pay": {},
-		},
-		Transforms: map[string]Transform{
-			"toApi": "{ amount: total * 100 }",
-		},
-		Sources: map[string]Source{
-			"stripe": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/stripe.json")},
-		},
-		Bindings: map[string]BindingEntry{
-			"pay.stripe": {
-				Operation:      "pay",
-				Source:         "stripe",
-				InputTransform: &TransformReference{Ref: "#/transforms/toApi"},
-			},
-		},
-	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
-		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
@@ -811,43 +700,31 @@ func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 	}
 }
 
-func TestParseDocument_UnknownTopLevelFieldValidates_OBI_T_02(t *testing.T) {
-	// OBI-T-02: unknown non-x- fields are ignored, not fatal. The vendored
-	// v0.2.0 schema keeps additionalProperties open at the root; "security"
-	// (removed from the spec in 0.2.0) must validate as an unknown field.
+func TestParseDocument_UnknownTopLevelFieldViolatesD02(t *testing.T) {
+	// An unprefixed name the specification does not define is reserved for it
+	// (§12): "security", a 0.1 member, makes a 0.2 document non-conformant.
 	doc := []byte(`{"openbindings":"0.2.0","operations":{},"security":"abc"}`)
-	iface, err := ParseDocument(doc)
-	if err != nil {
-		t.Fatalf("expected unknown top-level field to parse, got %v", err)
-	}
-	if _, err := iface.Validate(ValidateOptions{}); err != nil {
-		t.Fatalf("expected unknown top-level field to validate (OBI-T-02), got %v", err)
+	var violation *ValidationError
+	if _, err := ParseDocument(doc); !errors.As(err, &violation) || !strings.Contains(err.Error(), "security") || !strings.Contains(err.Error(), "OBI-D-02") {
+		t.Fatalf("want an OBI-D-02 violation naming security, got %v", err)
 	}
 }
 
-func TestParseDocument_TransformRefWithExtensionKeyValidates_OBI_T_03(t *testing.T) {
-	// OBI-T-03: x- prefixed fields are extensions and must not fail
-	// validation; the v0.2.0 schema allows additional properties on the
-	// transform $ref object form.
-	doc := []byte(`{
-		"openbindings": "0.2.0",
-		"operations": {"op": {}},
-		"transforms": {"t": "$.payload"},
-		"sources": {"api": {"bindingSpec": "openbindings.openapi-3.1@1", "location": "https://api.example.com/api.json"}},
-		"bindings": {
-			"op.api": {
-				"operation": "op",
-				"source": "api",
-				"inputTransform": {"$ref": "#/transforms/t", "x-note": "hi"}
-			}
+func TestParseDocument_RemovedTransformMembersViolateOBI_D_02(t *testing.T) {
+	// The core defines no transforms and a binding carries content, not a
+	// selector (§5.3): the draft's transforms map and binding selector and
+	// transform members are unprefixed names the specification does not
+	// define, so each makes the document non-conformant (§12).
+	for member, doc := range map[string]string{
+		"transforms":      `{"openbindings":"0.2.0","operations":{"op":{}},"transforms":{"t":"$.payload"}}`,
+		"selector":        `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","selector":"#/paths/~1op/get"}}}`,
+		"inputTransform":  `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","inputTransform":"$"}}}`,
+		"outputTransform": `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","outputTransform":{"$ref":"#/transforms/t"}}}}`,
+	} {
+		var violation *ValidationError
+		if _, err := ParseDocument([]byte(doc)); !errors.As(err, &violation) || !strings.Contains(err.Error(), member) || !strings.Contains(err.Error(), "OBI-D-02") {
+			t.Fatalf("%s: want an OBI-D-02 violation naming it, got %v", member, err)
 		}
-	}`)
-	iface, err := ParseDocument(doc)
-	if err != nil {
-		t.Fatalf("expected transform $ref with x- key to parse, got %v", err)
-	}
-	if _, err := iface.Validate(ValidateOptions{}); err != nil {
-		t.Fatalf("expected transform $ref with x- key to validate (OBI-T-03), got %v", err)
 	}
 }
 
@@ -1154,18 +1031,18 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 }
 
 // unknownFieldDiagnostics validates iface and returns the OBI-T-02 diagnostics
-// by path, failing the test if the unknown fields established a violation:
-// OBI-T-02 makes unknown fields ignored, never rejected.
+// by path. An unknown field without the x- prefix violates OBI-D-02 (§12),
+// which requireUnknownFieldDiagnostic checks beside the diagnostic that
+// processing ignores it (OBI-T-02).
 func unknownFieldDiagnostics(t *testing.T, iface Interface) map[string]string {
 	t.Helper()
-	report, err := iface.Validate(ValidateOptions{})
-	if err != nil {
-		t.Fatalf("unknown fields must not fail validation (OBI-T-02): %v", err)
-	}
-	if report.Conclusion == ConclusionNonConformant {
-		t.Fatalf("unknown fields must not make a document non-conformant: %+v", report.Violations())
-	}
+	report, _ := iface.Validate(ValidateOptions{})
 	byPath := map[string]string{}
+	for _, finding := range report.Violations() {
+		if finding.Rule == "OBI-D-02" {
+			byPath["violation "+finding.Path] = finding.Message
+		}
+	}
 	for _, diagnostic := range report.Diagnostics {
 		if diagnostic.Rule != "OBI-T-02" {
 			t.Fatalf("unexpected diagnostic rule %q", diagnostic.Rule)
@@ -1177,9 +1054,11 @@ func unknownFieldDiagnostics(t *testing.T, iface Interface) map[string]string {
 
 func requireUnknownFieldDiagnostic(t *testing.T, byPath map[string]string, path, field string) {
 	t.Helper()
-	message, ok := byPath[path]
-	if !ok || !strings.Contains(message, field) {
+	if message, ok := byPath[path]; !ok || !strings.Contains(message, field) {
 		t.Fatalf("no OBI-T-02 diagnostic naming %q at %q; got %v", field, path, byPath)
+	}
+	if message, ok := byPath["violation "+path]; !ok || !strings.Contains(message, field) {
+		t.Fatalf("no OBI-D-02 violation naming %q at %q; got %v", field, path, byPath)
 	}
 }
 
@@ -1205,7 +1084,6 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsAreDiagnosed(t *test
 		Sources: map[string]Source{
 			"src": {
 				BindingSpec: "openapi@3.1",
-				Location:    Present("https://api.example.com/api.json"),
 				LosslessFields: LosslessFields{
 					Unknown: map[string]json.RawMessage{
 						"unknownField": json.RawMessage(`{"value":"unknownFieldValue"}`),
@@ -1257,7 +1135,7 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsAreDiagnosed(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1", Location: Present("https://api.example.com/api.json")},
+			"api": {BindingSpec: "openapi@3.1"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -1299,6 +1177,6 @@ func TestInterfaceValidate_ExtensionFieldsAreNotDiagnosed(t *testing.T) {
 		},
 	})
 	if len(byPath) != 0 {
-		t.Fatalf("x- extensions are not unknown fields; got diagnostics %v", byPath)
+		t.Fatalf("x- extensions are not unknown fields; got %v", byPath)
 	}
 }

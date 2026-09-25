@@ -23,14 +23,9 @@ and returns a `ValidationReport` in the vocabulary of
 [§10.5](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#105-conformance-conclusions):
 evidence for every document rule, located findings, OBI-T-02 diagnostics, and a
 conclusion of conformant, non-conformant, or conformance-undetermined.
-OBI-D-13 and the binding-specification-defined address cases of OBI-D-05
-require knowledge of the exact governing binding specification, so a
-core-only validator records them as inconclusive rather than passing or
-failing them. A document with bindings is therefore conformance-undetermined
-here until something that implements its binding specifications adds that
-evidence. OBI-D-18 needs a parser for the transform language: the SDK carries
-none, so an application passes its `TransformParser` in
-`ValidateOptions.Transforms`, and without one the rule is inconclusive.
+No document rule needs knowledge of a binding specification: a source's and
+a binding's `content` are the binding specification's to define, and no core
+rule judges them.
 `Interface.Validate(options)` does the same for a document already in
 memory, where OBI-D-01 is inconclusive because a host object no longer
 carries the exact input bytes. The rules judge the JSON a document is, never
@@ -42,7 +37,7 @@ other rule is inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
-OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
+OBI-D-13, OBI-D-14, and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
 OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
 embedded at build time. To exercise the core conformance corpus, check out the
@@ -91,12 +86,11 @@ go get github.com/openbindings/openbindings-go
 ## What this SDK does
 
 - **Core types** for the OpenBindings interface document: operations,
-  dependencies, bindings, sources, transforms, and schemas
+  dependencies, bindings, sources, and schemas
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
-- **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, unknown fields surfaced as diagnostics rather than rejected, and a violation gate for acting on documents
+- **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
 - **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-16): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
-- **The two transform capabilities** the specification names, as interfaces an application implements: `TransformParser` (OBI-D-18) and `TransformEvaluator` (§5.5, OBI-T-10). The SDK carries no transform engine; an application gives one implementation to every layer that parses or evaluates transforms, so the expression validation accepts is the expression that runs
 
 ## Quick start
 

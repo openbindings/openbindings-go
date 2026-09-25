@@ -59,74 +59,77 @@ func TestInterfaceValidate_HostObjectCannotDecideD01(t *testing.T) {
 const documentWithBinding = `{
 	"openbindings": "0.2.0",
 	"operations": {"tasks.create": {}},
-	"sources": {"api": {"bindingSpec": "example.rest@1", "location": "https://api.example.com/openapi.json"}},
-	"bindings": {"tasks.create.api": {"operation": "tasks.create", "source": "api", "selector": "#/paths/~1tasks/post"}}
+	"sources": {"api": {"bindingSpec": "example.rest@1", "content": {"location": "./openapi.json", "$ref": "#anchor"}}},
+	"bindings": {"tasks.create.api": {"operation": "tasks.create", "source": "api",
+		"content": {"$ref": "other.json", "inputTransform": "{ \"title\": name }"}}}
 }`
 
-func TestValidateDocument_BindingIdentifiabilityIsLeftToTheBindingSpecification(t *testing.T) {
+// No document rule takes binding-specification knowledge: a source's and a
+// binding's content are the binding specification's (§5.3, §5.4), so
+// nothing within them, relative addresses and $ref members included, is
+// judged, and a document with bindings is decided in full.
+func TestValidateDocument_BindingsNeedNoBindingSpecificationKnowledge(t *testing.T) {
 	_, report, err := ValidateDocument([]byte(documentWithBinding), ValidateOptions{})
 	if err != nil {
-		t.Fatalf("an inconclusive rule is not a violation; ValidateDocument = %v", err)
+		t.Fatalf("ValidateDocument = %v", err)
 	}
-	if report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("conclusion = %s, want conformance-undetermined", report.Conclusion)
-	}
-	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-13"}) {
-		t.Fatalf("inconclusive = %v, want only OBI-D-13", report.Inconclusive)
-	}
-	if checks := report.InconclusiveChecks(); len(checks) != 1 || checks[0].Path != "/bindings" {
-		t.Fatalf("want one OBI-D-13 finding at /bindings: %+v", checks)
+	if report.Conclusion != ConclusionConformant || len(report.Findings) != 0 {
+		t.Fatalf("conclusion = %s, want conformant; findings %+v", report.Conclusion, report.Findings)
 	}
 }
 
+// A member the core no longer defines, such as a 0.1 source's location, is an
+// unprefixed name the specification reserves (§12): an OBI-D-02 violation,
+// and still diagnosed as ignored in processing (OBI-T-02).
+func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","location":"./openapi.json"}}}`)
+	if violations := report.Violations(); len(violations) != 1 || violations[0].Rule != "OBI-D-02" || violations[0].Path != "/sources/s" || !strings.Contains(violations[0].Message, "location") {
+		t.Fatalf("want one OBI-D-02 violation at the source naming location, got %+v", violations)
+	}
+	if len(report.Diagnostics) != 1 || report.Diagnostics[0].Rule != "OBI-T-02" || report.Diagnostics[0].Path != "/sources/s" || !strings.Contains(report.Diagnostics[0].Message, "location") {
+		t.Fatalf("want one OBI-T-02 diagnostic at the source naming location, got %+v", report.Diagnostics)
+	}
+}
+
+// hostReport validates a document as a host object, whose report leaves
+// OBI-D-01 inconclusive: only the exact bytes decide it.
+func hostReport(t *testing.T, document string) (ValidationReport, error) {
+	t.Helper()
+	var iface Interface
+	if err := json.Unmarshal([]byte(document), &iface); err != nil {
+		t.Fatal(err)
+	}
+	return iface.Validate(ValidateOptions{})
+}
+
 func TestConcludeConformance_CallerEvidenceCompletesAReport(t *testing.T) {
-	report := mustValidateDocument(t, documentWithBinding)
-	// A binding specification implementation that decides OBI-D-13 for its
-	// own sources supplies the evidence this SDK cannot.
-	report.Evidence["OBI-D-13"] = EvidenceSatisfied
+	report, err := hostReport(t, documentWithBinding)
+	if err != nil || !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
+		t.Fatalf("err %v, inconclusive = %v, want only OBI-D-01", err, report.Inconclusive)
+	}
+	// A caller that checked the exact bytes itself supplies the evidence a
+	// host object cannot.
+	report.Evidence["OBI-D-01"] = EvidenceSatisfied
 	if got := ConcludeConformance(report.Evidence).Conclusion; got != ConclusionConformant {
-		t.Fatalf("conclusion with OBI-D-13 decided = %s, want conformant", got)
+		t.Fatalf("conclusion with OBI-D-01 decided = %s, want conformant", got)
 	}
 }
 
 func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t *testing.T) {
 	document := strings.Replace(documentWithBinding, `"operation": "tasks.create", "source"`, `"operation": "tasks.missing", "source"`, 1)
-	report := mustValidateDocument(t, document)
-	if report.Conclusion != ConclusionNonConformant {
+	report, err := hostReport(t, document)
+	if !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant {
 		t.Fatalf("conclusion = %s, want non-conformant", report.Conclusion)
 	}
 	if report.Evidence["OBI-D-08"] != EvidenceViolated {
 		t.Fatalf("OBI-D-08 = %s, want violated", report.Evidence["OBI-D-08"])
 	}
-	if report.Evidence["OBI-D-13"] != EvidenceInconclusive {
-		t.Fatalf("OBI-D-13 = %s, want inconclusive and retained", report.Evidence["OBI-D-13"])
+	if report.Evidence["OBI-D-01"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-01 = %s, want inconclusive and retained", report.Evidence["OBI-D-01"])
 	}
 	violations := report.Violations()
 	if len(violations) != 1 || violations[0].Path != `/bindings/tasks.create.api/operation` {
 		t.Fatalf("violations = %+v, want one located at the binding's operation", violations)
-	}
-}
-
-func TestValidateDocument_SourceLocationForms(t *testing.T) {
-	tests := []struct {
-		location string
-		want     RuleEvidenceStatus
-	}{
-		{"https://api.example.com/openapi.json", EvidenceSatisfied},
-		{"grpc.example.com:443", EvidenceSatisfied}, // a well-formed absolute URI
-		{"10.0.0.1:443", EvidenceInconclusive},      // only its binding specification can say
-		{"[::1]:443", EvidenceInconclusive},
-		{"./openapi.json", EvidenceViolated},
-		{"example.com", EvidenceViolated},
-		{"https://example.com/<bad>/openapi.json", EvidenceViolated},
-	}
-	for _, tt := range tests {
-		t.Run(tt.location, func(t *testing.T) {
-			report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"api":{"bindingSpec":"example.grpc@1","location":"`+tt.location+`"}}}`)
-			if got := report.Evidence["OBI-D-05"]; got != tt.want {
-				t.Fatalf("OBI-D-05 = %s, want %s; findings %+v", got, tt.want, report.Findings)
-			}
-		})
 	}
 }
 
@@ -266,11 +269,11 @@ func TestFindingPaths_AreJSONPointers(t *testing.T) {
 		"schemas":{"T":{"type":"object","properties":{"a/b~c":{"minLength":"3"}}}},
 		"operations":{"a":{"output":{"$ref":"#/schemas/T"},"examples":{"one":{"output":{"n":"x"}}}},
 		              "b":{"input":{"type":"object","properties":{"n":{"type":"integer"}}},"examples":{"two":{"input":{"n":"x"}}}}},
-		"sources":{"s":{"bindingSpec":"x@1"}}}`)
+		"sources":{"s":{"bindingSpec":""}}}`)
 	want := map[string]string{
 		"/schemas/T/properties/a~1b~0c/minLength": "OBI-D-17",
 		"/operations/b/examples/two/input/n":      "OBI-D-11",
-		"/sources/s":                              "OBI-D-02",
+		"/sources/s/bindingSpec":                  "OBI-D-02",
 	}
 	got := map[string]string{}
 	for _, finding := range report.Violations() {
@@ -298,7 +301,7 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 	if _, err := ParseDocument([]byte(`{"openbindings":"0.3.0","name":"future"}`)); !errors.As(err, &refusal) {
 		t.Fatalf("an unsupported version is refused, not judged by the 0.2 schema; got %v", err)
 	}
-	data := []byte(`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1"}}}`)
+	data := []byte(`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":""}}}`)
 	_, parseErr := ParseDocument(data)
 	_, _, validateErr := ValidateDocument(data, ValidateOptions{})
 	var parsed, validated *ValidationError
@@ -327,8 +330,8 @@ func TestValidate_GatesOnTheDocumentSchema(t *testing.T) {
 // carry them: a document typed decoding refuses is still judged in full.
 func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 	iface, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0",
-		"operations":{"a":{"input":null,"description":null}},
-		"sources":{"s":{"bindingSpec":"x@1","location":"./local.json"}},
+		"operations":{"a":{"input":null,"output":{"$ref":"./local.json"},"description":null}},
+		"sources":{"s":{"bindingSpec":"x@1"}},
 		"bindings":{"b":{"operation":"missing","source":"s"}}}`), ValidateOptions{})
 
 	if iface != nil {
@@ -353,21 +356,16 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 // it fails, while a rule whose domain excludes it has nothing to judge there.
 func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":5,
-		"transforms":{"t":"$","n":7},"sources":{"s":{"bindingSpec":"x@1","location":7}},
-		"bindings":{"b":{"operation":"a","source":42,"inputTransform":{"$ref":"#/transforms/missing"},"outputTransform":9},
-		"c":{"operation":"a","source":"s","inputTransform":{"$ref":"https://a.example/doc#/transforms/t"}}}}`)
+		"sources":{"s":{"bindingSpec":"x@1"}},
+		"bindings":{"b":{"operation":"a","source":42}}}`)
 	found := map[string]RuleEvidenceStatus{}
 	for _, finding := range report.Findings {
 		found[finding.Rule+" "+finding.Path] = finding.Status
 	}
 	for key, want := range map[string]RuleEvidenceStatus{
-		"OBI-D-02 /operations":                     EvidenceViolated,
-		"OBI-D-08 /bindings/b/operation":           EvidenceViolated,
-		"OBI-D-09 /bindings/b/source":              EvidenceViolated,
-		"OBI-D-10 /bindings/b/inputTransform/$ref": EvidenceViolated,
-		"OBI-D-05 /bindings/c/inputTransform/$ref": EvidenceViolated,
-		"OBI-D-05 /sources/s/location":             EvidenceViolated,
-		"OBI-D-18 /transforms/n":                   EvidenceViolated,
+		"OBI-D-02 /operations":           EvidenceViolated,
+		"OBI-D-08 /bindings/b/operation": EvidenceViolated,
+		"OBI-D-09 /bindings/b/source":    EvidenceViolated,
 	} {
 		if got := found[key]; got != want {
 			t.Errorf("%s = %q, want %s; findings %+v", key, got, want, report.Findings)
@@ -378,23 +376,6 @@ func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 			t.Errorf("%s = %s: an operations member that is not an object holds nothing it judges", rule, report.Evidence[rule])
 		}
 	}
-	if _, ok := found["OBI-D-18 /bindings/b/outputTransform"]; ok {
-		t.Error("a transform that is neither an expression nor a reference is outside OBI-D-18")
-	}
-}
-
-// OBI-T-02 covers every OBI-defined object, the $ref object form of a binding
-// transform included.
-func TestValidateDocument_DiagnosesUnknownMembersOfTransformReferences(t *testing.T) {
-	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{}},"transforms":{"t":"$"},
-		"sources":{"s":{"bindingSpec":"x@1","content":{}}},
-		"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":"#/transforms/t","bogus":1,"x-kept":2}}}}`)
-	for _, diagnostic := range report.Diagnostics {
-		if diagnostic.Path == "/bindings/b/inputTransform" && strings.Contains(diagnostic.Message, "bogus") && !strings.Contains(diagnostic.Message, "x-kept") {
-			return
-		}
-	}
-	t.Fatalf("no OBI-T-02 diagnostic for the reference object; diagnostics %+v", report.Diagnostics)
 }
 
 // OBI-D-11 follows an absolute reference with a fragment into a resource the
@@ -514,13 +495,65 @@ func TestValidateDocument_ReferencesFollowTheURIGrammar(t *testing.T) {
 			t.Errorf("%s: OBI-D-05 = %s, want %s; findings %+v", name, got, tt.want, report.Findings)
 		}
 	}
-	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","location":""}}}`)
-	if report.Evidence["OBI-D-05"] != EvidenceViolated {
-		t.Fatalf("an empty location is relative in form: OBI-D-05 = %s", report.Evidence["OBI-D-05"])
-	}
 }
 
 // OBI-D-16 covers an absolute $ref that matches an embedded schema's $id.
+// A schema $ref at an OBI position resolves only to a schema the document
+// model places (OBI-D-16): a same-document fragment to a schema at an OBI
+// position outside every resource declaring its own $id, and an absolute
+// reference through an embedded $id to that schema or a subschema below it.
+// JSON Schema 2020-12 leaves any other target undefined (§9.4.2) and advises
+// against pointers into an embedded resource (§9.2.1).
+func TestValidateDocument_ReferencesReachSchemaPlaces(t *testing.T) {
+	d16 := func(document string) []Finding {
+		var out []Finding
+		for _, finding := range mustValidateDocument(t, document).Findings {
+			if finding.Rule == "OBI-D-16" {
+				out = append(out, finding)
+			}
+		}
+		return out
+	}
+	for name, document := range map[string]string{
+		"the document root":          `{"openbindings":"0.2.0","operations":{"a":{"input":{"$ref":"#"}}}}`,
+		"a string":                   `{"openbindings":"0.2.0","name":"Task Manager","operations":{"a":{"input":{"$ref":"#/name"}}}}`,
+		"x- data":                    `{"openbindings":"0.2.0","x-s":{"T":{"type":"object"}},"operations":{"a":{"input":{"$ref":"#/x-s/T"}}}}`,
+		"a legacy definitions entry": `{"openbindings":"0.2.0","schemas":{"T":{"definitions":{"I":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/definitions/I"}}}}`,
+		"into a resource":            `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/properties/i"}}}}`,
+		"a non-schema in a resource": `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","x":1}},"operations":{"a":{"input":{"$ref":"https://e.com/t#/x"}}}}`,
+	} {
+		if got := d16(document); len(got) != 1 || got[0].Path != "/operations/a/input/$ref" {
+			t.Errorf("%s: want one OBI-D-16 finding at the reference, got %+v", name, got)
+		}
+	}
+	for name, document := range map[string]string{
+		"another operation's input":                 `{"openbindings":"0.2.0","operations":{"a":{"input":{"type":"object"}},"b":{"input":{"$ref":"#/operations/a/input"}}}}`,
+		"a subschema":                               `{"openbindings":"0.2.0","schemas":{"T":{"properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/properties/i"}}}}`,
+		"a subschema by $id":                        `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"https://e.com/t#/properties/i"}}}}`,
+		"a resource by $id":                         `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t"}},"operations":{"a":{"input":{"$ref":"https://e.com/t"}}}}`,
+		"a schemas entry declaring $id, by pointer": `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t"}},"operations":{"a":{"input":{"$ref":"#/schemas/T"}}}}`,
+	} {
+		if got := d16(document); len(got) != 0 {
+			t.Errorf("%s: want no OBI-D-16 finding, got %+v", name, got)
+		}
+	}
+}
+
+// No two schema resources declare the same $id (OBI-D-05; JSON Schema
+// 2020-12 §9.1.2): each declaration is a finding.
+func TestValidateDocument_DuplicateIDsViolateD05(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"A":{"$id":"https://e.com/t"},"B":{"$id":"https://e.com/t"}},"operations":{}}`)
+	var paths []string
+	for _, finding := range report.Violations() {
+		if finding.Rule == "OBI-D-05" {
+			paths = append(paths, finding.Path)
+		}
+	}
+	if !reflect.DeepEqual(paths, []string{"/schemas/A/$id", "/schemas/B/$id"}) {
+		t.Fatalf("want an OBI-D-05 finding at each declaration, got %v; findings %+v", paths, report.Findings)
+	}
+}
+
 func TestValidateDocument_AbsoluteReferencesIntoEmbeddedResourcesResolve(t *testing.T) {
 	document := func(ref string) string {
 		return `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://example.com/t","$defs":{"S":{"type":"string"}}}},
@@ -553,7 +586,7 @@ func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
 func TestValidateDocument_KeyFindingPathsAreDeterministic(t *testing.T) {
 	t.Skip("santhosh-tekuri/jsonschema v6.0.3 records a propertyNames failure's location without copying it, so a later sibling overwrites it; fixed upstream by cloning the location")
 	for range 50 {
-		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"bad key":{}},"sources":{},"transforms":{},"name":"n","description":"d"}`)
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"bad key":{}},"sources":{},"name":"n","description":"d"}`)
 		for _, finding := range report.Findings {
 			if finding.Rule == "OBI-D-02" && finding.Path != "/schemas/bad key" {
 				t.Fatalf("OBI-D-02 finding at %q", finding.Path)
@@ -604,17 +637,6 @@ func TestValidateDocument_ReferenceResolutionIsJudgedForEveryFragment(t *testing
 		"operations":{"a":{"input":{"$ref":"https://ex.test/a#dup"}}}}`)
 	if report.Evidence["OBI-D-16"] != EvidenceInconclusive {
 		t.Fatalf("an anchor declared twice: OBI-D-16 = %s, want inconclusive", report.Evidence["OBI-D-16"])
-	}
-}
-
-// A named-transform reference is decoded before it is resolved; its spelling
-// is OBI-D-05's.
-func TestValidateDocument_TransformReferencesDecodeTheirFragment(t *testing.T) {
-	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{}},"transforms":{"ab":"$"},
-		"sources":{"s":{"bindingSpec":"x@1","content":{}}},
-		"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":"#/transforms/a%62"}}}}`)
-	if report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Evidence["OBI-D-05"] != EvidenceViolated {
-		t.Fatalf("OBI-D-10 = %s, OBI-D-05 = %s", report.Evidence["OBI-D-10"], report.Evidence["OBI-D-05"])
 	}
 }
 

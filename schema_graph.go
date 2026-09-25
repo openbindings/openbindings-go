@@ -442,8 +442,8 @@ func reachedByKeywords(from, location string) bool {
 
 // rootOf returns the root the schema library compiles the schema at a
 // location from: the copy holding it (copiedAt), when the copy's keywords
-// reach it, or the location itself, as for a schema a reference names in an
-// annotation, which the library compiles as a schema of its own.
+// reach it, or the location itself, which is then no schema position, so the
+// root has a problem (rootProblem) and its graph reaches no verdict.
 func rootOf(location string) string {
 	if copy := copiedAt(location); reachedByKeywords(copy, location) {
 		return copy

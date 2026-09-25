@@ -147,11 +147,11 @@ func TestReachability_Acceptance(t *testing.T) {
 // since the document root is never handed to the schema library.
 func TestReachability_ReferencesIntoRootMembers(t *testing.T) {
 	document := `{"openbindings":"0.2.0","dependencies":{"d":{"operation":"op","type":"number"}},"operations":{"op":{"input":{"$ref":"#/dependencies/d"}}}}`
-	if got := outcome(ValidateOperationInput("text", mustDecodeInterface(t, document), "op")); got != "mismatch" {
+	if got := outcome(ValidateOperationInput("text", mustDecodeInterface(t, document), "op")); got != "unavailable" {
 		t.Fatalf("got %s", got)
 	}
-	if report := validateBytes(t, document); report.Evidence["OBI-D-16"] != EvidenceSatisfied {
-		t.Fatalf("OBI-D-16 %q: the reference resolves within the document", report.Evidence["OBI-D-16"])
+	if report := validateBytes(t, document); report.Evidence["OBI-D-16"] != EvidenceViolated {
+		t.Fatalf("OBI-D-16 %q: a dependency entry is not a schema position", report.Evidence["OBI-D-16"])
 	}
 }
 

@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openbindings.com/schema/openbindings-0.2.0.json",
   "title": "OpenBindings Interface Document (v0.2.0)",
-  "description": "Derived JSON Schema for the OpenBindings interface document. Expresses the structural portion of the specification; where prose and schema conflict, the prose governs (see openbindings.md §10).",
+  "description": "Derived JSON Schema for the OpenBindings interface document. Expresses the structural portion of the specification; OBI-D-02 applies it as published, and a conflict with the prose is an erratum corrected in this schema (see openbindings.md §10).",
   "type": "object",
   "required": ["openbindings", "operations"],
   "properties": {
     "openbindings": {
       "type": "string",
-      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
       "description": "OpenBindings specification version the document declares. Semantic Versioning 2.0.0 syntax (e.g., 0.2.0). Pattern validates syntax only: whether a processor supports the declared version is explicit implementation support per OBI-T-04 and §8.1, and is not expressible in this schema."
     },
     "name": {
@@ -56,7 +56,7 @@
     },
     "sources": {
       "type": "object",
-      "description": "Map of sources: each names its governing binding specification (bindingSpec) and carries a location, embedded content, or both.",
+      "description": "Map of sources: each names its governing binding specification (bindingSpec) and may carry content that specification defines.",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
       },
@@ -73,19 +73,10 @@
       "additionalProperties": {
         "$ref": "#/$defs/BindingEntry"
       }
-    },
-    "transforms": {
-      "type": "object",
-      "description": "Named transforms. Each value is a JSONata expression string (JSONata 2.1 per §5.5).",
-      "propertyNames": {
-        "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
-      },
-      "additionalProperties": {
-        "type": "string"
-      }
     }
   },
-  "additionalProperties": true,
+  "patternProperties": { "^x-": true },
+  "additionalProperties": false,
   "$defs": {
     "JSONSchema": {
       "description": "JSON Schema 2020-12 schema: object or boolean form. Top-level constraints from §5.2 are enforced on the object form here ($schema value pinned, $vocabulary forbidden); recursive enforcement (OBI-D-06/07) and meta-schema well-formedness (OBI-D-17) are prose rules beyond this schema.",
@@ -155,7 +146,8 @@
           }
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "OperationExample": {
       "type": "object",
@@ -172,7 +164,8 @@
           "description": "Example output value."
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "DependencyEntry": {
       "type": "object",
@@ -194,32 +187,28 @@
           "description": "Optional unordered any-of constraint over exact, opaque binding specification identifiers acceptable at this consumption point. Omission declares no binding-family constraint."
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "Source": {
       "type": "object",
       "required": ["bindingSpec"],
-      "anyOf": [{ "required": ["location"] }, { "required": ["content"] }],
       "properties": {
         "bindingSpec": {
           "type": "string",
           "minLength": 1,
-          "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., openbindings.openapi-3.1@1). Never implicitly dereferenced; no version algebra."
-        },
-        "location": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Binding-specification-defined absolute address associated with the source: an absolute URI or another absolute form the binding specification defines. Never a relative reference."
+          "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., example.openapi@1). Never implicitly dereferenced; no version algebra."
         },
         "content": {
-          "description": "Embedded source-artifact representation as any JSON value; the binding specification defines accepted values and their meaning. Member presence is distinct from value: content carrying JSON null is a present member for the location-or-content requirement."
+          "description": "What the source carries for its binding specification, as any JSON value. The binding specification wholly defines it: whether it may be absent, which values it accepts, and what they mean. Member presence is distinct from value: content carrying JSON null is a present member."
         },
         "description": {
           "type": "string",
           "description": "Human-readable description of this source."
         }
       },
-      "additionalProperties": true
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     },
     "BindingEntry": {
       "type": "object",
@@ -235,9 +224,8 @@
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
           "description": "Source key from sources."
         },
-        "selector": {
-          "type": "string",
-          "description": "Selector identifying a specific target within the governed source, whether an artifact entry, live-surface member, or another target form. Syntax and meaning are the governing binding specification's concern."
+        "content": {
+          "description": "What the binding carries for its source's binding specification, as any JSON value: typically which target realizes the operation and how values are adapted to it. The binding specification wholly defines it: whether it may be absent, which values it accepts, and what they mean. Member presence is distinct from value: content carrying JSON null is a present member."
         },
         "preference": {
           "type": "integer",
@@ -251,39 +239,11 @@
         },
         "deprecated": {
           "type": "boolean",
-          "description": "Author recommends migration away from this binding. A deprecated binding remains discoverable and actionable; no ordering relationship with preference is mandated."
-        },
-        "inputTransform": {
-          "$ref": "#/$defs/TransformOrRef",
-          "description": "Per-value transform from a caller-facing operation input value toward the source's expected input representation."
-        },
-        "outputTransform": {
-          "$ref": "#/$defs/TransformOrRef",
-          "description": "Per-value transform from a source output value toward the operation's output contract."
+          "description": "Author recommends migration away from this binding. Deprecation does not remove the binding or change what it declares; no ordering relationship with preference is mandated."
         }
       },
-      "additionalProperties": true
-    },
-    "TransformOrRef": {
-      "oneOf": [
-        {
-          "type": "string",
-          "description": "An inline JSONata expression."
-        },
-        {
-          "type": "object",
-          "required": ["$ref"],
-          "properties": {
-            "$ref": {
-              "type": "string",
-              "pattern": "^#/transforms/[A-Za-z0-9_][A-Za-z0-9_.-]*$",
-              "description": "Same-document JSON Pointer reference in literal form to a named transform (e.g., '#/transforms/myTransform')."
-            }
-          },
-          "additionalProperties": true
-        }
-      ],
-      "description": "Either an inline JSONata expression or a reference to a named transform."
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
     }
   }
 }
