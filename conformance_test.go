@@ -145,8 +145,8 @@ func runConformanceDir(t *testing.T, dir string) {
 				}
 				actualValid := parseErr == nil && validateErr == nil
 
-				if wantValid := tt.Valid || expectsOnlyCapabilityRules(tt); actualValid != wantValid {
-					if wantValid {
+				if actualValid != tt.Valid {
+					if tt.Valid {
 						if parseErr != nil {
 							t.Errorf("expected valid, got parse error: %v", parseErr)
 						} else {
@@ -476,28 +476,6 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 	runConformanceDir(t, dir)
 }
 
-// capabilityRules are the document rules whose checking takes a capability
-// the corpus run does not give validation: OBI-D-18 takes a transform parser,
-// and the SDK carries none. A validator without the capability leaves such a
-// rule inconclusive (§10.2), so the run expects it inconclusive wherever the
-// fixture expects it violated.
-var capabilityRules = map[string]bool{"OBI-D-18": true}
-
-// expectsOnlyCapabilityRules reports whether every violation a case expects
-// is of a capability rule, so that without the capability the case
-// establishes no violation.
-func expectsOnlyCapabilityRules(tt conformanceTest) bool {
-	if tt.Valid || len(tt.Violates) == 0 {
-		return false
-	}
-	for _, rule := range tt.Violates {
-		if !capabilityRules[rule] {
-			return false
-		}
-	}
-	return true
-}
-
 // assertReportAgreesWithFixture holds ValidateDocument's report to the
 // same fixture the gate is held to. A conforming case establishes no
 // violation (it may still be undetermined: inconclusive is not non-conformant).
@@ -516,16 +494,11 @@ func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt confor
 	if (violation != nil) != (report.Conclusion == ConclusionNonConformant) {
 		t.Errorf("ValidateDocument error %v disagrees with its report's conclusion %s", err, report.Conclusion)
 	}
-	if tt.Valid || expectsOnlyCapabilityRules(tt) {
+	if tt.Valid {
 		if refused {
 			t.Errorf("ValidateDocument refused a conforming case: %v", err)
 		} else if report.Conclusion == ConclusionNonConformant {
 			t.Errorf("ValidateDocument established violations %v for a conforming case: %+v", report.Violated, report.Violations())
-		}
-		for _, rule := range tt.Violates {
-			if report.Evidence[rule] != EvidenceInconclusive {
-				t.Errorf("expected %s inconclusive without its capability; its evidence is %q", rule, report.Evidence[rule])
-			}
 		}
 		return
 	}
@@ -537,10 +510,6 @@ func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt confor
 		case rule == "OBI-T-04":
 			if !refused {
 				t.Errorf("expected an OBI-T-04 version refusal; report concluded %s", report.Conclusion)
-			}
-		case capabilityRules[rule] && !refused:
-			if report.Evidence[rule] != EvidenceInconclusive {
-				t.Errorf("expected %s inconclusive without its capability; its evidence is %q", rule, report.Evidence[rule])
 			}
 		case strings.HasPrefix(rule, "OBI-D-") && !refused:
 			if report.Evidence[rule] != EvidenceViolated {
@@ -564,7 +533,7 @@ func lowestSupported() semver {
 
 // contractOutcome names the outcome of validating a value against an
 // operation's contract in the corpus's terms, read from the error's type
-// alone: OBI-T-16 keeps a mismatch and an unavailable graph distinct, so what
+// alone: OBI-T-08 keeps a mismatch and an unavailable graph distinct, so what
 // a scenario allows never decides which one an error is. unavailable is the
 // scenario's name for an unavailable graph.
 func contractOutcome(err error, unavailable string) string {

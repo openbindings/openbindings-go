@@ -17,7 +17,7 @@ import (
 // As an operation's Input or Output, a nil JSONSchema means the schema is
 // unspecified (the member is absent). As an entry of Interface.Schemas, where
 // the entry itself says the member is present, nil is a JSON null, which is
-// not a schema: OBI-D-17 reports it. Well-formedness of a present value is a
+// not a schema: OBI-D-13 reports it. Well-formedness of a present value is a
 // document rule enforced by Validate rather than by this type.
 type JSONSchema any
 
@@ -63,7 +63,7 @@ func Value[T any](member *T) T {
 // OperationExample is a named, author-supplied sample of an operation's
 // caller-facing values (§5.1). Input and Output are the example values as
 // JSON: nil when the member is absent, and the bytes `null` when the example
-// supplies the JSON value null, which OBI-D-11 validates like any other. An
+// supplies the JSON value null, which OBI-D-10 validates like any other. An
 // empty, non-nil json.RawMessage holds no value and encodes as absent.
 type OperationExample struct {
 	Description *string         `json:"description,omitempty"`
@@ -94,7 +94,7 @@ type Operation struct {
 	Tags        []string `json:"tags,omitzero"`
 	// Aliases are additional names for this operation, equal in standing to its
 	// key. The key plus aliases form one flat, document-unique namespace; every
-	// name resolves to this operation (see ResolveOperation / OBI-T-12).
+	// name resolves to this operation (see ResolveOperation / OBI-T-07).
 	Aliases []string `json:"aliases,omitzero"`
 
 	Idempotent *bool      `json:"idempotent,omitempty"`

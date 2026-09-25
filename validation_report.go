@@ -17,7 +17,7 @@ const (
 )
 
 // ConformanceConclusion is the portable conclusion a validator may report
-// after applying OBI-T-17 to its collected rule evidence.
+// after applying OBI-T-09 to its collected rule evidence.
 type ConformanceConclusion string
 
 const (
@@ -27,12 +27,11 @@ const (
 )
 
 // documentRules is every document rule the core specification defines
-// (§10.2), in identifier order. OBI-D-10, OBI-D-13, OBI-D-14, OBI-D-15, and
-// OBI-D-18 are retired (§10.6).
+// (§10.2), in identifier order.
 var documentRules = []string{
 	"OBI-D-01", "OBI-D-02", "OBI-D-03", "OBI-D-04", "OBI-D-05", "OBI-D-06",
-	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-11", "OBI-D-12", "OBI-D-16",
-	"OBI-D-17", "OBI-D-19",
+	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-10", "OBI-D-11", "OBI-D-12",
+	"OBI-D-13", "OBI-D-14",
 }
 
 // DocumentRules returns the identifiers of every document rule the core
@@ -81,6 +80,13 @@ type Diagnostic struct {
 // violation is therefore not conformance: a caller reporting a result must use
 // Conclusion, and must not present an undetermined result as conformant.
 type ValidationReport struct {
+	// Version is the specification version whose rules the report applies,
+	// and to which its rule identifiers belong (§10): the version the
+	// document declares when this SDK supports it, and otherwise
+	// AuthoringVersion, under whose rules a document declaring no version
+	// this SDK can interpret is judged (§8.1). A report ConcludeConformance
+	// builds from evidence alone carries no Version.
+	Version    string
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per rule considered. Reports from
 	// Interface.Validate and ValidateDocument carry every document rule; a
@@ -88,8 +94,8 @@ type ValidationReport struct {
 	// version refusal, or a host object that cannot be encoded, returns no
 	// report, whose Evidence is nil.
 	Evidence map[string]RuleEvidenceStatus
-	// Violated and Inconclusive identify rules by their stable identifiers,
-	// in identifier order, as OBI-T-17 requires.
+	// Violated and Inconclusive identify rules by their identifiers in
+	// Version, in identifier order, as OBI-T-09 requires.
 	Violated     []string
 	Inconclusive []string
 	// Findings locate every established violation and every undecided check,
@@ -122,10 +128,10 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 	return out
 }
 
-// ConcludeConformance applies OBI-T-17's truth conditions to a complete map of
+// ConcludeConformance applies OBI-T-09's truth conditions to a complete map of
 // rule evidence. The caller supplies every rule applicable to the validation;
 // absence is not itself an evidence status. It concludes from exactly the
-// evidence given, as the core conformance corpus's OBI-T-17 scenarios do, so
+// evidence given, as the core conformance corpus's OBI-T-09 scenarios do, so
 // an empty map concludes conformant: a report from Interface.Validate or
 // ValidateDocument always carries every document rule. A violation is decisive even when
 // other rules remain inconclusive. In the absence of a violation, any
@@ -182,6 +188,7 @@ func (e *VersionRefusalError) Error() string {
 // ruleChecks collects located evidence while a validator runs. Rules that
 // record no finding are satisfied.
 type ruleChecks struct {
+	version     string
 	findings    []Finding
 	diagnostics []Diagnostic
 }
@@ -231,6 +238,7 @@ func (c *ruleChecks) report() ValidationReport {
 		}
 	}
 	report := ConcludeConformance(evidence)
+	report.Version = c.version
 	report.Findings = append([]Finding(nil), c.findings...)
 	report.Diagnostics = append([]Diagnostic(nil), c.diagnostics...)
 	return report
@@ -262,4 +270,15 @@ func formatFinding(path, message, rule string) string {
 		return fmt.Sprintf("%s (%s)", message, rule)
 	}
 	return fmt.Sprintf("%s: %s (%s)", path, message, rule)
+}
+
+// reportVersion is the specification version whose rules judge a document
+// declaring declared: that version when this SDK supports it, and otherwise
+// AuthoringVersion (§8.1). A declared version the SDK refuses is never
+// judged, so it never reaches here.
+func reportVersion(declared string) string {
+	if supported, _ := IsSupportedVersion(declared); supported {
+		return declared
+	}
+	return AuthoringVersion
 }

@@ -9,7 +9,7 @@ import (
 )
 
 // The reachability acceptance suite: every case in which core's view of an
-// operation's statically reachable schema graph (§5.2, OBI-T-16, OBI-D-11)
+// operation's statically reachable schema graph (§5.2, OBI-T-08, OBI-D-10)
 // has disagreed with what the schema library evaluates, as reviews found
 // them. Each case states the outcome the bundle design gives. Where that is
 // no verdict for a part of a resource the graph does not reach, it is because
@@ -22,7 +22,7 @@ type reachabilityCase struct {
 	// values maps each input value, as JSON, to the outcome validating it
 	// against the operation "op"'s input must give.
 	values map[string]string
-	// d11 is the OBI-D-11 evidence ValidateDocument must report, when the
+	// d11 is the OBI-D-10 evidence ValidateDocument must report, when the
 	// document carries examples.
 	d11 RuleEvidenceStatus
 }
@@ -42,8 +42,8 @@ func (c reachabilityCase) run(t *testing.T) {
 		}
 	}
 	if c.d11 != "" {
-		if report := validateBytes(t, c.document); report.Evidence["OBI-D-11"] != c.d11 {
-			t.Errorf("%s: OBI-D-11 %q, want %q", c.name, report.Evidence["OBI-D-11"], c.d11)
+		if report := validateBytes(t, c.document); report.Evidence["OBI-D-10"] != c.d11 {
+			t.Errorf("%s: OBI-D-10 %q, want %q", c.name, report.Evidence["OBI-D-10"], c.d11)
 		}
 	}
 }
@@ -150,8 +150,8 @@ func TestReachability_ReferencesIntoRootMembers(t *testing.T) {
 	if got := outcome(ValidateOperationInput("text", mustDecodeInterface(t, document), "op")); got != "unavailable" {
 		t.Fatalf("got %s", got)
 	}
-	if report := validateBytes(t, document); report.Evidence["OBI-D-16"] != EvidenceViolated {
-		t.Fatalf("OBI-D-16 %q: a dependency entry is not a schema position", report.Evidence["OBI-D-16"])
+	if report := validateBytes(t, document); report.Evidence["OBI-D-12"] != EvidenceViolated {
+		t.Fatalf("OBI-D-12 %q: a dependency entry is not a schema position", report.Evidence["OBI-D-12"])
 	}
 }
 

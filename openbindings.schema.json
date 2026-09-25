@@ -79,7 +79,7 @@
   "additionalProperties": false,
   "$defs": {
     "JSONSchema": {
-      "description": "JSON Schema 2020-12 schema: object or boolean form. Top-level constraints from §5.2 are enforced on the object form here ($schema value pinned, $vocabulary forbidden); recursive enforcement (OBI-D-06/07) and meta-schema well-formedness (OBI-D-17) are prose rules beyond this schema.",
+      "description": "JSON Schema 2020-12 schema: object or boolean form. Top-level constraints from §5.2 are enforced on the object form here ($schema value pinned, $vocabulary forbidden); recursive enforcement (OBI-D-06/07) and meta-schema well-formedness (OBI-D-13) are prose rules beyond this schema.",
       "anyOf": [
         {
           "type": "object",
@@ -151,7 +151,7 @@
     },
     "OperationExample": {
       "type": "object",
-      "description": "An example input/output pair for an operation. Positive contract claims: provided values must validate against the corresponding specified schemas where the governing schema graph is document-internal (OBI-D-11). Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
+      "description": "An example input/output pair for an operation. Positive contract claims: provided values must validate against the corresponding specified schemas where the governing schema graph is document-internal (OBI-D-10). Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
       "properties": {
         "description": {
           "type": "string",

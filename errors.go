@@ -26,6 +26,6 @@ func (e *ValidationError) Error() string {
 }
 
 // ErrOperationNotFound is wrapped by the errors returned for a name that
-// resolves to no one operation (OBI-T-12): no operation carries it, or, in a
+// resolves to no one operation (OBI-T-07): no operation carries it, or, in a
 // document violating OBI-D-04, several do.
 var ErrOperationNotFound = errors.New("openbindings: no one operation is named")

@@ -34,8 +34,8 @@ func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 	if err != nil || decoded != nil {
 		t.Fatalf("no violation is established and no document decoded: %v", err)
 	}
-	if report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-11"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("OBI-D-01 %q, OBI-D-11 %q, conclusion %q", report.Evidence["OBI-D-01"], report.Evidence["OBI-D-11"], report.Conclusion)
+	if report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-10"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+		t.Fatalf("OBI-D-01 %q, OBI-D-10 %q, conclusion %q", report.Evidence["OBI-D-01"], report.Evidence["OBI-D-10"], report.Conclusion)
 	}
 }
 

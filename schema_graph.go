@@ -49,7 +49,7 @@ func newOperationSchemas(view any, schemas documentSchemas) *operationSchemas {
 type graphFacts struct {
 	// outside is a resource outside the document the graph reaches, and
 	// metaSchema a JSON Schema meta-schema the library carries. Either puts
-	// the graph's examples outside OBI-D-11.
+	// the graph's examples outside OBI-D-10.
 	outside, metaSchema string
 	// problem states why the graph cannot be evaluated.
 	problem string
@@ -80,7 +80,7 @@ func firstOf(a, b string) string {
 // operations share is examined once.
 //
 // The walk follows every position 2020-12 evaluates but $defs (a definition
-// belongs to a graph only when a reference reaches it, T16-S-04 of the core
+// belongs to a graph only when a reference reaches it, T08-S-04 of the core
 // conformance corpus), with then and else counted whether or not an if selects
 // them, and contentSchema (§5.2); $ref; and $dynamicRef, to its static target.
 // A dynamic reference may land elsewhere at run time, but only on a

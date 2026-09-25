@@ -10,8 +10,8 @@ import (
 
 // reference is what a schema reference ($ref, or $dynamicRef's static
 // target) names, resolved as §7 and JSON Schema 2020-12 resolve it. One
-// resolution serves the reference rule (OBI-D-16), the reach of an operation's
-// schema (OBI-D-11, OBI-T-16), and the bundle the schema library is given, so
+// resolution serves the reference rule (OBI-D-12), the reach of an operation's
+// schema (OBI-D-10, OBI-T-08), and the bundle the schema library is given, so
 // they cannot disagree.
 type reference struct {
 	origin origin
@@ -21,7 +21,7 @@ type reference struct {
 	// uri is the resource outside the document, the meta-schema, or the URI
 	// more than one resource declares.
 	uri string
-	// exists is whether the location named exists, which is what OBI-D-16
+	// exists is whether the location named exists, which is what OBI-D-12
 	// asks of a reference the document resolves.
 	exists existence
 	// within is the resource an absolute reference named, or the resource a

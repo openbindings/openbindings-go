@@ -12,7 +12,7 @@ through bindings and named dependencies whose implementations are supplied by
 its environment, independently of protocol. See the
 [spec](https://github.com/openbindings/spec) for details.
 
-**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-12 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
+**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-11 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
 
 > **Draft status:** this branch implements the unreleased 0.2 working draft.
 > The install command below describes the released package path; it does not
@@ -21,8 +21,9 @@ its environment, independently of protocol. See the
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
 [§10.5](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#105-conformance-conclusions):
-evidence for every document rule, located findings, OBI-T-02 diagnostics, and a
-conclusion of conformant, non-conformant, or conformance-undetermined.
+evidence for every document rule, located findings, OBI-T-02 diagnostics, a
+conclusion of conformant, non-conformant, or conformance-undetermined, and the
+specification version its rule identifiers belong to.
 No document rule needs knowledge of a binding specification: a source's and
 a binding's `content` are the binding specification's to define, and no core
 rule judges them.
@@ -37,8 +38,8 @@ other rule is inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
-OBI-D-13, OBI-D-14, and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
-OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
+OBI-D-02, OBI-D-10, and
+OBI-D-13 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
 embedded at build time. To exercise the core conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
@@ -90,7 +91,7 @@ go get github.com/openbindings/openbindings-go
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
 - **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
-- **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-16): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
+- **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
 
 ## Quick start
 
@@ -122,7 +123,7 @@ for name, op := range iface.Operations {
 }
 ```
 
-A dependency names the local operation it consumes by exact key (OBI-D-19);
+A dependency names the local operation it consumes by exact key (OBI-D-14);
 dependency keys and their operation references do not use alias resolution:
 
 ```go

@@ -20,7 +20,7 @@ import (
 // let a document-supplied $ref make validation read the validating machine's
 // files and would make a verdict depend on that machine. Core lets a tool
 // decline external resources (§7), and a graph that cannot be fully resolved
-// validates nothing (OBI-T-16), so every external reference, file: and
+// validates nothing (OBI-T-08), so every external reference, file: and
 // http(s) alike, is unavailable. The JSON Schema meta-schemas are built into
 // the library and resolve without a loader. Patterns use Go's regexp, the
 // library's own engine, through compilePattern.

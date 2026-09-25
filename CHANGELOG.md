@@ -285,6 +285,19 @@
   at the whole document.
 ### Changed
 
+- **Rule identifiers follow the core's 0.2 numbering, and a report names
+  its version** (breaking, pre-1.0), following the core draft, which scopes
+  a rule identifier to its version and numbers 0.2's rules without gaps (the
+  spec's changelog maps them). OBI-D-11, OBI-D-12, OBI-D-16, OBI-D-17, and
+  OBI-D-19 are now OBI-D-10 through OBI-D-14; OBI-T-11, OBI-T-12, OBI-T-16,
+  OBI-T-17, OBI-T-18, and OBI-T-19 are now OBI-T-06 through OBI-T-11.
+  `DocumentRules`, report evidence, findings, and messages use the new
+  numbers. `ValidationReport.Version` names the specification version whose
+  rules a report applies: the version the document declares when this SDK
+  supports it, and otherwise `AuthoringVersion`. The corpus test no longer
+  carries the OBI-D-18 capability exception, whose fixtures the core removed.
+  Rule identifiers in the entries below use the draft's numbering.
+
 - **Transforms leave the core, and a binding carries content** (breaking,
   pre-1.0), following the core draft. `BindingEntry.Selector` is now
   `BindingEntry.Content`, a `json.RawMessage` the source's binding
