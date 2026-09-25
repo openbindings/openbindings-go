@@ -255,7 +255,7 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 	validateAgainstOBISchema(c, view)
 
 	root, _ := view.(map[string]any)
-	d := documentCheck{c: c, view: view, wellFormed: map[string]bool{}, schemas: collectDocumentSchemas(view), transforms: options.Transforms}
+	d := documentCheck{c: c, view: view, wellFormed: map[string]bool{}, schemas: collectDocumentSchemas(view), transforms: options.Transforms, targets: map[string][]Finding{}}
 
 	schemas, _ := root["schemas"].(map[string]any)
 	for _, key := range sortedKeys(schemas) {
@@ -341,6 +341,11 @@ type documentCheck struct {
 	// transforms parses transform expressions for OBI-D-18; nil when
 	// validation was given none.
 	transforms TransformParser
+
+	// targets remembers what OBI-D-17 found at each value a schema $ref
+	// resolves to outside the schema positions, so a value many references
+	// reach is checked once.
+	targets map[string][]Finding
 }
 
 // checkReference decides a referential rule (OBI-D-08, OBI-D-09, OBI-D-19)
@@ -646,6 +651,28 @@ func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource, des
 	})
 }
 
+// dialectProblems records, as OBI-D-17 findings, where a schema or any of its
+// subschemas breaks §5.2's dialect constraints: a $schema string other than
+// the 2020-12 dialect, or a $vocabulary. walkSchema records the same at the
+// schema positions; a $schema that is not a string is the meta-schemas'.
+func dialectProblems(c *ruleChecks, path *schemaPath, schema any) {
+	s, ok := schema.(map[string]any)
+	if !ok {
+		return
+	}
+	if value, isString := s["$schema"].(string); isString && value != draft202012URI {
+		c.violated("OBI-D-17", path.at("$schema"), fmt.Sprintf("not well-formed: §5.2 requires the 2020-12 dialect; got %q", value))
+	}
+	if _, present := s["$vocabulary"]; present {
+		c.violated("OBI-D-17", path.at(), "not well-formed: §5.2 forbids $vocabulary")
+	}
+	forEachDescribedSubschema(s, func(child any, tokens ...string) {
+		path.below = append(path.below, tokens...)
+		dialectProblems(c, path, child)
+		path.below = path.below[:len(path.below)-len(tokens)]
+	})
+}
+
 // schemaPath is where a walk of a schema is: the location of the schema it
 // began at, and the reference tokens from there to the schema it is at. A
 // location is formatted only when a finding needs one, so the walk itself
@@ -686,8 +713,11 @@ func (d *documentCheck) checkDocumentReference(path, holder, ref string) {
 	// OBI-D-16 judges the fragment whatever its spelling: URI semantics
 	// decode it before it is read as a JSON Pointer (RFC 6901 §6), and one
 	// that is not a pointer resolves to no location from the document root.
-	if d.schemas.resolve(ref, holder, d.view).exists == missing {
+	switch r := d.schemas.resolve(ref, holder, d.view); {
+	case r.exists == missing:
 		d.c.violated("OBI-D-16", path, fmt.Sprintf("%q does not resolve within the document", ref))
+	case r.origin == inDocument:
+		d.checkReferenceTarget(path, r.location)
 	}
 }
 
@@ -712,6 +742,42 @@ func (d *documentCheck) checkEmbeddedReference(path, holder, ref string) {
 		d.c.violated("OBI-D-16", path, fmt.Sprintf("%q does not resolve within %s", ref, describeBase(r.within)))
 	case r.origin == ambiguous:
 		d.c.inconclusive("OBI-D-16", path, fmt.Sprintf("%q names an anchor more than one schema in %s declares", ref, resourceName(r.within)))
+	case r.origin == inDocument:
+		d.checkReferenceTarget(path, r.location)
+	}
+}
+
+// checkReferenceTarget applies OBI-D-17 to the value a schema $ref at an OBI
+// position resolves to within the document: wherever it sits, it is read as a
+// schema, so it is well-formed: valid against the meta-schemas and within
+// §5.2's dialect constraints. A value at or below a schema position is judged
+// there already. Any other is checked once, however many references
+// reach it, and each reference to one that is not well-formed is a finding at
+// that reference.
+func (d *documentCheck) checkReferenceTarget(path, target string) {
+	if belowSchemaPosition(target, true) {
+		return
+	}
+	found, checked := d.targets[target]
+	if !checked {
+		var scratch ruleChecks
+		value := mustResolve(d.view, target)
+		validateSchemaWellFormedness(&scratch, target, value, d.wellFormed)
+		dialectProblems(&scratch, &schemaPath{start: target}, value)
+		found = scratch.findings
+		d.targets[target] = found
+	}
+	for _, finding := range found {
+		detail := finding.Message
+		if finding.Path != target {
+			detail = finding.Path + ": " + detail
+		}
+		message := fmt.Sprintf("resolves to %s, which is read as a schema: %s", target, detail)
+		if finding.Status == EvidenceViolated {
+			d.c.violated("OBI-D-17", path, message)
+		} else {
+			d.c.inconclusive("OBI-D-17", path, message)
+		}
 	}
 }
 

@@ -507,6 +507,43 @@ func TestValidateDocument_ReferencesFollowTheURIGrammar(t *testing.T) {
 }
 
 // OBI-D-16 covers an absolute $ref that matches an embedded schema's $id.
+// A value a schema $ref at an OBI position resolves to is read as a schema,
+// wherever it sits, so OBI-D-17 judges it by its value: a finding at each
+// reference to one that is not well-formed, none for one that is, and none
+// added for a target at a schema position, which is judged where it sits.
+func TestValidateDocument_ReferenceTargetsAreWellFormedSchemas(t *testing.T) {
+	d17 := func(document string) []Finding {
+		var out []Finding
+		for _, finding := range mustValidateDocument(t, document).Findings {
+			if finding.Rule == "OBI-D-17" {
+				out = append(out, finding)
+			}
+		}
+		return out
+	}
+	if got := d17(`{"openbindings":"0.2.0","name":"Task Manager","operations":{"a":{"input":{"$ref":"#/name"}}}}`); len(got) != 1 || got[0].Path != "/operations/a/input/$ref" || !strings.Contains(got[0].Message, "resolves to /name") {
+		t.Fatalf("a $ref to a string: want one OBI-D-17 finding at the reference, got %+v", got)
+	}
+	if got := d17(`{"openbindings":"0.2.0","x-s":{"B":{"type":42}},"operations":{"a":{"input":{"$ref":"#/x-s/B"},"output":{"$ref":"#/x-s/B"}}}}`); len(got) != 2 || got[0].Path == got[1].Path {
+		t.Fatalf("two references to one malformed target: want a finding at each, got %+v", got)
+	}
+	if got := d17(`{"openbindings":"0.2.0","x-s":{"O":{"$schema":"https://json-schema.org/draft/2019-09/schema"}},"operations":{"a":{"input":{"$ref":"#/x-s/O"}}}}`); len(got) != 1 || !strings.Contains(got[0].Message, "2020-12 dialect") {
+		t.Fatalf("a target declaring another dialect: want one finding, got %+v", got)
+	}
+	if got := d17(`{"openbindings":"0.2.0","x-s":{"V":{"properties":{"a":{"$vocabulary":{}}}}},"operations":{"a":{"input":{"$ref":"#/x-s/V"}}}}`); len(got) != 1 || !strings.Contains(got[0].Message, "/x-s/V/properties/a") {
+		t.Fatalf("a target holding a nested $vocabulary: want one finding naming it, got %+v", got)
+	}
+	if got := d17(`{"openbindings":"0.2.0","x-s":{"T":{"type":"object"}},"operations":{"a":{"input":{"$ref":"#/x-s/T"}}}}`); len(got) != 0 {
+		t.Fatalf("a well-formed target outside the schema positions: want no finding, got %+v", got)
+	}
+	if got := d17(`{"openbindings":"0.2.0","schemas":{"A":{"type":42}},"operations":{"a":{"input":{"$ref":"#/schemas/A"}}}}`); len(got) != 1 || got[0].Path != "/schemas/A/type" {
+		t.Fatalf("a malformed target at a schema position: want only the finding where it sits, got %+v", got)
+	}
+	if got := d17(`{"openbindings":"0.2.0","schemas":{"S":{"$id":"https://e.com/s","x":1}},"operations":{"a":{"input":{"$ref":"https://e.com/s#/x"}}}}`); len(got) != 1 || !strings.Contains(got[0].Message, "resolves to /schemas/S/x") {
+		t.Fatalf("an absolute reference into an embedded resource reaching a number: want one finding, got %+v", got)
+	}
+}
+
 func TestValidateDocument_AbsoluteReferencesIntoEmbeddedResourcesResolve(t *testing.T) {
 	document := func(ref string) string {
 		return `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://example.com/t","$defs":{"S":{"type":"string"}}}},

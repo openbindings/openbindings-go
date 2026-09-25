@@ -285,6 +285,16 @@
   at the whole document.
 ### Changed
 
+- **A value a schema `$ref` resolves to is judged as a schema.** OBI-D-17
+  now covers every value a `$ref` at an OBI position resolves to within the
+  document, wherever it sits, following the core draft: a reference to the
+  document's `name` string, or to a schema inside `x-` data that is malformed,
+  declares another dialect, or holds `$vocabulary`, is a violation at the
+  reference, where the document was conformant. A target at
+  a schema position is judged where it sits, and a target many references
+  reach is checked once. The transform capability's doc calls the values a
+  binding specification supplies "variable bindings", as the draft does.
+
 - **A source is its binding specification's identifier and the content that
   specification defines** (breaking, pre-1.0), following the core
   specification's working draft. `Source.Location` is gone: the core no
@@ -380,7 +390,7 @@
   Core defines the two capabilities the specification names over the pinned
   transform language (§5.5), and carries neither: `TransformParser` decides
   whether an expression is in the language, and `TransformEvaluator`
-  evaluates one with an input and the context bindings a binding
+  evaluates one with an input and the variable bindings a binding
   specification defines (§5.5 clause 5). One implementation of the language
   usually provides both, and an application gives the same one to every
   layer that parses or evaluates transforms, so the expression validation

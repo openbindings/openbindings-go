@@ -397,6 +397,12 @@ func gather(component []int, count int, successors func(int) []int, value func(i
 // schema position, or reached from one through the positions 2020-12
 // evaluates.
 func atSchemaPosition(location string) bool {
+	return belowSchemaPosition(location, false)
+}
+
+// belowSchemaPosition reports whether a location is an OBI schema position or
+// reached from one along a keyword path; carried is as for keywordPath.
+func belowSchemaPosition(location string, carried bool) bool {
 	tokens, _ := jsonpointer.Parse(location)
 	var i int
 	switch {
@@ -407,7 +413,7 @@ func atSchemaPosition(location string) bool {
 	default:
 		return false
 	}
-	return keywordPath(tokens[i:], false)
+	return keywordPath(tokens[i:], carried)
 }
 
 // keywordPath reports whether reference tokens lead from a schema to a

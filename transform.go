@@ -23,7 +23,7 @@ type TransformParser interface {
 // expression validation accepts is the expression that runs.
 type TransformEvaluator interface {
 	// Evaluate runs expression against input, the evaluation context ($ in
-	// JSONata). bindings are the context bindings the governing binding
+	// JSONata). bindings are the variable bindings the governing binding
 	// specification defines for the expression's position (§5.5 clause 5,
 	// OBI-B-02 item 4), keyed by name without the language's prefix
 	// ("threshold" for JSONata's $threshold), or nil for none. The
