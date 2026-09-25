@@ -207,7 +207,7 @@
         "bindingSpec": {
           "type": "string",
           "minLength": 1,
-          "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., openbindings.openapi-3.1@1). Never implicitly dereferenced; no version algebra."
+          "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., example.openapi@1). Never implicitly dereferenced; no version algebra."
         },
         "content": {
           "description": "What the source carries for its binding specification, as any JSON value. The binding specification wholly defines it: whether it may be absent, which values it accepts, and what they mean. Member presence is distinct from value: content carrying JSON null is a present member."
