@@ -25,9 +25,12 @@ type TransformEvaluator interface {
 	// wrapping ErrTransformNoResult; a syntax error, a dynamic error, or a
 	// result that is not a JSON value returns any other error. The language's
 	// meaning applies to the values given, evaluated natively: where the
-	// implementation cannot compute it, such as a number beyond its range or
-	// precision, it returns an error wrapping ErrTransformUndecided, never a
-	// different value (§5.5 clause 2).
+	// implementation cannot compute it, such as a number it cannot hold
+	// without changing it, it returns an error wrapping ErrTransformUndecided,
+	// never a different value (§5.5 clause 2). It reads the language as §5.5
+	// clause 6 states: characters are Unicode code points where the
+	// documentation counts or orders them, objects carry no member order, and
+	// regular expressions are ECMA-262 without the u flag.
 	Evaluate(ctx context.Context, expression string, input any, bindings map[string]any) (any, error)
 }
 
