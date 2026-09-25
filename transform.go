@@ -5,22 +5,9 @@ import (
 	"errors"
 )
 
-// TransformParser is a parser for the transform language the specification
-// pins (§5.5: JSONata 2.1 for OpenBindings 0.2): it decides whether an
-// expression is in the language, which is all OBI-D-18 asks and all
-// validation takes (§10.2). The SDK carries none.
-type TransformParser interface {
-	// Parse reports whether expression is in the pinned language: nil when
-	// it parses, an error wrapping ErrTransformUndecided when the parser
-	// could not decide, and otherwise why it does not parse.
-	Parse(expression string) error
-}
-
 // TransformEvaluator evaluates transforms under the contract of §5.5
-// (OBI-T-10). The SDK carries none. An implementation of the pinned language
-// usually provides both this and TransformParser, and an application gives
-// the same one to every layer that parses or evaluates transforms, so the
-// expression validation accepts is the expression that runs.
+// (OBI-T-10). The SDK carries none; an application gives the same one to
+// every layer that evaluates transforms.
 type TransformEvaluator interface {
 	// Evaluate runs expression against input, the evaluation context ($ in
 	// JSONata). bindings are the variable bindings the governing binding
@@ -44,13 +31,11 @@ type TransformEvaluator interface {
 	Evaluate(ctx context.Context, expression string, input any, bindings map[string]any) (any, error)
 }
 
-// ErrTransformUndecided is wrapped by the error a TransformParser or
-// TransformEvaluator returns when it could not decide: its own limits (size,
-// depth, time) or a capability it lacks stopped it, not the expression. From
-// Parse it leaves OBI-D-18 inconclusive rather than violated, since a limit
-// met is no evidence either way (§10.5). From Evaluate it is still a
-// transform-evaluation failure (§5.5 clause 4), which a caller can tell apart
-// from one the expression caused.
+// ErrTransformUndecided is wrapped by the error a TransformEvaluator returns
+// when it could not decide: its own limits (size, depth, time, a number
+// beyond its range or precision) or a capability it lacks stopped it, not the
+// expression. It is still a transform-evaluation failure (§5.5 clause 4),
+// which a caller can tell apart from one the expression caused.
 var ErrTransformUndecided = errors.New("openbindings: the transform could not be decided")
 
 // ErrTransformNoResult is wrapped by the error a TransformEvaluator returns

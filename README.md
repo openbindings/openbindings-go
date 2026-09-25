@@ -25,9 +25,9 @@ evidence for every document rule, located findings, OBI-T-02 diagnostics, and a
 conclusion of conformant, non-conformant, or conformance-undetermined.
 No document rule needs knowledge of a binding specification: a source's
 `content` and a binding's `selector` are the binding specification's to
-define, and no core rule judges them. OBI-D-18 needs a parser for the transform language: the SDK carries
-none, so an application passes its `TransformParser` in
-`ValidateOptions.Transforms`, and without one the rule is inconclusive.
+define, and no core rule judges them. Nor does any rule judge transform
+expression syntax: an expression that does not parse fails when it is
+evaluated (§5.5).
 `Interface.Validate(options)` does the same for a document already in
 memory, where OBI-D-01 is inconclusive because a host object no longer
 carries the exact input bytes. The rules judge the JSON a document is, never
@@ -93,7 +93,7 @@ go get github.com/openbindings/openbindings-go
 - **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, unknown fields surfaced as diagnostics rather than rejected, and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
 - **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-16): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
-- **The two transform capabilities** the specification names, as interfaces an application implements: `TransformParser` (OBI-D-18) and `TransformEvaluator` (§5.5, OBI-T-10). The SDK carries no transform engine; an application gives one implementation to every layer that parses or evaluates transforms, so the expression validation accepts is the expression that runs
+- **The transform capability** the specification names, as an interface an application implements: `TransformEvaluator` (§5.5, OBI-T-10). The SDK carries no transform engine; an application gives one implementation to every layer that evaluates transforms
 
 ## Quick start
 

@@ -28,11 +28,8 @@
 // only the exact bytes decide and Validate leaves inconclusive. Validate
 // returns a *ValidationError listing every violation it establishes, which
 // makes it a gate. A nil error is not conformance: a rule this SDK cannot
-// decide is inconclusive, not violated. OBI-D-18 takes a
-// [TransformParser], which the SDK does not carry: an application gives one
-// through [ValidateOptions], and without one the rule is inconclusive.
-// Evaluating transforms takes a [TransformEvaluator]; one implementation of
-// the pinned language usually provides both. The
+// decide is inconclusive, not violated. Evaluating transforms takes a
+// [TransformEvaluator], which the SDK does not carry. The
 // report beside the error carries the conclusion:
 //
 //	iface, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})

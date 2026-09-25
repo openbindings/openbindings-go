@@ -285,6 +285,14 @@
   at the whole document.
 ### Changed
 
+- **OBI-D-18 is retired, and with it the transform parser** (breaking,
+  pre-1.0), following the core draft: expression syntax is no document rule,
+  and an expression that does not parse fails when it is evaluated.
+  `TransformParser` and `ValidateOptions.Transforms` are gone, so a document
+  with transforms is conformant when every other rule is decided, where it
+  was conformance-undetermined without a parser. `DocumentRules` no longer
+  lists OBI-D-18. `ValidateOptions` has no fields.
+
 - **A schema `$ref` reaches only a schema the document model places**,
   following the core draft. A `$ref` at an OBI position that resolves to the
   document itself (`#`), a string, `x-` data, a source's `content`, an
@@ -391,25 +399,15 @@
   document". `ErrOperationNotFound` reads "no one operation is named", which
   covers an ambiguous name too, and a version refusal names the release line
   the SDK supports (0.2.x) rather than the tested version.
-- **Validation takes the transform parser it is given** (breaking, pre-1.0).
-  Core defines the two capabilities the specification names over the pinned
-  transform language (§5.5), and carries neither: `TransformParser` decides
-  whether an expression is in the language, and `TransformEvaluator`
-  evaluates one with an input and the variable bindings a binding
-  specification defines (§5.5 clause 5). One implementation of the language
-  usually provides both, and an application gives the same one to every
-  layer that parses or evaluates transforms, so the expression validation
-  accepts is the expression that runs. `Interface.Validate` and
-  `ValidateDocument` take a `ValidateOptions`, whose `Transforms` field is a
-  `TransformParser`. OBI-D-18 is decided by that parser; without one it is
-  inconclusive at every expression, as §10.2 provides for a validator
-  without a parser, so a document with transforms is
-  conformance-undetermined rather than conformant. Core no longer imports
-  the JSONata syntax package. `ErrTransformNoResult` marks an expression
-  that yields no result (JSONata's undefined), and `ErrTransformUndecided`
-  one that could not be decided (the implementation's own limits, not the
-  expression): from `Parse` it leaves OBI-D-18 inconclusive rather than
-  violated.
+- **Core carries no transform engine** (breaking, pre-1.0). The
+  specification names one capability over the pinned transform language
+  (§5.5): `TransformEvaluator` evaluates an expression with an input and the
+  variable bindings a binding specification defines (§5.5 clause 5), and an
+  application gives the same one to every layer that evaluates transforms.
+  Core no longer imports the JSONata syntax package. `ErrTransformNoResult`
+  marks an expression that yields no result (JSONata's undefined), and
+  `ErrTransformUndecided` one the evaluator could not decide (its own limits,
+  not the expression).
 - **The JSON Schema library is an ordinary dependency** (behavior changes in
   rare cases). Core validated with a private, patched copy of
   `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3; it now requires the
@@ -551,8 +549,7 @@
   fields; the option turned them into rejections. Unknown non-`x-` fields
   are now always surfaced as OBI-T-02 diagnostics in a `ValidationReport`,
   which is what the rule asks for, and never affect validation.
-  The option is gone; `ValidateOptions` carries only capabilities validation
-  does not have itself.
+  The option is gone.
 
 - **The `security` surface, per spec 0.2.0**: the OBI `security` section
   (`Interface.Security`), `BindingEntry.Security`, `SecurityMethod`,

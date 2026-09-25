@@ -15,15 +15,9 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
-// ValidateOptions gives validation the capabilities it does not carry
-// itself (§10.2). The zero value gives none, and a rule that needs a missing
-// capability is inconclusive, never violated.
-type ValidateOptions struct {
-	// Transforms parses the document's transform expressions for OBI-D-18.
-	// Without one, OBI-D-18 is inconclusive for every expression the
-	// document holds.
-	Transforms TransformParser
-}
+// ValidateOptions configures validation. It has no fields: no document rule
+// takes a capability an application supplies (§10.2).
+type ValidateOptions struct{}
 
 // Validate checks a document already in memory against every document rule
 // this SDK can decide. It reports the per-rule evidence, the located findings,
@@ -41,10 +35,9 @@ type ValidateOptions struct {
 // not violated, and the report's Conclusion says whether the document is
 // conformant or conformance undetermined. No rule takes binding-specification
 // knowledge: a source's content and a binding's selector are the binding
-// specification's, and no core rule judges them. OBI-D-18 is inconclusive for a document with
-// transforms unless options gives a transform parser, and OBI-D-17 for the
-// subschemas a schema nests deeper than 256 levels, where the meta-schema
-// check meets a resource limit (§10.5).
+// specification's, and no core rule judges them. OBI-D-17 is inconclusive
+// for the subschemas a schema nests deeper than 256 levels, where the
+// meta-schema check meets a resource limit (§10.5).
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (OBI-T-04). A host
@@ -256,7 +249,7 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 	validateAgainstOBISchema(c, view)
 
 	root, _ := view.(map[string]any)
-	d := documentCheck{c: c, view: view, wellFormed: map[string]bool{}, schemas: collectDocumentSchemas(view), transforms: options.Transforms}
+	d := documentCheck{c: c, view: view, wellFormed: map[string]bool{}, schemas: collectDocumentSchemas(view)}
 
 	schemas, _ := root["schemas"].(map[string]any)
 	for _, key := range sortedKeys(schemas) {
@@ -273,11 +266,6 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 	for _, key := range sortedKeys(transforms) {
 		path := jsonpointer.Format("transforms", key)
 		validateIdent(c, path, key)
-		if expression, ok := transforms[key].(string); ok {
-			d.checkTransformExpression(path, expression)
-		} else {
-			c.violated("OBI-D-18", path, fmt.Sprintf("a transform is a JSONata expression string; got %s", jsonTypeName(transforms[key])))
-		}
 	}
 
 	dependencies, _ := root["dependencies"].(map[string]any)
@@ -339,10 +327,6 @@ type documentCheck struct {
 	// wellFormed remembers schema objects already found well-formed, keyed by
 	// their encoding, so a schema repeated across positions is checked once.
 	wellFormed map[string]bool
-
-	// transforms parses transform expressions for OBI-D-18; nil when
-	// validation was given none.
-	transforms TransformParser
 }
 
 // checkReference decides a referential rule (OBI-D-08, OBI-D-09, OBI-D-19)
@@ -435,14 +419,12 @@ func (d *documentCheck) checkSchema(path string, schema any) {
 }
 
 // checkBindingTransform records evidence for a binding's inputTransform or
-// outputTransform: an inline expression parses (OBI-D-18); a named-transform
-// $ref is a same-document fragment in literal form (OBI-D-05) that resolves
-// into the transforms map (OBI-D-10). A value that is neither form is
-// outside all three rules.
+// outputTransform written as a named-transform $ref: a same-document fragment
+// in literal form (OBI-D-05) that resolves into the transforms map
+// (OBI-D-10). An inline expression's syntax is no document rule (§5.5), and a
+// value that is neither form is outside both rules.
 func (d *documentCheck) checkBindingTransform(path string, value any, transforms map[string]any) {
 	switch transform := value.(type) {
-	case string:
-		d.checkTransformExpression(path, transform)
 	case map[string]any:
 		refPath := path + jsonpointer.Format("$ref")
 		if value, present := transform["$ref"]; present {
@@ -514,25 +496,6 @@ func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, kn
 		noun = "field"
 	}
 	c.diagnose("OBI-T-02", path, fmt.Sprintf("unknown %s ignored: %s; extensions use the x- prefix", noun, strings.Join(unknown, ", ")))
-}
-
-// checkTransformExpression decides OBI-D-18 for one transform expression: it
-// parses under the pinned transform language (§5.5). Parse-only: membership
-// in the language, not success of evaluation; a result that is absent and a
-// dynamic error remain evaluation outcomes. Without a transform parser the
-// rule is inconclusive, as the spec provides (§10.2).
-func (d *documentCheck) checkTransformExpression(path, expression string) {
-	if d.transforms == nil {
-		d.c.inconclusive("OBI-D-18", path, "not parsed: validation was given no transform parser")
-		return
-	}
-	switch err := d.transforms.Parse(expression); {
-	case err == nil:
-	case errors.Is(err, ErrTransformUndecided):
-		d.c.inconclusive("OBI-D-18", path, fmt.Sprintf("not decided: %v", err))
-	default:
-		d.c.violated("OBI-D-18", path, fmt.Sprintf("not a syntactically valid expression of the pinned transform language: %v", err))
-	}
 }
 
 // transformRefProblem states why a named-transform $ref does not resolve to a

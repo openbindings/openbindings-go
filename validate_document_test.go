@@ -69,7 +69,7 @@ const documentWithBinding = `{
 // nothing within them, relative addresses and $ref members included, is
 // judged, and a document with bindings is decided in full.
 func TestValidateDocument_BindingsNeedNoBindingSpecificationKnowledge(t *testing.T) {
-	_, report, err := ValidateDocument([]byte(documentWithBinding), ValidateOptions{Transforms: stubParser{}})
+	_, report, err := ValidateDocument([]byte(documentWithBinding), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("ValidateDocument = %v", err)
 	}
@@ -90,30 +90,41 @@ func TestValidateDocument_ASourceLocationIsAnUnknownField(t *testing.T) {
 	}
 }
 
-func TestConcludeConformance_CallerEvidenceCompletesAReport(t *testing.T) {
-	report := mustValidateDocument(t, documentWithBinding)
-	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-18"}) {
-		t.Fatalf("inconclusive = %v, want only OBI-D-18", report.Inconclusive)
+// hostReport validates a document as a host object, whose report leaves
+// OBI-D-01 inconclusive: only the exact bytes decide it.
+func hostReport(t *testing.T, document string) (ValidationReport, error) {
+	t.Helper()
+	var iface Interface
+	if err := json.Unmarshal([]byte(document), &iface); err != nil {
+		t.Fatal(err)
 	}
-	// A caller that parsed the transform itself supplies the evidence this
-	// validation was not given.
-	report.Evidence["OBI-D-18"] = EvidenceSatisfied
+	return iface.Validate(ValidateOptions{})
+}
+
+func TestConcludeConformance_CallerEvidenceCompletesAReport(t *testing.T) {
+	report, err := hostReport(t, documentWithBinding)
+	if err != nil || !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
+		t.Fatalf("err %v, inconclusive = %v, want only OBI-D-01", err, report.Inconclusive)
+	}
+	// A caller that checked the exact bytes itself supplies the evidence a
+	// host object cannot.
+	report.Evidence["OBI-D-01"] = EvidenceSatisfied
 	if got := ConcludeConformance(report.Evidence).Conclusion; got != ConclusionConformant {
-		t.Fatalf("conclusion with OBI-D-18 decided = %s, want conformant", got)
+		t.Fatalf("conclusion with OBI-D-01 decided = %s, want conformant", got)
 	}
 }
 
 func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t *testing.T) {
 	document := strings.Replace(documentWithBinding, `"operation": "tasks.create", "source"`, `"operation": "tasks.missing", "source"`, 1)
-	report := mustValidateDocument(t, document)
-	if report.Conclusion != ConclusionNonConformant {
+	report, err := hostReport(t, document)
+	if !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant {
 		t.Fatalf("conclusion = %s, want non-conformant", report.Conclusion)
 	}
 	if report.Evidence["OBI-D-08"] != EvidenceViolated {
 		t.Fatalf("OBI-D-08 = %s, want violated", report.Evidence["OBI-D-08"])
 	}
-	if report.Evidence["OBI-D-18"] != EvidenceInconclusive {
-		t.Fatalf("OBI-D-18 = %s, want inconclusive and retained", report.Evidence["OBI-D-18"])
+	if report.Evidence["OBI-D-01"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-01 = %s, want inconclusive and retained", report.Evidence["OBI-D-01"])
 	}
 	violations := report.Violations()
 	if len(violations) != 1 || violations[0].Path != `/bindings/tasks.create.api/operation` {
@@ -357,7 +368,7 @@ func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 		"OBI-D-09 /bindings/b/source":              EvidenceViolated,
 		"OBI-D-10 /bindings/b/inputTransform/$ref": EvidenceViolated,
 		"OBI-D-05 /bindings/c/inputTransform/$ref": EvidenceViolated,
-		"OBI-D-18 /transforms/n":                   EvidenceViolated,
+		"OBI-D-02 /transforms/n":                   EvidenceViolated,
 	} {
 		if got := found[key]; got != want {
 			t.Errorf("%s = %q, want %s; findings %+v", key, got, want, report.Findings)
@@ -367,9 +378,6 @@ func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 		if report.Evidence[rule] != EvidenceSatisfied {
 			t.Errorf("%s = %s: an operations member that is not an object holds nothing it judges", rule, report.Evidence[rule])
 		}
-	}
-	if _, ok := found["OBI-D-18 /bindings/b/outputTransform"]; ok {
-		t.Error("a transform that is neither an expression nor a reference is outside OBI-D-18")
 	}
 }
 
