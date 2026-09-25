@@ -30,14 +30,22 @@ func TestDocumentModel_RoundTripsEveryMember(t *testing.T) {
 		"present empty and false members": `{"openbindings":"0.2.0","name":"","version":"","description":"",
 			"schemas":{},"dependencies":{},"transforms":{},
 			"operations":{"a":{"description":"","deprecated":false,"tags":[],"aliases":[],"idempotent":false,"examples":{}}},
-			"sources":{"s":{"bindingSpec":"x@1","location":"","description":""}},
+			"sources":{"s":{"bindingSpec":"x@1","content":"","description":""}},
 			"bindings":{"b":{"operation":"a","source":"s","selector":"","description":"","deprecated":false,"preference":0}}}`,
-		"absent optional members": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+		"absent optional members": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1"}},
 			"bindings":{"b":{"operation":"a","source":"s"}}}`,
 		"operations absent": `{"openbindings":"0.2.0"}`,
 		"operations empty":  `{"openbindings":"0.2.0","operations":{}}`,
 		"null where null is a value": `{"openbindings":"0.2.0","operations":{"a":{"examples":{"e":{"input":null,"output":null}}}},
-			"sources":{"s":{"bindingSpec":"x@1","content":null}}}`,
+			"sources":{"s":{"bindingSpec":"x@1","content":null}},
+			"bindings":{"b":{"operation":"a","source":"s","selector":null}}}`,
+		"content and selector of every JSON type": `{"openbindings":"0.2.0","operations":{"a":{}},
+			"sources":{"o":{"bindingSpec":"x@1","content":{"location":"a.json"}},"a":{"bindingSpec":"x@1","content":[1,"two"]},
+				"n":{"bindingSpec":"x@1","content":7.50},"b":{"bindingSpec":"x@1","content":false}},
+			"bindings":{"o":{"operation":"a","source":"o","selector":{"path":"/a"}},"a":{"operation":"a","source":"a","selector":["a",1]},
+				"n":{"operation":"a","source":"n","selector":1e2},"b":{"operation":"a","source":"b","selector":true}}}`,
+		"a member the model no longer names is kept": `{"openbindings":"0.2.0","operations":{},
+			"sources":{"s":{"bindingSpec":"x@1","location":null}}}`,
 		"schemas of every form": `{"openbindings":"0.2.0","schemas":{"t":true,"f":false,"e":{},"n":null},
 			"operations":{"a":{"input":{},"output":false}}}`,
 		"transform object members": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
@@ -77,10 +85,8 @@ func TestDocumentModel_RefusesWhatItCannotCarry(t *testing.T) {
 		"null example":              `{"openbindings":"0.2.0","operations":{"a":{"examples":{"e":null}}}}`,
 		"null idempotent":           `{"openbindings":"0.2.0","operations":{"a":{"idempotent":null}}}`,
 		"null transform entry":      `{"openbindings":"0.2.0","operations":{},"transforms":{"t":null}}`,
-		"missing bindingSpec":       `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"location":"https://example.com/x"}}}`,
-		"null location":             `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","location":null}}}`,
+		"missing bindingSpec":       `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"content":"https://example.com/x"}}}`,
 		"missing binding source":    `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a"}}}`,
-		"null selector":             `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","selector":null}}}`,
 		"null input transform":      `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","inputTransform":null}}}`,
 		"null $ref":                 `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"$ref":null}}}}`,
 		"$ref object without $ref":  `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","inputTransform":{"x-note":1}}}}`,
@@ -163,18 +169,24 @@ func FuzzPreferenceValue(f *testing.F) {
 // Programs state presence through the typed fields alone: set a member with
 // Present, remove it with nil.
 func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
-	binding := BindingEntry{Operation: "a", Source: "s", Selector: Present("")}
+	binding := BindingEntry{Operation: "a", Source: "s", Selector: json.RawMessage(`null`)}
 	encoded, err := json.Marshal(binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(encoded), `"selector":""`) {
-		t.Fatalf("a present empty selector must encode, got %s", encoded)
+	if !strings.Contains(string(encoded), `"selector":null`) {
+		t.Fatalf("a present null selector must encode, got %s", encoded)
 	}
-	binding.Selector = nil
-	encoded, _ = json.Marshal(binding)
-	if strings.Contains(string(encoded), "selector") {
-		t.Fatalf("a nil selector is absent, got %s", encoded)
+	for _, absent := range []json.RawMessage{nil, {}} {
+		binding.Selector = absent
+		encoded, _ = json.Marshal(binding)
+		if strings.Contains(string(encoded), "selector") {
+			t.Fatalf("a nil or empty selector is absent, got %s", encoded)
+		}
+		encoded, _ = json.Marshal(Source{BindingSpec: "x@1", Content: absent})
+		if strings.Contains(string(encoded), "content") {
+			t.Fatalf("nil or empty content is absent, got %s", encoded)
+		}
 	}
 
 	var iface Interface
@@ -196,7 +208,9 @@ func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
 func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 	documents := []string{
 		`{"openbindings":"0.2.0","version":"","operations":{}}`,
-		`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","location":"","content":{}}}}`,
+		`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1"}}}`,
+		`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","content":null,"location":""}}}`,
+		`{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","selector":{"$ref":"x.json"}}}}`,
 		`{"openbindings":"0.2.0","operations":{"a":{"aliases":[]}}}`,
 		`{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","bindingSpecs":[]}}}`,
 	}
@@ -220,13 +234,16 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 func TestDocumentModel_SelectorPresenceIsKept(t *testing.T) {
 	var iface Interface
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","operations":{"a":{}},
-		"sources":{"s":{"bindingSpec":"x@1","content":{}}},
-		"bindings":{"absent":{"operation":"a","source":"s"},"empty":{"operation":"a","source":"s","selector":""}}}`), &iface); err != nil {
+		"sources":{"s":{"bindingSpec":"x@1"}},
+		"bindings":{"absent":{"operation":"a","source":"s"},"empty":{"operation":"a","source":"s","selector":""},
+			"null":{"operation":"a","source":"s","selector":null}}}`), &iface); err != nil {
 		t.Fatal(err)
 	}
-	absent, empty := iface.Bindings["absent"], iface.Bindings["empty"]
-	if absent.Selector != nil || empty.Selector == nil || *empty.Selector != "" {
-		t.Fatalf("selector presence lost: absent %v, empty %v", absent.Selector, empty.Selector)
+	for key, want := range map[string]string{"absent": "", "empty": `""`, "null": "null"} {
+		selector := iface.Bindings[key].Selector
+		if string(selector) != want || (want == "") != (selector == nil) {
+			t.Fatalf("selector presence lost for %s: got %q, want %q", key, selector, want)
+		}
 	}
 }
 

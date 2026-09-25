@@ -120,19 +120,19 @@ func (o Operation) MarshalJSON() ([]byte, error) {
 	return encodeObject(operationMembers(o), o.LosslessFields)
 }
 
-// Source is a binding-specification-governed carrier or address (§5.4).
+// Source is a binding specification's identifier and the content that
+// specification defines (§5.4).
 type Source struct {
 	// BindingSpec is the binding-specification identifier governing this
 	// source: exact and opaque (§6: never dereferenced, never range-matched).
 	BindingSpec string `json:"bindingSpec"`
-	// Location is the binding-specification-defined absolute address, nil
-	// when the member is absent.
-	Location *string `json:"location,omitempty"`
-	// Content is the embedded source-artifact representation: any JSON value,
-	// carried as raw JSON because member presence is distinct from value
-	// (§5.4). Nil means the member is absent; the bytes `null` are a present
-	// null. The core carries content opaquely; the governing binding
-	// specification determines which values are accepted and what they mean.
+	// Content is what the source carries for its binding specification: any
+	// JSON value, carried as raw JSON because member presence is distinct from
+	// value (§5.4). Nil means the member is absent; the bytes `null` are a
+	// present null. An empty, non-nil json.RawMessage holds no value and
+	// encodes as absent. The core gives content no meaning; the governing
+	// binding specification defines whether it may be absent, which values it
+	// accepts, and what they mean.
 	Content     json.RawMessage `json:"content,omitempty"`
 	Description *string         `json:"description,omitempty"`
 
@@ -240,14 +240,18 @@ func decodeTransform(raw json.RawMessage) (TransformOrRef, error) {
 }
 
 // BindingEntry is an author-declared realization of an operation through a
-// target in a source (§5.3).
+// source (§5.3).
 type BindingEntry struct {
 	Operation string `json:"operation"`
 	Source    string `json:"source"`
-	// Selector identifies the target within the source. Nil when the member is
-	// absent, which the governing binding specification gives its own
-	// meaning, distinct from any present value, the empty string included.
-	Selector *string `json:"selector,omitempty"`
+	// Selector selects the binding's target: any JSON value, carried as raw
+	// JSON because member presence is distinct from value (§5.3). Nil means
+	// the member is absent, which the governing binding specification gives
+	// its own meaning; the bytes `null` are a present null. An empty, non-nil
+	// json.RawMessage holds no value and encodes as absent. The core gives a
+	// selector no meaning; the source's binding specification defines which
+	// values it accepts and what they mean.
+	Selector json.RawMessage `json:"selector,omitempty"`
 	// Preference is the author's signed integer preference among bindings of
 	// the same operation, nil when absent (no preference, not zero).
 	Preference  *int64  `json:"preference,omitempty"`

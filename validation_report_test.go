@@ -37,7 +37,7 @@ func TestConcludeConformance(t *testing.T) {
 			name: "complete success",
 			evidence: map[string]RuleEvidenceStatus{
 				"OBI-D-02": EvidenceSatisfied,
-				"OBI-D-13": EvidenceNotApplicable,
+				"OBI-D-19": EvidenceNotApplicable,
 			},
 			want: ValidationReport{Conclusion: ConclusionConformant},
 		},

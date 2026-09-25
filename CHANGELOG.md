@@ -206,8 +206,7 @@
 - **One defect is one finding.** Checks that restated the embedded document
   schema are gone, so OBI-D-02 has one owner. An `anyOf` or `oneOf` that no
   alternative satisfies is one finding at its own location that says what
-  each alternative lacked; a source with neither `location` nor `content`
-  was three findings.
+  each alternative lacked.
 - **Schema compilation never reads local files.** The schema backend's
   default loader read `file:` references from disk, so a document could make
   validation read the validating machine's files and a verdict could depend
@@ -261,8 +260,7 @@
 - **OBI-D-05 follows RFC 3986's grammar.** A character screen plus `net/url`
   passed `#/a[0]` and a second `#` in a fragment, and refused a
   percent-encoded host. A URI-form reference is now checked against the
-  URI-reference grammar; an empty location is relative in form. The
-  named-transform `$ref` clause is now checked. `dependencies` subschemas,
+  URI-reference grammar. The named-transform `$ref` clause is now checked. `dependencies` subschemas,
   which the 2020-12 meta-schema describes and the backend applies, are
   walked like `definitions`.
 - **OBI-D-16 covers absolute references into embedded resources.** An
@@ -286,6 +284,22 @@
 - **A document schema finding about a map key is located at the key**, not
   at the whole document.
 ### Changed
+
+- **A source is its binding specification's identifier and the content that
+  specification defines** (breaking, pre-1.0), following the core
+  specification's working draft. `Source.Location` is gone: the core no
+  longer defines `location`, and whatever a source addresses is carried in
+  `Content` as its binding specification defines. A `location` member in a
+  document is an unknown field, kept in `Unknown` and diagnosed under
+  OBI-T-02. `BindingEntry.Selector` is a `json.RawMessage`, since a selector
+  is any JSON value its source's binding specification defines; nil is
+  absent and the bytes `null` are a present null. No core rule takes
+  binding-specification knowledge any more: OBI-D-13 is retired and leaves
+  `DocumentRules`, OBI-D-05 judges only the core's own references, and a
+  source without `content` violates nothing. A document with bindings is
+  therefore conformant when every other rule is decided, where it was
+  conformance-undetermined; `Interface.Validate` still leaves OBI-D-01
+  inconclusive. The embedded document schema follows.
 
 - **Operation schemas reach the schema library as a bundle, and core
   resolves every reference** (breaking, pre-1.0). The OBI document is no
@@ -409,16 +423,15 @@
   Re-encoding a decoded document dropped members whose value is a Go zero value
   (`deprecated: false`, empty strings, empty arrays and maps) and every
   member of a transform's `$ref` object besides `$ref`, extensions included.
-  So `Interface.Validate()` missed violations its bytes carry, such as a
-  present empty `location`, and a present empty `selector` became an absent
-  one, which a binding specification can give a different meaning (§5.3).
-  Now an optional member is absent exactly when its Go value is nil:
-  optional strings and booleans are pointers (`Name`, `Version`,
-  `Description`, `Deprecated`, `Source.Location`, `BindingEntry.Selector`),
+  So `Interface.Validate()` missed violations its bytes carry, and a present
+  empty `selector` became an absent one, which a binding specification can
+  give a different meaning (§5.3). Now an optional member is absent exactly
+  when its Go value is nil: optional strings and booleans are pointers
+  (`Name`, `Version`, `Description`, `Deprecated`),
   set with `Present` and read with `Value` where absence and the zero value
   mean the same; optional collections encode `omitzero`, so nil is absent
   and empty is present. Example values are `json.RawMessage`, where `null` is
-  a present value, like `Source.Content`; `InputPresent`, `OutputPresent`,
+  a present value, like `Source.Content` and `BindingEntry.Selector`; `InputPresent`, `OutputPresent`,
   `HasInput`, `HasOutput`, and `Source.ContentPresent` are gone.
   `BindingEntry.Preference` is an exact `*int64`. `TransformOrRef` is a
   sealed union of `InlineTransform` and `*TransformReference`, which keeps
@@ -570,16 +583,12 @@
   could not decide passed silently, so a nil error from `Validate` was
   indistinguishable from conformance; a tool reporting it as such violated
   OBI-T-17. The cases now recorded as inconclusive rather than passed:
-  OBI-D-13 for any document with bindings (only the governing binding
-  specification decides it), an OBI-D-05 source location that is
-  colon-bearing but not a well-formed URI (`10.0.0.1:443`), OBI-D-11
-  examples whose schema could not be compiled or whose graph's reach could
+  OBI-D-11 examples whose schema could not be compiled or whose graph's reach could
   not be established, and OBI-D-01 on a host object, which no longer carries
   the exact input bytes (`ValidateDocument` decides it). `ValidateDocument`
   decides OBI-D-12 from the raw document, so a non-string version is still
   identified. `DocumentRules()` lists the rules a report covers; a caller
-  holding evidence the SDK cannot produce, such as a binding specification
-  implementation deciding OBI-D-13, can amend `Evidence` and call
+  holding evidence the SDK cannot produce can amend `Evidence` and call
   `ConcludeConformance` again.
 
 - **CI corpus gating (`OB_CORPUS_REQUIRED`)**: CI checks out the spec's

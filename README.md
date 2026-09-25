@@ -23,12 +23,9 @@ and returns a `ValidationReport` in the vocabulary of
 [§10.5](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#105-conformance-conclusions):
 evidence for every document rule, located findings, OBI-T-02 diagnostics, and a
 conclusion of conformant, non-conformant, or conformance-undetermined.
-OBI-D-13 and the binding-specification-defined address cases of OBI-D-05
-require knowledge of the exact governing binding specification, so a
-core-only validator records them as inconclusive rather than passing or
-failing them. A document with bindings is therefore conformance-undetermined
-here until something that implements its binding specifications adds that
-evidence. OBI-D-18 needs a parser for the transform language: the SDK carries
+No document rule needs knowledge of a binding specification: a source's
+`content` and a binding's `selector` are the binding specification's to
+define, and no core rule judges them. OBI-D-18 needs a parser for the transform language: the SDK carries
 none, so an application passes its `TransformParser` in
 `ValidateOptions.Transforms`, and without one the rule is inconclusive.
 `Interface.Validate(options)` does the same for a document already in
@@ -42,7 +39,7 @@ other rule is inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
-OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
+OBI-D-13, OBI-D-14, and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
 OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
 embedded at build time. To exercise the core conformance corpus, check out the

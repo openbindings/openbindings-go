@@ -34,7 +34,7 @@ func (e stubParser) Parse(expression string) error {
 }
 
 const documentWithTransforms = `{"openbindings":"0.2.0","operations":{"op":{}},
-	"sources":{"api":{"bindingSpec":"x@1","location":"https://api.example.com/api.json"}},
+	"sources":{"api":{"bindingSpec":"x@1"}},
 	"transforms":{"bad":"(a + b","good":"x"},
 	"bindings":{"b":{"operation":"op","source":"api","inputTransform":"items[","outputTransform":{"$ref":"#/transforms/good"}}}}`
 

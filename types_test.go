@@ -196,7 +196,7 @@ func TestOperation_OmitsEmptyTags(t *testing.T) {
 func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	in := []byte(`{
   "bindingSpec": "openbindings.openapi-3.1@1",
-  "location": "./openapi.json",
+  "content": {"location": "./openapi.json"},
   "x-extensionField": "extensionFieldValue",
   "unknownField": {"value": "unknownFieldValue"}
 }`)
@@ -208,19 +208,19 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	if outMap["bindingSpec"] != "openbindings.openapi-3.1@1" {
 		t.Fatalf("expected bindingSpec preserved, got %#v", outMap["bindingSpec"])
 	}
-	if outMap["location"] != "./openapi.json" {
-		t.Fatalf("expected location preserved, got %#v", outMap["location"])
+	if content, _ := outMap["content"].(map[string]any); content["location"] != "./openapi.json" {
+		t.Fatalf("expected content preserved, got %#v", outMap["content"])
 	}
 }
 
 func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	s := Source{
 		BindingSpec: "openbindings.openapi-3.1@1",
-		Location:    Present("./typed-location.json"),
+		Content:     json.RawMessage(`"typed content"`),
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
 				"bindingSpec": json.RawMessage(`"openbindings.grpc@1"`),
-				"location":    json.RawMessage(`"./unknown-location.json"`),
+				"content":     json.RawMessage(`"unknown content"`),
 			},
 			Extensions: map[string]json.RawMessage{
 				"x-custom": json.RawMessage(`"kept"`),
@@ -234,8 +234,8 @@ func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	if outMap["bindingSpec"] != "openbindings.openapi-3.1@1" {
 		t.Fatalf("expected typed bindingSpec to win, got %#v", outMap["bindingSpec"])
 	}
-	if outMap["location"] != "./typed-location.json" {
-		t.Fatalf("expected typed location to win, got %#v", outMap["location"])
+	if outMap["content"] != "typed content" {
+		t.Fatalf("expected typed content to win, got %#v", outMap["content"])
 	}
 	if outMap["x-custom"] != "kept" {
 		t.Fatalf("expected extension preserved, got %#v", outMap["x-custom"])
@@ -270,7 +270,7 @@ func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	be := BindingEntry{
 		Operation:   "typed.op",
 		Source:      "typedSource",
-		Selector:    Present("#/typed/selector"),
+		Selector:    json.RawMessage(`"#/typed/selector"`),
 		Description: Present("typed description"),
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
@@ -317,7 +317,7 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *te
   "sources": {
     "src": {
       "bindingSpec": "openbindings.openapi-3.1@1",
-      "location": "./openapi.json",
+      "content": {"location": "./openapi.json"},
       "x-extensionField": "extensionFieldValue",
       "unknownField": {"value": "unknownFieldValue"}
     }
@@ -620,7 +620,7 @@ func TestInterface_WithTransforms(t *testing.T) {
   "sources": {
     "stripe": {
       "bindingSpec": "openbindings.openapi-3.1@1",
-      "location": "./stripe.json"
+      "content": {"location": "./stripe.json"}
     }
   },
   "bindings": {

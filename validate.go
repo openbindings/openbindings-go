@@ -38,10 +38,9 @@ type ValidateOptions struct {
 // gates on violations. A nil error
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
-// conformant or conformance undetermined. OBI-D-13 is inconclusive for a
-// document with bindings, and OBI-D-05 for a location that is neither
-// relative nor a well-formed URI, because only the governing binding
-// specification decides them. OBI-D-18 is inconclusive for a document with
+// conformant or conformance undetermined. No rule takes binding-specification
+// knowledge: a source's content and a binding's selector are the binding
+// specification's, and no core rule judges them. OBI-D-18 is inconclusive for a document with
 // transforms unless options gives a transform parser, and OBI-D-17 for the
 // subschemas a schema nests deeper than 256 levels, where the meta-schema
 // check meets a resource limit (§10.5).
@@ -297,14 +296,6 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 		if !ok {
 			continue
 		}
-		if value, present := source["location"]; present {
-			locationPath := jsonpointer.Format("sources", key, "location")
-			if location, ok := value.(string); ok {
-				validateLocation(c, locationPath, location)
-			} else {
-				c.violated("OBI-D-05", locationPath, fmt.Sprintf("a location is an absolute URI or address string; got %s", jsonTypeName(value)))
-			}
-		}
 		diagnoseUnknownFields(c, path, source, sourceMembersKnown)
 	}
 
@@ -324,13 +315,6 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 			}
 		}
 		diagnoseUnknownFields(c, path, binding, bindingMembersKnown)
-	}
-
-	// OBI-D-13: whether a binding is identifiable from itself and its source
-	// alone is defined by the source's governing binding specification, so the
-	// core cannot decide it.
-	if len(bindings) > 0 {
-		c.inconclusive("OBI-D-13", "/bindings", "whether each binding identifies its target is decided by its binding specification, not the core")
 	}
 
 	if root != nil {
@@ -738,53 +722,4 @@ func describeJSON(value any) string {
 		return strconv.Quote(text)
 	}
 	return jsonTypeName(value)
-}
-
-// validateLocation checks OBI-D-05 for a sources[*].location, following the
-// rule and its validation note:
-//   - A location with no ':' before its first '/', '?', or '#' is relative in
-//     form and violates the rule everywhere (./openapi.json, bare
-//     example.com, the empty string).
-//   - A location written in URI form, a scheme and "//", is a URI-form
-//     reference and must be well-formed per RFC 3986 §4.1.
-//   - Any other colon-bearing location is satisfied when it is a well-formed
-//     absolute URI (grpc.example.com:443 parses as one). One that is not
-//     (10.0.0.1:443, [::1]:443) can only be an absolute address its binding
-//     specification defines, which the core cannot decide, so the check is
-//     inconclusive.
-func validateLocation(c *ruleChecks, prefix, raw string) {
-	if isRelativeReference(raw) {
-		c.violated("OBI-D-05", prefix, fmt.Sprintf("%q must be an absolute URI or a binding-specification-defined absolute address, not a relative reference", raw))
-		return
-	}
-	wellFormed, hasScheme := uriReference(raw)
-	switch {
-	case wellFormed && hasScheme:
-	case isURIForm(raw):
-		c.violated("OBI-D-05", prefix, fmt.Sprintf("%q is written as a URI but is not a well-formed one (RFC 3986 §4.1)", raw))
-	default:
-		c.inconclusive("OBI-D-05", prefix, fmt.Sprintf("%q is neither relative nor a well-formed URI; whether it is an absolute address its binding specification defines is that specification's to decide", raw))
-	}
-}
-
-// isURIForm reports whether raw is written as a URI with an authority: a
-// scheme, then "://".
-func isURIForm(raw string) bool {
-	i := strings.Index(raw, "://")
-	return i > 0 && isScheme(raw[:i])
-}
-
-// isRelativeReference reports whether raw is relative in form (RFC 3986
-// §4.2): no ':' appears before its first '/', '?', or '#', so it cannot carry
-// a scheme.
-func isRelativeReference(raw string) bool {
-	for i := 0; i < len(raw); i++ {
-		switch raw[i] {
-		case ':':
-			return false
-		case '/', '?', '#':
-			return true
-		}
-	}
-	return true
 }

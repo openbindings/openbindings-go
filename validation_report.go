@@ -27,11 +27,12 @@ const (
 )
 
 // documentRules is every document rule the core specification defines
-// (§10.2), in identifier order. OBI-D-14 and OBI-D-15 are retired (§10.6).
+// (§10.2), in identifier order. OBI-D-13, OBI-D-14, and OBI-D-15 are retired
+// (§10.6).
 var documentRules = []string{
 	"OBI-D-01", "OBI-D-02", "OBI-D-03", "OBI-D-04", "OBI-D-05", "OBI-D-06",
 	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-10", "OBI-D-11", "OBI-D-12",
-	"OBI-D-13", "OBI-D-16", "OBI-D-17", "OBI-D-18", "OBI-D-19",
+	"OBI-D-16", "OBI-D-17", "OBI-D-18", "OBI-D-19",
 }
 
 // DocumentRules returns the identifiers of every document rule the core
@@ -133,9 +134,8 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 // conservatively as inconclusive rather than allowing malformed evidence to
 // produce a conformant conclusion.
 //
-// A caller holding evidence this SDK cannot produce, such as a binding
-// specification implementation that decides OBI-D-13 for its own sources, can
-// amend a report's Evidence and conclude again. The returned report carries
+// A caller holding evidence this SDK cannot produce can amend a report's
+// Evidence and conclude again. The returned report carries
 // the evidence it concluded from and no findings.
 func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationReport {
 	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, len(evidence))}

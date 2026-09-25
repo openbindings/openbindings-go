@@ -143,16 +143,18 @@ func ExampleOperation() {
 }
 
 func ExampleSource() {
-	bs := openbindings.Source{
-		BindingSpec: "openapi@3.1",
-		Location:    openbindings.Present("https://api.example.com/openapi.yaml"),
+	// Content is whatever the source's binding specification defines; this
+	// shape is illustrative.
+	src := openbindings.Source{
+		BindingSpec: "openbindings.openapi-3.1@1",
+		Content:     json.RawMessage(`{"location":"https://api.example.com/openapi.yaml"}`),
 	}
 
-	fmt.Println(bs.BindingSpec)
-	fmt.Println(*bs.Location)
+	fmt.Println(src.BindingSpec)
+	fmt.Println(string(src.Content))
 	// Output:
-	// openapi@3.1
-	// https://api.example.com/openapi.yaml
+	// openbindings.openapi-3.1@1
+	// {"location":"https://api.example.com/openapi.yaml"}
 }
 
 func ExampleTransform() {
@@ -166,7 +168,7 @@ func ExampleTransform() {
 			"toStripeInput": "{ charge_amount: amount * 100 }",
 		},
 		Sources: map[string]openbindings.Source{
-			"stripe": {BindingSpec: "openapi@3.1", Location: openbindings.Present("https://api.example.com/stripe.json")},
+			"stripe": {BindingSpec: "openapi@3.1"},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"processPayment.stripe": {

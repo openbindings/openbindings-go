@@ -56,7 +56,7 @@
     },
     "sources": {
       "type": "object",
-      "description": "Map of sources: each names its governing binding specification (bindingSpec) and carries a location, embedded content, or both.",
+      "description": "Map of sources: each names its governing binding specification (bindingSpec) and may carry content that specification defines.",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
       },
@@ -199,20 +199,14 @@
     "Source": {
       "type": "object",
       "required": ["bindingSpec"],
-      "anyOf": [{ "required": ["location"] }, { "required": ["content"] }],
       "properties": {
         "bindingSpec": {
           "type": "string",
           "minLength": 1,
           "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., openbindings.openapi-3.1@1). Never implicitly dereferenced; no version algebra."
         },
-        "location": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Binding-specification-defined absolute address associated with the source: an absolute URI or another absolute form the binding specification defines. Never a relative reference."
-        },
         "content": {
-          "description": "Embedded source-artifact representation as any JSON value; the binding specification defines accepted values and their meaning. Member presence is distinct from value: content carrying JSON null is a present member for the location-or-content requirement."
+          "description": "What the source carries for its binding specification, as any JSON value. The binding specification wholly defines it: whether it may be absent, which values it accepts, and what they mean. Member presence is distinct from value: content carrying JSON null is a present member."
         },
         "description": {
           "type": "string",
@@ -236,8 +230,7 @@
           "description": "Source key from sources."
         },
         "selector": {
-          "type": "string",
-          "description": "Selector identifying a specific target within the governed source, whether an artifact entry, live-surface member, or another target form. Syntax and meaning are the governing binding specification's concern."
+          "description": "Selection of a specific target within the governed source, whether an artifact entry, live-surface member, or another target form, as any JSON value. Accepted values and meaning, including the absent-selector case, are the governing binding specification's concern. Member presence is distinct from value: selector carrying JSON null is a present member."
         },
         "preference": {
           "type": "integer",

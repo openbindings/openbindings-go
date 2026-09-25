@@ -25,7 +25,7 @@ type TransformEvaluator interface {
 	// Evaluate runs expression against input, the evaluation context ($ in
 	// JSONata). bindings are the context bindings the governing binding
 	// specification defines for the expression's position (§5.5 clause 5,
-	// OBI-B-02(7)), keyed by name without the language's prefix
+	// OBI-B-02 item 4), keyed by name without the language's prefix
 	// ("threshold" for JSONata's $threshold), or nil for none. The
 	// environment is closed: the language's standard library and those
 	// bindings, nothing else.
