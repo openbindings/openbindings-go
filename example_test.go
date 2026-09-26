@@ -68,7 +68,7 @@ func ExampleValidateDocument() {
 	}`)
 
 	// ValidateDocument decides every document rule on the exact input bytes
-	// and reports the §10.5 conclusion.
+	// and reports the §10.4 conclusion.
 	_, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
 	if err != nil {
 		fmt.Println(err)
@@ -150,11 +150,11 @@ func ExampleSource() {
 	// Content is whatever the source's binding specification defines; this
 	// shape is illustrative.
 	src := openbindings.Source{
-		BindingSpec: "openbindings.openapi-3.1@1",
-		Content:     json.RawMessage(`{"location":"https://api.example.com/openapi.yaml"}`),
+		Kind:    "openbindings.openapi-3.1@1",
+		Content: json.RawMessage(`{"location":"https://api.example.com/openapi.yaml"}`),
 	}
 
-	fmt.Println(src.BindingSpec)
+	fmt.Println(src.Kind)
 	fmt.Println(string(src.Content))
 	// Output:
 	// openbindings.openapi-3.1@1

@@ -59,7 +59,7 @@ func TestInterfaceValidate_HostObjectCannotDecideD01(t *testing.T) {
 const documentWithBinding = `{
 	"openbindings": "0.2.0",
 	"operations": {"tasks.create": {}},
-	"sources": {"api": {"bindingSpec": "example.rest@1", "content": {"location": "./openapi.json", "$ref": "#anchor"}}},
+	"sources": {"api": {"kind": "example.rest@1", "content": {"location": "./openapi.json", "$ref": "#anchor"}}},
 	"bindings": {"tasks.create.api": {"operation": "tasks.create", "source": "api",
 		"content": {"$ref": "other.json", "inputTransform": "{ \"title\": name }"}}}
 }`
@@ -68,7 +68,7 @@ const documentWithBinding = `{
 // binding's content are the binding specification's (§5.3, §5.4), so
 // nothing within them, relative addresses and $ref members included, is
 // judged, and a document with bindings is decided in full.
-func TestValidateDocument_BindingsNeedNoBindingSpecificationKnowledge(t *testing.T) {
+func TestValidateDocument_BindingsNeedNoKindificationKnowledge(t *testing.T) {
 	_, report, err := ValidateDocument([]byte(documentWithBinding), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("ValidateDocument = %v", err)
@@ -82,7 +82,7 @@ func TestValidateDocument_BindingsNeedNoBindingSpecificationKnowledge(t *testing
 // unprefixed name the specification reserves (§12): an OBI-D-02 violation,
 // and still diagnosed as ignored in processing (OBI-T-02).
 func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
-	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","location":"./openapi.json"}}}`)
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":"x@1","location":"./openapi.json"}}}`)
 	if violations := report.Violations(); len(violations) != 1 || violations[0].Rule != "OBI-D-02" || violations[0].Path != "/sources/s" || !strings.Contains(violations[0].Message, "location") {
 		t.Fatalf("want one OBI-D-02 violation at the source naming location, got %+v", violations)
 	}
@@ -269,11 +269,11 @@ func TestFindingPaths_AreJSONPointers(t *testing.T) {
 		"schemas":{"T":{"type":"object","properties":{"a/b~c":{"minLength":"3"}}}},
 		"operations":{"a":{"output":{"$ref":"#/schemas/T"},"examples":{"one":{"output":{"n":"x"}}}},
 		              "b":{"input":{"type":"object","properties":{"n":{"type":"integer"}}},"examples":{"two":{"input":{"n":"x"}}}}},
-		"sources":{"s":{"bindingSpec":""}}}`)
+		"sources":{"s":{"kind":""}}}`)
 	want := map[string]string{
 		"/schemas/T/properties/a~1b~0c/minLength": "OBI-D-13",
 		"/operations/b/examples/two/input/n":      "OBI-D-10",
-		"/sources/s/bindingSpec":                  "OBI-D-02",
+		"/sources/s/kind":                         "OBI-D-02",
 	}
 	got := map[string]string{}
 	for _, finding := range report.Violations() {
@@ -301,7 +301,7 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 	if _, err := ParseDocument([]byte(`{"openbindings":"0.3.0","name":"future"}`)); !errors.As(err, &refusal) {
 		t.Fatalf("an unsupported version is refused, not judged by the 0.2 schema; got %v", err)
 	}
-	data := []byte(`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":""}}}`)
+	data := []byte(`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":""}}}`)
 	_, parseErr := ParseDocument(data)
 	_, _, validateErr := ValidateDocument(data, ValidateOptions{})
 	var parsed, validated *ValidationError
@@ -331,7 +331,7 @@ func TestValidate_GatesOnTheDocumentSchema(t *testing.T) {
 func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 	iface, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0",
 		"operations":{"a":{"input":null,"output":{"$ref":"./local.json"},"description":null}},
-		"sources":{"s":{"bindingSpec":"x@1"}},
+		"sources":{"s":{"kind":"x@1"}},
 		"bindings":{"b":{"operation":"missing","source":"s"}}}`), ValidateOptions{})
 
 	if iface != nil {
@@ -356,7 +356,7 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 // it fails, while a rule whose domain excludes it has nothing to judge there.
 func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":5,
-		"sources":{"s":{"bindingSpec":"x@1"}},
+		"sources":{"s":{"kind":"x@1"}},
 		"bindings":{"b":{"operation":"a","source":42}}}`)
 	found := map[string]RuleEvidenceStatus{}
 	for _, finding := range report.Findings {
@@ -570,7 +570,7 @@ func TestValidateDocument_AbsoluteReferencesIntoEmbeddedResourcesResolve(t *test
 	}
 }
 
-// A resource limit is not evidence of a violation (§10.5). A number the
+// A resource limit is not evidence of a violation (§10.4). A number the
 // schema library would read beyond the numeric limits leaves the schema
 // unevaluable, so its examples are not checked, though the schema is judged
 // well-formed: the meta-schemas are checked against a stand-in.
@@ -658,7 +658,7 @@ func TestParseDocument_ChecksNumbersBeyondTheLimits(t *testing.T) {
 
 // Input nested deeper than the decoder reads is still read in full for
 // OBI-D-01, a token at a time, but cannot be decoded: every rule but OBI-D-11
-// meets a resource limit and is inconclusive (§10.5). Its declared version is
+// meets a resource limit and is inconclusive (§10.4). Its declared version is
 // read however deep the input and wherever the member lies, so an unsupported
 // one is refused (OBI-T-04) and a missing or malformed one violates OBI-D-11.
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
@@ -756,16 +756,16 @@ func TestValidateDocument_NumbersBeyondTheLimitsAreChecked(t *testing.T) {
 			document: `{"openbindings":"0.2.0","operations":{"op":{"aliases":["a",1e99999,10e99998]}}}`,
 			violated: []string{"/operations/op/aliases", "/operations/op/aliases/1", "/operations/op/aliases/2"},
 		},
-		"a bindingSpecs item": {
-			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"dependencies":{"d":{"operation":"op","bindingSpecs":[` + list + `]}}}`,
-			violated: []string{"/dependencies/d/bindingSpecs/21", "/name"},
+		"a kinds item": {
+			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"dependencies":{"d":{"operation":"op","kinds":[` + list + `]}}}`,
+			violated: []string{"/dependencies/d/kinds/21", "/name"},
 		},
-		"an empty bindingSpecs item beside one": {
-			document: `{"openbindings":"0.2.0","operations":{"op":{}},"dependencies":{"d":{"operation":"op","bindingSpecs":["",1e99999]}}}`,
-			violated: []string{"/dependencies/d/bindingSpecs/0", "/dependencies/d/bindingSpecs/1"},
+		"an empty kinds item beside one": {
+			document: `{"openbindings":"0.2.0","operations":{"op":{}},"dependencies":{"d":{"operation":"op","kinds":["",1e99999]}}}`,
+			violated: []string{"/dependencies/d/kinds/0", "/dependencies/d/kinds/1"},
 		},
 		"a preference out of range": {
-			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+			document: `{"openbindings":"0.2.0","name":5,"operations":{"op":{}},"sources":{"s":{"kind":"x@1","content":{}}},
 				"bindings":{"b":{"operation":"op","source":"s","preference":1e10001}}}`,
 			violated: []string{"/bindings/b/preference", "/name"},
 		},
@@ -791,7 +791,7 @@ func TestValidateDocument_NumbersBeyondTheLimitsAreChecked(t *testing.T) {
 		})
 	}
 
-	inRange := `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+	inRange := `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"s":{"kind":"x@1","content":{}}},
 		"bindings":{"b":{"operation":"op","source":"s","preference":1.` + strings.Repeat("0", 5000) + `}}}`
 	if report := mustValidateDocument(t, inRange); report.Evidence["OBI-D-02"] != EvidenceSatisfied {
 		t.Fatalf("a preference of 1 in 5002 characters: OBI-D-02 %q", report.Evidence["OBI-D-02"])
@@ -905,7 +905,7 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 
 // A subschema nested deeper than the meta-schema validator checks quickly
 // meets a resource limit: OBI-D-13 is inconclusive there, not decided
-// (§10.5). What the schema holds above it is still checked.
+// (§10.4). What the schema holds above it is still checked.
 func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
 	nested := strings.Repeat(`{"not":`, 300) + `{"type":42}` + strings.Repeat(`}`, 300)
 	cut := "/schemas/A" + strings.Repeat("/not", 257)

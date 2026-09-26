@@ -193,7 +193,7 @@ func TestOperation_OmitsEmptyTags(t *testing.T) {
 
 func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	in := []byte(`{
-  "bindingSpec": "openbindings.openapi-3.1@1",
+  "kind": "openbindings.openapi-3.1@1",
   "content": {"location": "./openapi.json"},
   "x-extensionField": "extensionFieldValue",
   "unknownField": {"value": "unknownFieldValue"}
@@ -203,8 +203,8 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	outMap := mustRoundTripToMap(t, in, &bs)
 	assertPreservedExtensionAndUnknown(t, outMap)
 
-	if outMap["bindingSpec"] != "openbindings.openapi-3.1@1" {
-		t.Fatalf("expected bindingSpec preserved, got %#v", outMap["bindingSpec"])
+	if outMap["kind"] != "openbindings.openapi-3.1@1" {
+		t.Fatalf("expected kind preserved, got %#v", outMap["kind"])
 	}
 	if content, _ := outMap["content"].(map[string]any); content["location"] != "./openapi.json" {
 		t.Fatalf("expected content preserved, got %#v", outMap["content"])
@@ -213,12 +213,12 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 
 func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	s := Source{
-		BindingSpec: "openbindings.openapi-3.1@1",
-		Content:     json.RawMessage(`"typed content"`),
+		Kind:    "openbindings.openapi-3.1@1",
+		Content: json.RawMessage(`"typed content"`),
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
-				"bindingSpec": json.RawMessage(`"openbindings.grpc@1"`),
-				"content":     json.RawMessage(`"unknown content"`),
+				"kind":    json.RawMessage(`"openbindings.grpc@1"`),
+				"content": json.RawMessage(`"unknown content"`),
 			},
 			Extensions: map[string]json.RawMessage{
 				"x-custom": json.RawMessage(`"kept"`),
@@ -229,8 +229,8 @@ func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	out := mustMarshalJSON(t, s)
 	outMap := mustUnmarshalToMap(t, out)
 
-	if outMap["bindingSpec"] != "openbindings.openapi-3.1@1" {
-		t.Fatalf("expected typed bindingSpec to win, got %#v", outMap["bindingSpec"])
+	if outMap["kind"] != "openbindings.openapi-3.1@1" {
+		t.Fatalf("expected typed kind to win, got %#v", outMap["kind"])
 	}
 	if outMap["content"] != "typed content" {
 		t.Fatalf("expected typed content to win, got %#v", outMap["content"])
@@ -314,7 +314,7 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *te
   },
   "sources": {
     "src": {
-      "bindingSpec": "openbindings.openapi-3.1@1",
+      "kind": "openbindings.openapi-3.1@1",
       "content": {"location": "./openapi.json"},
       "x-extensionField": "extensionFieldValue",
       "unknownField": {"value": "unknownFieldValue"}
@@ -602,7 +602,7 @@ func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
   "dependencies":{
     "customerDelivery":{
       "operation":"deliver",
-      "bindingSpecs":["openbindings.openapi@1","openbindings.grpc@1"],
+      "kinds":["openbindings.openapi@1","openbindings.grpc@1"],
       "x-routing":"customer-owned",
       "futurePolicy":{"mode":"strict"}
     }
@@ -613,7 +613,7 @@ func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	dependency := iface.Dependencies["customerDelivery"]
-	if dependency.Operation != "deliver" || len(dependency.BindingSpecs) != 2 {
+	if dependency.Operation != "deliver" || len(dependency.Kinds) != 2 {
 		t.Fatalf("unexpected dependency: %#v", dependency)
 	}
 	if _, ok := dependency.Extensions["x-routing"]; !ok {
@@ -640,14 +640,14 @@ func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDependencyEntry_PresentEmptyBindingSpecsSurvivesRoundTrip(t *testing.T) {
-	in := []byte(`{"operation":"deliver","bindingSpecs":[]}`)
+func TestDependencyEntry_PresentEmptyKindsSurvivesRoundTrip(t *testing.T) {
+	in := []byte(`{"operation":"deliver","kinds":[]}`)
 	var dependency DependencyEntry
 	if err := json.Unmarshal(in, &dependency); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if dependency.BindingSpecs == nil || len(dependency.BindingSpecs) != 0 {
-		t.Fatalf("expected present empty bindingSpecs, got %#v", dependency.BindingSpecs)
+	if dependency.Kinds == nil || len(dependency.Kinds) != 0 {
+		t.Fatalf("expected present empty kinds, got %#v", dependency.Kinds)
 	}
 	out, err := json.Marshal(dependency)
 	if err != nil {
@@ -657,7 +657,7 @@ func TestDependencyEntry_PresentEmptyBindingSpecsSurvivesRoundTrip(t *testing.T)
 	if err := json.Unmarshal(out, &round); err != nil {
 		t.Fatalf("re-unmarshal: %v", err)
 	}
-	if got, ok := round["bindingSpecs"]; !ok || string(got) != "[]" {
-		t.Fatalf("expected bindingSpecs:[] to survive, got %s", out)
+	if got, ok := round["kinds"]; !ok || string(got) != "[]" {
+		t.Fatalf("expected kinds:[] to survive, got %s", out)
 	}
 }
