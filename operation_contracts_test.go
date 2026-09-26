@@ -75,7 +75,7 @@ func TestOperationContracts_ReferencesIntoUnknownMembersReachNoSchema(t *testing
 func TestOperationContracts_NumericLimitsCoverOnlyTheReachableGraph(t *testing.T) {
 	for name, member := range map[string]string{
 		"extension":      `"x-padding":1e10001`,
-		"source content": `"sources":{"s":{"bindingSpec":"x@1","content":{"n":1e10001}}}`,
+		"source content": `"sources":{"s":{"kind":"x@1","content":{"n":1e10001}}}`,
 	} {
 		document := `{"openbindings":"0.2.0",` + member + `,"operations":{"op":{"input":{"type":"string"},"examples":{"e":{"input":5}}}}}`
 		report := validateBytes(t, document)

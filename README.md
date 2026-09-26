@@ -18,23 +18,26 @@ its environment, independently of protocol. See the
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
+This implementation was checked against the Core draft at spec revision
+`ccfe0b6` (including its kind, schema reachability, and rule-number changes).
+
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
-[§10.5](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#105-conformance-conclusions):
+[§10.4](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#104-conformance-conclusions):
 evidence for every document rule, located findings, OBI-T-02 diagnostics, a
 conclusion of conformant, non-conformant, or conformance-undetermined, and the
 specification version its rule identifiers belong to.
-No document rule needs knowledge of a binding specification: a source's and
-a binding's `content` are the binding specification's to define, and no core
-rule judges them.
+No document rule requires an implementation or publication for a source's
+kind. Core carries source and binding `content` without interpreting it.
 `Interface.Validate(options)` does the same for a document already in
 memory, where OBI-D-01 is inconclusive because a host object no longer
 carries the exact input bytes. The rules judge the JSON a document is, never
 its typed decoding, so a document the typed model cannot carry is still judged
 in full, with two exceptions the SDK cannot read in full: a document holding a
 string that escapes a lone UTF-16 surrogate, and input nested deeper than
-encoding/json reads (10000 levels). For both, OBI-D-01 is decided and every
-other rule is inconclusive. Both return a `*ValidationError` beside the
+encoding/json reads (10000 levels). For both, OBI-D-01 is decided; for deep
+input, OBI-D-11 is also decided from the declared version. The other rules
+are inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
@@ -44,6 +47,17 @@ the core schema and locally required JSON Schema 2020-12 meta-schemas are
 embedded at build time. To exercise the core conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
 point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
+
+**Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
+than the JSON decoder's 10,000-level limit prevents full document inspection.
+OBI-D-13 leaves subschemas beyond 256 levels inconclusive. Contract
+validation reports schema graph unavailability for schemas the evaluator
+cannot safely evaluate, including unsupported regular expressions, relevant
+numbers beyond its limits, and non-advancing reference cycles. An
+inconclusive rule or unavailable graph is never reported as success or
+unqualified conformance. The Core corpus does not exercise every behavior in
+OBI-T-01: the exact kind comparison has direct Go tests, while Core has no
+kind-support registry or implicit dereferencing path.
 
 Pending TypeScript parity for the core is recorded in
 [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
@@ -87,9 +101,12 @@ go get github.com/openbindings/openbindings-go
 ## What this SDK does
 
 - **Core types** for the OpenBindings interface document: operations,
-  dependencies, bindings, sources, and schemas
+  dependencies, bindings, sources, and schemas. `Source.Kind` is an opaque
+  nonempty string; `DependencyEntry.Kinds` is an optional nonempty, unique
+  any-of list. `DependencyEntry.AllowsKind` compares complete strings exactly,
+  without inferring support, compatibility, or version order
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
-- **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
+- **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
 - **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
 
@@ -132,7 +149,7 @@ if !ok {
     log.Fatal("no dependency named customerDelivery")
 }
 operation := iface.Operations[dependency.Operation]
-fmt.Println(dependency.Operation, dependency.BindingSpecs, openbindings.Value(operation.Description))
+fmt.Println(dependency.Operation, dependency.Kinds, openbindings.Value(operation.Description))
 ```
 
 ### Validate a value against an operation contract

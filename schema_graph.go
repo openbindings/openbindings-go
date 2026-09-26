@@ -13,7 +13,7 @@ import (
 // nests subschemas (see schemaDepth). The library's meta-schema checks grow
 // faster than linearly with that depth (seconds at a few thousand levels),
 // and schemas never nest near this deep, so a deeper one is a resource limit
-// met, not evidence about the schema (§10.5).
+// met, not evidence about the schema (§10.4).
 const schemaDepthLimit = 256
 
 // operationSchemas is one document's operation schemas, as core evaluates

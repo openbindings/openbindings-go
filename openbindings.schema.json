@@ -46,7 +46,7 @@
     },
     "dependencies": {
       "type": "object",
-      "description": "Named consumption points, each referencing an operation contract and optionally constraining acceptable binding specification families.",
+      "description": "Named consumption points, each referencing an operation contract and optionally constraining acceptable kinds.",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
       },
@@ -56,7 +56,7 @@
     },
     "sources": {
       "type": "object",
-      "description": "Map of sources: each names its governing binding specification (bindingSpec) and may carry content that specification defines.",
+      "description": "Map of sources: each carries a kind and may carry content read under that kind. The core assigns no meaning to the content.",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
       },
@@ -176,7 +176,7 @@
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
           "description": "Operation key referenced by this named consumption point. Aliases are not valid here."
         },
-        "bindingSpecs": {
+        "kinds": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
@@ -184,7 +184,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Optional unordered any-of constraint over exact, opaque binding specification identifiers acceptable at this consumption point. Omission declares no binding-family constraint."
+          "description": "Optional unordered any-of constraint over exact, opaque kinds acceptable at this consumption point. Omission declares no kind constraint."
         }
       },
       "patternProperties": { "^x-": true },
@@ -192,15 +192,15 @@
     },
     "Source": {
       "type": "object",
-      "required": ["bindingSpec"],
+      "required": ["kind"],
       "properties": {
-        "bindingSpec": {
+        "kind": {
           "type": "string",
           "minLength": 1,
-          "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., example.openapi@1). Never implicitly dereferenced; no version algebra."
+          "description": "The source's kind: exact, opaque, non-empty string used to select an interpretation of the source and its bindings (e.g., example.openapi@1). Never implicitly dereferenced; no version algebra."
         },
         "content": {
-          "description": "What the source carries for its binding specification, as any JSON value. The binding specification wholly defines it: whether it may be absent, which values it accepts, and what they mean. Member presence is distinct from value: content carrying JSON null is a present member."
+          "description": "Optional source content, as any JSON value, read under the source's kind. The core assigns no meaning to its presence, absence, type, or members. Member presence is distinct from value: content carrying JSON null is a present member."
         },
         "description": {
           "type": "string",
@@ -225,7 +225,7 @@
           "description": "Source key from sources."
         },
         "content": {
-          "description": "What the binding carries for its source's binding specification, as any JSON value: typically which target realizes the operation and how values are adapted to it. The binding specification wholly defines it: whether it may be absent, which values it accepts, and what they mean. Member presence is distinct from value: content carrying JSON null is a present member."
+          "description": "Optional binding content, as any JSON value, read under its source's kind. It might identify a target or describe value adaptation; the core assigns no meaning to its presence, absence, type, or members. Member presence is distinct from value: content carrying JSON null is a present member."
         },
         "preference": {
           "type": "integer",

@@ -30,28 +30,28 @@ func TestDocumentModel_RoundTripsEveryMember(t *testing.T) {
 		"present empty and false members": `{"openbindings":"0.2.0","name":"","version":"","description":"",
 			"schemas":{},"dependencies":{},
 			"operations":{"a":{"description":"","deprecated":false,"tags":[],"aliases":[],"idempotent":false,"examples":{}}},
-			"sources":{"s":{"bindingSpec":"x@1","content":"","description":""}},
+			"sources":{"s":{"kind":"x@1","content":"","description":""}},
 			"bindings":{"b":{"operation":"a","source":"s","content":"","description":"","deprecated":false,"preference":0}}}`,
-		"absent optional members": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1"}},
+		"absent optional members": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"kind":"x@1"}},
 			"bindings":{"b":{"operation":"a","source":"s"}}}`,
 		"operations absent": `{"openbindings":"0.2.0"}`,
 		"operations empty":  `{"openbindings":"0.2.0","operations":{}}`,
 		"null where null is a value": `{"openbindings":"0.2.0","operations":{"a":{"examples":{"e":{"input":null,"output":null}}}},
-			"sources":{"s":{"bindingSpec":"x@1","content":null}},
+			"sources":{"s":{"kind":"x@1","content":null}},
 			"bindings":{"b":{"operation":"a","source":"s","content":null}}}`,
 		"source and binding content of every JSON type": `{"openbindings":"0.2.0","operations":{"a":{}},
-			"sources":{"o":{"bindingSpec":"x@1","content":{"location":"a.json"}},"a":{"bindingSpec":"x@1","content":[1,"two"]},
-				"n":{"bindingSpec":"x@1","content":7.50},"b":{"bindingSpec":"x@1","content":false}},
+			"sources":{"o":{"kind":"x@1","content":{"location":"a.json"}},"a":{"kind":"x@1","content":[1,"two"]},
+				"n":{"kind":"x@1","content":7.50},"b":{"kind":"x@1","content":false}},
 			"bindings":{"o":{"operation":"a","source":"o","content":{"path":"/a"}},"a":{"operation":"a","source":"a","content":["a",1]},
 				"n":{"operation":"a","source":"n","content":1e2},"b":{"operation":"a","source":"b","content":true}}}`,
 		"a member the model no longer names is kept": `{"openbindings":"0.2.0","operations":{},
-			"sources":{"s":{"bindingSpec":"x@1","location":null}}}`,
+			"sources":{"s":{"kind":"x@1","location":null}}}`,
 		"schemas of every form": `{"openbindings":"0.2.0","schemas":{"t":true,"f":false,"e":{},"n":null},
 			"operations":{"a":{"input":{},"output":false}}}`,
-		"members this version removed are kept": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+		"members this version removed are kept": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"kind":"x@1","content":{}}},
 			"transforms":{"t":"$","n":null},
 			"bindings":{"b":{"operation":"a","source":"s","selector":null,"inputTransform":{"$ref":"","x-note":"kept","later":[1]},"outputTransform":""}}}`,
-		"preference spellings": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"bindingSpec":"x@1","content":{}}},
+		"preference spellings": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"kind":"x@1","content":{}}},
 			"bindings":{"b":{"operation":"a","source":"s","preference":-9007199254740991}}}`,
 	}
 	for name, document := range documents {
@@ -84,11 +84,11 @@ func TestDocumentModel_RefusesWhatItCannotCarry(t *testing.T) {
 		"null tag":                  `{"openbindings":"0.2.0","operations":{"a":{"tags":[null]}}}`,
 		"null example":              `{"openbindings":"0.2.0","operations":{"a":{"examples":{"e":null}}}}`,
 		"null idempotent":           `{"openbindings":"0.2.0","operations":{"a":{"idempotent":null}}}`,
-		"missing bindingSpec":       `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"content":"https://example.com/x"}}}`,
+		"missing kind":              `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"content":"https://example.com/x"}}}`,
 		"missing binding source":    `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a"}}}`,
 		"fractional preference":     `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":9007199254740990.5}}}`,
 		"out-of-range preference":   `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":9007199254740993}}}`,
-		"null dependency spec":      `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","bindingSpecs":[null]}}}`,
+		"null dependency spec":      `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","kinds":[null]}}}`,
 		"missing dependency target": `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{}}}`,
 	}
 	for name, document := range documents {
@@ -179,7 +179,7 @@ func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
 		if strings.Contains(string(encoded), "content") {
 			t.Fatalf("nil or empty binding content is absent, got %s", encoded)
 		}
-		encoded, _ = json.Marshal(Source{BindingSpec: "x@1", Content: absent})
+		encoded, _ = json.Marshal(Source{Kind: "x@1", Content: absent})
 		if strings.Contains(string(encoded), "content") {
 			t.Fatalf("nil or empty content is absent, got %s", encoded)
 		}
@@ -204,11 +204,11 @@ func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
 func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 	documents := []string{
 		`{"openbindings":"0.2.0","version":"","operations":{}}`,
-		`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1"}}}`,
-		`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"bindingSpec":"x@1","content":null,"location":""}}}`,
+		`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":"x@1"}}}`,
+		`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":"x@1","content":null,"location":""}}}`,
 		`{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","content":{"$ref":"x.json"}}}}`,
 		`{"openbindings":"0.2.0","operations":{"a":{"aliases":[]}}}`,
-		`{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","bindingSpecs":[]}}}`,
+		`{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","kinds":[]}}}`,
 	}
 	for _, document := range documents {
 		_, fromBytes, _ := ValidateDocument([]byte(document), ValidateOptions{})
@@ -230,7 +230,7 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 func TestDocumentModel_BindingContentPresenceIsKept(t *testing.T) {
 	var iface Interface
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","operations":{"a":{}},
-		"sources":{"s":{"bindingSpec":"x@1"}},
+		"sources":{"s":{"kind":"x@1"}},
 		"bindings":{"absent":{"operation":"a","source":"s"},"empty":{"operation":"a","source":"s","content":""},
 			"null":{"operation":"a","source":"s","content":null}}}`), &iface); err != nil {
 		t.Fatal(err)
@@ -346,7 +346,7 @@ func TestDocumentModel_NestedTypesVerifyTheirOwnInput(t *testing.T) {
 
 // The model keeps no part of the caller's input: raw members are copies.
 func TestDocumentModel_RetainsNoPartOfTheInput(t *testing.T) {
-	input := []byte(`{"bindingSpec":"x@1","content":{"k":"v"},"later":[1],"x-note":"n"}`)
+	input := []byte(`{"kind":"x@1","content":{"k":"v"},"later":[1],"x-note":"n"}`)
 	var source Source
 	if err := json.Unmarshal(input, &source); err != nil {
 		t.Fatal(err)
@@ -373,7 +373,7 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 	} {
 		for position, value := range map[string]any{
 			"example input":     OperationExample{Input: raw},
-			"source content":    Source{BindingSpec: "x@1", Content: raw},
+			"source content":    Source{Kind: "x@1", Content: raw},
 			"an extension":      Operation{LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": raw}}},
 			"an unknown member": BindingEntry{Operation: "a", Source: "s", LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"extra": raw}}},
 		} {
