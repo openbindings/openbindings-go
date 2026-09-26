@@ -319,25 +319,27 @@ func TestValidateOperationInput_ConflictingIDsOnlyAffectGraphsThatReachThem(t *t
 	}
 }
 
-// Success needs the whole statically reachable graph, whatever branches the
-// evaluator would skip for a value, a then or else no if selects included
-// (§5.2, OBI-T-08).
-func TestValidateOperationInput_ApplicatorsTheEvaluatorSkipsStillCount(t *testing.T) {
+// Success needs every branch a present if could select, even when a particular
+// instance skips it. Without if, then and else create no validation edge.
+func TestValidateOperationInput_ConditionalReachability(t *testing.T) {
 	var unavailable *SchemaGraphUnavailableError
+	iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"if":false,"then":{"$ref":"https://ext.example/x"}}}}}`)
+	if err := ValidateOperationInput("x", iface, "op"); !errors.As(err, &unavailable) {
+		t.Errorf("then under a false if: want graph unavailable, got %v", err)
+	}
 	for name, input := range map[string]string{
-		"then under a false if":   `{"if":false,"then":{"$ref":"https://ext.example/x"}}`,
 		"then with no if":         `{"then":{"$ref":"https://ext.example/x"}}`,
 		"else with a missing ref": `{"type":"string","else":{"$ref":"#/schemas/Missing"}}`,
 	} {
 		iface := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":`+input+`}}}`)
-		if err := ValidateOperationInput("x", iface, "op"); !errors.As(err, &unavailable) {
-			t.Errorf("%s: want graph unavailable, got %v", name, err)
+		if err := ValidateOperationInput("x", iface, "op"); err != nil {
+			t.Errorf("%s: want valid, got %v", name, err)
 		}
 	}
-	// An example whose graph reaches outside the document is outside
-	// OBI-D-10, a then with no if notwithstanding.
+	// An external reference in an orphan then does not exempt a mismatched
+	// example from OBI-D-10.
 	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"$ref":"https://ext.example/x.json"}},"examples":{"e":{"input":5}}}}}`), ValidateOptions{})
-	if report.Evidence["OBI-D-10"] != EvidenceSatisfied {
+	if report.Evidence["OBI-D-10"] != EvidenceViolated {
 		t.Fatalf("OBI-D-10 %q", report.Evidence["OBI-D-10"])
 	}
 }

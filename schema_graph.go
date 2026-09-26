@@ -79,10 +79,11 @@ func firstOf(a, b string) string {
 // holds is gathered over the strongly connected components, so a schema many
 // operations share is examined once.
 //
-// The walk follows every position 2020-12 evaluates but $defs (a definition
-// belongs to a graph only when a reference reaches it, T08-S-04 of the core
-// conformance corpus), with then and else counted whether or not an if selects
-// them, and contentSchema (§5.2); $ref; and $dynamicRef, to its static target.
+// The walk follows positions 2020-12 could evaluate: $defs and contentSchema
+// are not implicit edges, nor are then and else without a sibling if. An
+// applicable reference can still reach any of those schema positions (§5.2).
+// With if present, both branches count regardless of which an instance takes.
+// References follow $ref and $dynamicRef to their static targets.
 // A dynamic reference may land elsewhere at run time, but only on a
 // $dynamicAnchor of a resource the graph enters, which the schema library
 // compiles whenever it compiles that resource: one reaching outside the
@@ -293,14 +294,20 @@ func (o *operationSchemas) examine(at, root string) schemaNode {
 		}
 	}
 	forEachSubschema(object, func(_ any, tokens ...string) {
-		if tokens[0] == "$defs" {
+		keyword := tokens[0]
+		if keyword == "$defs" || keyword == "contentSchema" {
 			return
+		}
+		if keyword == "then" || keyword == "else" {
+			if _, hasIf := object["if"]; !hasIf {
+				return
+			}
 		}
 		child := at + jsonpointer.Format(tokens...)
 		switch {
-		case inPlaceKeywords[tokens[0]]:
+		case inPlaceKeywords[keyword]:
 			node.inPlaceTo = append(node.inPlaceTo, child)
-		case tokens[0] == "propertyNames":
+		case keyword == "propertyNames":
 			node.propertyNamesTo = append(node.propertyNamesTo, child)
 		default:
 			node.advancingTo = append(node.advancingTo, child)

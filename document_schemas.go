@@ -247,10 +247,11 @@ func removeDotSegments(path string) string {
 	return strings.Join(out, "/")
 }
 
-// Keyword tables. JSON Schema 2020-12 evaluates the subschemas at these
-// positions; definitions and dependencies are the pre-2019 spellings the
-// 2020-12 meta-schema still describes, and checks the shape of, but 2020-12
-// neither evaluates them nor finds resources or anchors in them.
+// Keyword tables. Most entries name schema-bearing positions under JSON
+// Schema 2020-12. Evaluation is narrower: contentSchema is annotation only,
+// and then/else need a sibling if. The pre-2019 spellings definitions and
+// dependencies have shapes checked by the meta-schema, but 2020-12 neither
+// evaluates them nor finds resources or anchors in them.
 
 // schemaMapKeywords hold { name -> schema } maps.
 var schemaMapKeywords = map[string]bool{
