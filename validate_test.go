@@ -235,12 +235,8 @@ func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_PercentEncodedFragmentRejected(t *testing.T) {
-	// Literal form (§7 / OBI-D-05): same-document fragments are written with
-	// the pointer's characters unencoded, so a percent-encoded fragment is
-	// not a conformant OBI reference — even though "#/schemas/T%61sk" would
-	// decode to the existing "Task" schema. The literal-form violation is
-	// reported rather than silently decoded and resolved.
+func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
+	// URI-fragment JSON Pointers are percent-decoded before pointer evaluation.
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -248,19 +244,13 @@ func TestInterfaceValidate_PercentEncodedFragmentRejected(t *testing.T) {
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	_, err := i.Validate(ValidateOptions{})
-	if err == nil {
-		t.Fatal("percent-encoded fragment should be rejected as not in literal form")
-	}
-	if !strings.Contains(err.Error(), "is not in literal form") || !strings.Contains(err.Error(), "(OBI-D-05)") {
-		t.Fatalf("expected OBI-D-05 literal-form error, got %v", err)
+	if _, err := i.Validate(ValidateOptions{}); err != nil {
+		t.Fatalf("percent-encoded fragment should resolve to Task, got %v", err)
 	}
 }
 
 func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
-	// A percent-encoded fragment is non-conformant regardless of whether it
-	// would decode to a present location: the literal-form gate (OBI-D-05)
-	// fires before the referential-integrity check (OBI-D-12).
+	// Decoding identifies Missing, so the reference violates OBI-D-12.
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -272,8 +262,8 @@ func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) 
 	if err == nil {
 		t.Fatal("dangling percent-encoded $ref should be rejected")
 	}
-	if !strings.Contains(err.Error(), "is not in literal form") || !strings.Contains(err.Error(), "(OBI-D-05)") {
-		t.Fatalf("expected OBI-D-05 literal-form error, got %v", err)
+	if !strings.Contains(err.Error(), "(OBI-D-12)") {
+		t.Fatalf("expected OBI-D-12 unresolved-reference error, got %v", err)
 	}
 }
 
@@ -1030,40 +1020,29 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 	}
 }
 
-// unknownFieldDiagnostics validates iface and returns the OBI-T-02 diagnostics
-// by path. An unknown field without the x- prefix violates OBI-D-02 (§12),
-// which requireUnknownFieldDiagnostic checks beside the diagnostic that
-// processing ignores it (OBI-T-02).
-func unknownFieldDiagnostics(t *testing.T, iface Interface) map[string]string {
+// unknownFieldViolations validates iface and returns OBI-D-02 violations by
+// path. An unknown field without the x- prefix violates OBI-D-02 (§12).
+func unknownFieldViolations(t *testing.T, iface Interface) map[string]string {
 	t.Helper()
 	report, _ := iface.Validate(ValidateOptions{})
 	byPath := map[string]string{}
 	for _, finding := range report.Violations() {
 		if finding.Rule == "OBI-D-02" {
-			byPath["violation "+finding.Path] = finding.Message
+			byPath[finding.Path] = finding.Message
 		}
-	}
-	for _, diagnostic := range report.Diagnostics {
-		if diagnostic.Rule != "OBI-T-02" {
-			t.Fatalf("unexpected diagnostic rule %q", diagnostic.Rule)
-		}
-		byPath[diagnostic.Path] = diagnostic.Message
 	}
 	return byPath
 }
 
-func requireUnknownFieldDiagnostic(t *testing.T, byPath map[string]string, path, field string) {
+func requireUnknownFieldViolation(t *testing.T, byPath map[string]string, path, field string) {
 	t.Helper()
 	if message, ok := byPath[path]; !ok || !strings.Contains(message, field) {
-		t.Fatalf("no OBI-T-02 diagnostic naming %q at %q; got %v", field, path, byPath)
-	}
-	if message, ok := byPath["violation "+path]; !ok || !strings.Contains(message, field) {
 		t.Fatalf("no OBI-D-02 violation naming %q at %q; got %v", field, path, byPath)
 	}
 }
 
-func TestInterfaceValidate_UnknownTopLevelFieldsAreDiagnosed(t *testing.T) {
-	byPath := unknownFieldDiagnostics(t, Interface{
+func TestInterfaceValidate_UnknownTopLevelFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		LosslessFields: LosslessFields{
@@ -1072,11 +1051,11 @@ func TestInterfaceValidate_UnknownTopLevelFieldsAreDiagnosed(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, "", "unknownField")
+	requireUnknownFieldViolation(t, byPath, "", "unknownField")
 }
 
-func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsAreDiagnosed(t *testing.T) {
-	byPath := unknownFieldDiagnostics(t, Interface{
+func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
@@ -1103,12 +1082,12 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsAreDiagnosed(t *test
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `/sources/src`, "unknownField")
-	requireUnknownFieldDiagnostic(t, byPath, `/bindings/op.src`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/sources/src`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/bindings/op.src`, "unknownField")
 }
 
-func TestInterfaceValidate_OperationExampleUnknownFieldsAreDiagnosed(t *testing.T) {
-	byPath := unknownFieldDiagnostics(t, Interface{
+func TestInterfaceValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {
@@ -1125,11 +1104,11 @@ func TestInterfaceValidate_OperationExampleUnknownFieldsAreDiagnosed(t *testing.
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `/operations/op/examples/ex1`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/operations/op/examples/ex1`, "unknownField")
 }
 
-func TestInterfaceValidate_BindingEntryUnknownFieldsAreDiagnosed(t *testing.T) {
-	byPath := unknownFieldDiagnostics(t, Interface{
+func TestInterfaceValidate_BindingEntryUnknownFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
@@ -1149,11 +1128,11 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsAreDiagnosed(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `/bindings/op.api`, "unknownBindingField")
+	requireUnknownFieldViolation(t, byPath, `/bindings/op.api`, "unknownBindingField")
 }
 
-func TestInterfaceValidate_DependencyUnknownFieldsAreDiagnosed(t *testing.T) {
-	byPath := unknownFieldDiagnostics(t, Interface{
+func TestInterfaceValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"deliver": {}},
 		Dependencies: map[string]DependencyEntry{
@@ -1165,11 +1144,11 @@ func TestInterfaceValidate_DependencyUnknownFieldsAreDiagnosed(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldDiagnostic(t, byPath, `/dependencies/delivery`, "futurePolicy")
+	requireUnknownFieldViolation(t, byPath, `/dependencies/delivery`, "futurePolicy")
 }
 
-func TestInterfaceValidate_ExtensionFieldsAreNotDiagnosed(t *testing.T) {
-	byPath := unknownFieldDiagnostics(t, Interface{
+func TestInterfaceValidate_ExtensionFieldsDoNotViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		LosslessFields: LosslessFields{

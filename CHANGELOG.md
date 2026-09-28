@@ -6,6 +6,14 @@
 
 ### Changed
 
+- **Validation follows the pruned Core boundary.** Same-document JSON Pointer
+  fragments are percent-decoded before resolution. Example checks the SDK
+  cannot establish from embedded schemas leave OBI-D-10 inconclusive, so they
+  cannot produce an overall conformance claim. The duplicate OBI-T-02
+  unknown-field advisory and its `ValidationReport.Diagnostics` field are
+  removed; unknown unprefixed fields remain OBI-D-02 violations. Optional
+  value validation retains this SDK's eager compiler and reports its
+  limitations as no verdict, not as a document defect.
 - **Core now uses kinds (breaking, pre-1.0).** `Source.BindingSpec` and its
   `bindingSpec` JSON member become `Source.Kind` and `kind`;
   `DependencyEntry.BindingSpecs` and `bindingSpecs` become `Kinds` and `kinds`.

@@ -244,7 +244,7 @@ func TestDocumentModel_BindingContentPresenceIsKept(t *testing.T) {
 }
 
 // Members are matched by exact name. A case variant of a typed member is an
-// unknown member (OBI-T-02) and never changes the typed one.
+// unknown member and never changes the typed one.
 func TestDocumentModel_MemberNamesAreExact(t *testing.T) {
 	var binding BindingEntry
 	if err := json.Unmarshal([]byte(`{"operation":"a","source":"s","OPERATION":"b","Content":"x","Preference":1.5}`), &binding); err != nil {

@@ -80,14 +80,11 @@ func TestValidateDocument_BindingsNeedNoKindificationKnowledge(t *testing.T) {
 
 // A member the core no longer defines, such as a 0.1 source's location, is an
 // unprefixed name the specification reserves (§12): an OBI-D-02 violation,
-// and still diagnosed as ignored in processing (OBI-T-02).
+// with no separate advisory diagnostic.
 func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":"x@1","location":"./openapi.json"}}}`)
 	if violations := report.Violations(); len(violations) != 1 || violations[0].Rule != "OBI-D-02" || violations[0].Path != "/sources/s" || !strings.Contains(violations[0].Message, "location") {
 		t.Fatalf("want one OBI-D-02 violation at the source naming location, got %+v", violations)
-	}
-	if len(report.Diagnostics) != 1 || report.Diagnostics[0].Rule != "OBI-T-02" || report.Diagnostics[0].Path != "/sources/s" || !strings.Contains(report.Diagnostics[0].Message, "location") {
-		t.Fatalf("want one OBI-T-02 diagnostic at the source naming location, got %+v", report.Diagnostics)
 	}
 }
 
@@ -177,12 +174,12 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesD01(t *testing.T) {
 }
 
 func TestValidateDocument_ExampleScope(t *testing.T) {
-	t.Run("a graph reaching an external resource puts its examples outside the rule", func(t *testing.T) {
+	t.Run("a graph reaching an external resource leaves this validator without a conclusion", func(t *testing.T) {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a":{
 			"input":{"$ref":"https://schemas.example.com/task.json"},
 			"examples":{"one":{"input":42}}}}}`)
-		if report.Evidence["OBI-D-10"] != EvidenceSatisfied || len(report.Findings) != 0 {
-			t.Fatalf("OBI-D-10 = %s, findings %+v; want out of scope and silent", report.Evidence["OBI-D-10"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+			t.Fatalf("OBI-D-10 = %s, conclusion %s; want undetermined", report.Evidence["OBI-D-10"], report.Conclusion)
 		}
 	})
 	t.Run("an unrelated external reference no longer hides an in-scope mismatch", func(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"reflect"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -21,7 +21,7 @@ type ValidateOptions struct{}
 
 // Validate checks a document already in memory against every document rule
 // this SDK can decide. It reports the per-rule evidence, the located findings,
-// OBI-T-02 diagnostics, and the §10.4 conformance conclusion.
+// and the §10.4 conformance conclusion.
 //
 // The rules judge the document the host object encodes, exactly as
 // ValidateDocument judges bytes. OBI-D-01 is always inconclusive here,
@@ -227,17 +227,6 @@ func versionRefusalOf(version string) *VersionRefusalError {
 	return &VersionRefusalError{Version: version, Reason: msg}
 }
 
-// Known members of each OBI-defined object, for OBI-T-02's diagnostics, are
-// the typed members of the document model.
-var (
-	rootMembersKnown       = membersOf(reflect.TypeFor[Interface]()).typed
-	operationMembersKnown  = membersOf(reflect.TypeFor[Operation]()).typed
-	exampleMembersKnown    = membersOf(reflect.TypeFor[OperationExample]()).typed
-	dependencyMembersKnown = membersOf(reflect.TypeFor[DependencyEntry]()).typed
-	sourceMembersKnown     = membersOf(reflect.TypeFor[Source]()).typed
-	bindingMembersKnown    = membersOf(reflect.TypeFor[BindingEntry]()).typed
-)
-
 // checkDocument records evidence for OBI-D-02 through OBI-D-14 on the generic
 // view of a document whose version has already been accepted.
 //
@@ -271,7 +260,6 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 		validateIdent(c, path, key)
 		if dependency, ok := dependencies[key].(map[string]any); ok {
 			d.checkReference(dependency, path, "operation", "OBI-D-14", operations, "operation key")
-			diagnoseUnknownFields(c, path, dependency, dependencyMembersKnown)
 		}
 	}
 
@@ -279,11 +267,7 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 	for _, key := range sortedKeys(sources) {
 		path := jsonpointer.Format("sources", key)
 		validateIdent(c, path, key)
-		source, ok := sources[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		diagnoseUnknownFields(c, path, source, sourceMembersKnown)
+		// Source content belongs to its binding specification.
 	}
 
 	bindings, _ := root["bindings"].(map[string]any)
@@ -296,15 +280,10 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 		}
 		d.checkReference(binding, path, "operation", "OBI-D-08", operations, "operation key")
 		d.checkReference(binding, path, "source", "OBI-D-09", sources, "source")
-		diagnoseUnknownFields(c, path, binding, bindingMembersKnown)
-	}
-
-	if root != nil {
-		diagnoseUnknownFields(c, "", root, rootMembersKnown)
 	}
 
 	// OBI-D-10: every provided example validates against its operation's
-	// schema, where that schema's graph resolves entirely within the document.
+	// schema when embedded schemas determine the result.
 	checkExamples(c, view, operations, d.schemas)
 }
 
@@ -389,11 +368,7 @@ func (d *documentCheck) checkOperations(operations map[string]any) {
 		for _, exampleKey := range sortedKeys(examples) {
 			examplePath := jsonpointer.Format("operations", key, "examples", exampleKey)
 			validateIdent(d.c, examplePath, exampleKey)
-			if example, ok := examples[exampleKey].(map[string]any); ok {
-				diagnoseUnknownFields(d.c, examplePath, example, exampleMembersKnown)
-			}
 		}
-		diagnoseUnknownFields(d.c, path, operation, operationMembersKnown)
 	}
 }
 
@@ -410,19 +385,21 @@ func (d *documentCheck) checkSchema(path string, schema any) {
 	d.walkSchema(&schemaPath{start: path}, schema, false, false)
 }
 
-// literalFragmentProblem states why ref is not a same-document fragment in
-// JSON Pointer form and literal form (§7), or returns "" when it is one.
-func literalFragmentProblem(ref string) string {
+// fragmentProblem states why ref is not a same-document JSON Pointer URI
+// fragment (§7), or returns "" when it is one.
+func fragmentProblem(ref string) string {
 	if !strings.HasPrefix(ref, "#") {
 		return fmt.Sprintf("%q must be a same-document fragment", ref)
 	}
 	if wellFormed, _ := uriReference(ref); !wellFormed {
 		return fmt.Sprintf("%q is not a well-formed URI reference (RFC 3986 §4.1)", ref)
 	}
-	pointer := ref[1:]
+	parsed, err := url.Parse(ref)
+	if err != nil {
+		return fmt.Sprintf("%q is not a well-formed URI reference (RFC 3986 §4.1)", ref)
+	}
+	pointer := parsed.Fragment
 	switch {
-	case strings.Contains(pointer, "%"):
-		return fmt.Sprintf("%q is not in literal form; a same-document fragment is written with the pointer's characters unencoded (percent-encoding is not a conformant OBI reference)", ref)
 	case pointer != "" && !strings.HasPrefix(pointer, "/"):
 		return fmt.Sprintf("%q is a plain-name fragment; a same-document reference is a JSON Pointer fragment (bare # or #/...)", ref)
 	}
@@ -441,27 +418,6 @@ func sortedKeys(object map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// diagnoseUnknownFields surfaces OBI-T-02's advice for the unknown non-`x-`
-// members of an OBI-defined object: processing ignores them. The document
-// schema also refuses them (OBI-D-02, §12), since unprefixed names are
-// reserved for the specification.
-func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, known map[string]bool) {
-	var unknown []string
-	for _, name := range sortedKeys(object) {
-		if !known[name] && !strings.HasPrefix(name, "x-") {
-			unknown = append(unknown, name)
-		}
-	}
-	if len(unknown) == 0 {
-		return
-	}
-	noun := "fields"
-	if len(unknown) == 1 {
-		noun = "field"
-	}
-	c.diagnose("OBI-T-02", path, fmt.Sprintf("unknown %s ignored: %s; extensions use the x- prefix", noun, strings.Join(unknown, ", ")))
 }
 
 // identPattern enforces OBI-D-03: every map key and every operation alias must
@@ -484,7 +440,7 @@ const draft202012URI = "https://json-schema.org/draft/2020-12/schema"
 //   - OBI-D-07: $vocabulary does not appear.
 //   - OBI-D-05 at OBI positions: every $ref is a well-formed URI reference
 //     (RFC 3986 §4.1) that is a same-document JSON Pointer fragment in
-//     literal form or an absolute URI; an $id is an absolute, well-formed
+//     form or an absolute URI; an $id is an absolute, well-formed
 //     URI; and $dynamicRef and $dynamicAnchor do not appear.
 //   - OBI-D-12 at OBI positions: a same-document fragment resolves from the
 //     document root, and an absolute reference to a resource the document
@@ -597,7 +553,7 @@ func (d *documentCheck) checkDocumentReference(path, holder, ref string) {
 		d.checkEmbeddedReference(path, holder, ref)
 		return
 	default:
-		if problem := literalFragmentProblem(ref); problem != "" {
+		if problem := fragmentProblem(ref); problem != "" {
 			d.c.violated("OBI-D-05", path, problem)
 		}
 	}

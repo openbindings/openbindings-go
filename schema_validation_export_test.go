@@ -39,21 +39,19 @@ func TestValidateOperationInput_ResolvesNamedSchemasThroughTheDocument(t *testin
 	}
 }
 
-// TestValidateOperationInput_ExternalRefFailsClosed pins OBI-T-08's
-// complete-graph requirement: validation is against the FULLY RESOLVED schema, so a
-// schema carrying an external $ref the tool cannot fetch is a validation
-// error (fail closed), never a partial pass.
-func TestValidateOperationInput_ExternalRefFailsClosed(t *testing.T) {
+// TestValidateOperationInput_ExternalRefReturnsNoVerdict checks that this SDK
+// returns no verdict when its eager compiler needs a resource it cannot load.
+func TestValidateOperationInput_ExternalRefReturnsNoVerdict(t *testing.T) {
 	opSchema := map[string]any{"$ref": "https://example.com/schemas/user-input.json"}
 	err := ValidateOperationInput(map[string]any{"id": "u1"}, documentWithInput(opSchema, nil), "op")
-	if err == nil {
-		t.Fatal("external $ref should fail closed, not validate partially")
+	if !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("external $ref should leave the result unavailable, got %v", err)
 	}
 }
 
-// TestValidateOperationInput_FormatIsAnnotationOnly pins §6.2's boundary
-// rule: `format` never asserts at OBI validation boundaries — a value
-// violating `format` still validates; enforced syntax belongs to `pattern`.
+// TestValidateOperationInput_FormatIsAnnotationOnly checks the embedded
+// 2020-12 dialect, where `format` is an annotation. External dialects may
+// define different format semantics.
 func TestValidateOperationInput_FormatIsAnnotationOnly(t *testing.T) {
 	opSchema := map[string]any{"type": "string", "format": "email"}
 	if err := ValidateOperationInput("not-an-email", documentWithInput(opSchema, nil), "op"); err != nil {

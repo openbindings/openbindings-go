@@ -43,7 +43,7 @@ import (
 
 // LosslessFields is embedded in every OBI-defined object type to carry the
 // members its typed fields do not: Extensions holds `x-` members (§12) and
-// Unknown every other one (OBI-T-02). Decoding fills both; encoding writes
+// Unknown every other one. Decoding fills both; encoding writes
 // them back beside the typed members.
 //
 // An entry whose name is a typed member's name is never encoded: the typed

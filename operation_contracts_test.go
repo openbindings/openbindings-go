@@ -107,14 +107,13 @@ func TestOperationContracts_PercentEncodedTokens(t *testing.T) {
 	}
 }
 
-// A pattern Go's regexp cannot compile no longer stops compilation: a graph
-// that reaches outside the document is outside OBI-D-10 whatever else it
-// holds, and one that does not leaves no verdict.
+// A pattern Go's regexp cannot compile leaves the contract without a value
+// verdict. Examples affected by an external resource are undecided here.
 func TestOperationContracts_UncompiledPatterns(t *testing.T) {
 	outside := `{"openbindings":"0.2.0","operations":{"op":{"input":{"properties":{
 		"a":{"pattern":"^(?=x)"},"b":{"$ref":"https://schemas.example.com/b.json"}}},
 		"examples":{"e":{"input":{}}}}}}`
-	if report := validateBytes(t, outside); report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Conclusion != ConclusionConformant {
+	if report := validateBytes(t, outside); report.Evidence["OBI-D-10"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
 		t.Fatalf("OBI-D-10 %q, conclusion %q", report.Evidence["OBI-D-10"], report.Conclusion)
 	}
 	for _, input := range []string{`{"pattern":"^(?=x)"}`, `{"patternProperties":{"^(?=x)":{}}}`} {

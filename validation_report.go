@@ -59,18 +59,6 @@ type Finding struct {
 	Message string
 }
 
-// Diagnostic is advice a rule asks tools to surface without failing the
-// document, such as OBI-T-02's notice of an unknown field. A diagnostic never
-// affects a ValidationReport's evidence or conclusion.
-type Diagnostic struct {
-	// Rule is the rule that asks for the diagnostic, such as "OBI-T-02".
-	Rule string
-	// Path locates the diagnostic as an RFC 6901 JSON Pointer, as
-	// Finding.Path does.
-	Path    string
-	Message string
-}
-
 // ValidationReport is a validator's account of one document under the core
 // specification's §10.4 vocabulary.
 //
@@ -95,7 +83,7 @@ type ValidationReport struct {
 	// report, whose Evidence is nil.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
-	// Version, in identifier order, as OBI-T-09 requires.
+	// Version, in identifier order. These lists are SDK report fields.
 	Violated     []string
 	Inconclusive []string
 	// Findings locate every established violation and every undecided check,
@@ -104,8 +92,6 @@ type ValidationReport struct {
 	// deep, so a deeply nested document with a finding at every level makes a
 	// report that grows with the square of its depth. Findings are not capped.
 	Findings []Finding
-	// Diagnostics are advisory and never affect Conclusion.
-	Diagnostics []Diagnostic
 }
 
 // Violations returns the findings that established a violation.
@@ -188,9 +174,8 @@ func (e *VersionRefusalError) Error() string {
 // ruleChecks collects located evidence while a validator runs. Rules that
 // record no finding are satisfied.
 type ruleChecks struct {
-	version     string
-	findings    []Finding
-	diagnostics []Diagnostic
+	version  string
+	findings []Finding
 }
 
 func (c *ruleChecks) violated(rule, path, message string) {
@@ -199,10 +184,6 @@ func (c *ruleChecks) violated(rule, path, message string) {
 
 func (c *ruleChecks) inconclusive(rule, path, message string) {
 	c.findings = append(c.findings, Finding{Rule: rule, Status: EvidenceInconclusive, Path: path, Message: message})
-}
-
-func (c *ruleChecks) diagnose(rule, path, message string) {
-	c.diagnostics = append(c.diagnostics, Diagnostic{Rule: rule, Path: path, Message: message})
 }
 
 // inconclusiveExcept leaves every document rule but the decided ones
@@ -240,13 +221,12 @@ func (c *ruleChecks) report() ValidationReport {
 	report := ConcludeConformance(evidence)
 	report.Version = c.version
 	report.Findings = append([]Finding(nil), c.findings...)
-	report.Diagnostics = append([]Diagnostic(nil), c.diagnostics...)
 	return report
 }
 
 // conclude returns the report together with the error validation returns: a
 // *ValidationError listing every established violation, or nil when none was
-// established. Inconclusive checks and diagnostics are not violations and do
+// established. Inconclusive checks are not violations and do
 // not appear in the error.
 func (c *ruleChecks) conclude() (ValidationReport, error) {
 	return c.report(), c.violationError()

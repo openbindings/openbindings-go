@@ -269,13 +269,14 @@ func metaSchemaCacheKey(schema map[string]any) string {
 
 // checkExamples records OBI-D-10 evidence: every provided example value
 // (including an explicit JSON null) must validate against its operation's
-// corresponding schema, where that schema is specified and the schema graph
-// statically reachable from it resolves entirely within the document.
+// corresponding schema, where that schema is specified and the example's
+// outcome can be determined from resources embedded in the document.
 //
-// The rule's scope is decided per schema position. A graph that reaches an
-// external resource puts that position's examples outside the rule, so they
-// are neither checked nor reported (§5.1 lets a tool check them as evidence,
-// never as non-conformance). A graph that cannot be evaluated (an
+// This validator uses an eager compiler. When a graph reaches an external
+// resource, it does not try to prove whether a particular example's outcome
+// is independent of that resource. It leaves OBI-D-10 inconclusive rather
+// than claiming conformance without deciding an applicable example. A graph
+// that cannot be evaluated (an
 // unresolvable reference, an ill-formed schema, or a failure to compile or
 // evaluate it) leaves the rule inconclusive there: none of that is evidence
 // that the examples conform. Operations and examples that are not objects
@@ -315,7 +316,7 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 	var starts []string
 	for _, p := range candidates {
 		if f := o.facts(p.path); f.outside != "" || f.metaSchema != "" {
-			// The graph reaches outside the document.
+			c.inconclusive("OBI-D-10", p.path, "this validator did not determine whether the examples' results are independent of a schema resource outside the document")
 			continue
 		}
 		if problem := o.graphProblem(p.path); problem != "" {
@@ -356,9 +357,10 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // unknown document member never acts as a schema keyword or declares a
 // resource.
 //
-// The schema graph statically reachable from the operation's schema must be
-// available, well-formed, and evaluable, even where no value would exercise
-// part of it; otherwise a *SchemaGraphUnavailableError says why. A graph is
+// This SDK's eager compiler requires the statically reachable graph to be
+// available, well-formed, and evaluable, even where a value would not exercise
+// part of it; otherwise a *SchemaGraphUnavailableError says why. This is an
+// implementation limit, not a requirement of OBI-T-08. A graph is
 // unavailable when it reaches a resource the document does not embed, has a
 // reference that does not resolve, or holds a schema that is not well-formed.
 // It cannot be evaluated here when it meets one of this SDK's limits (§10.4):
@@ -448,8 +450,8 @@ func ValidateOperationOutput(value any, iface *Interface, operationName string) 
 	return compiled.Validate(value)
 }
 
-// SchemaGraphUnavailableError reports that no verdict was reached because the
-// governing schema's complete statically reachable graph was not available,
+// SchemaGraphUnavailableError reports that no verdict was reached because this
+// SDK could not compile the governing schema's statically reachable graph,
 // well-formed, and evaluable, or, from CompiledSchema.Validate, because the
 // value holds a number this SDK cannot check against that graph or the
 // schema was not compiled. It is distinct from a mismatch, as OBI-T-08

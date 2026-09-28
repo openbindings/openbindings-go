@@ -18,13 +18,13 @@ its environment, independently of protocol. See the
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
-This implementation was checked against the Core draft at spec revision
-`ccfe0b6` (including its kind, schema reachability, and rule-number changes).
+This implementation targets the pruned Core 0.2 draft on
+`codex/prune-core-tool-policy`.
 
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
 [§10.4](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#104-conformance-conclusions):
-evidence for every document rule, located findings, OBI-T-02 diagnostics, a
+evidence for every document rule, located findings, a
 conclusion of conformant, non-conformant, or conformance-undetermined, and the
 specification version its rule identifiers belong to.
 No document rule requires an implementation or publication for a source's
@@ -106,9 +106,9 @@ go get github.com/openbindings/openbindings-go
   any-of list. `DependencyEntry.AllowsKind` compares complete strings exactly,
   without inferring support, compatibility, or version order
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
-- **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
+- **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names), and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
-- **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
+- **Optional operation-contract validation** of values against an operation's input or output schema under JSON Schema semantics (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values. The eager compiler can return an unavailable result when it cannot establish a verdict; this is an SDK implementation limit, not a document rule or a requirement for other tools
 
 ## Quick start
 
@@ -157,7 +157,8 @@ fmt.Println(dependency.Operation, dependency.Kinds, openbindings.Value(operation
 ```go
 // A nil error means the value validates. A *SchemaValidationError is an
 // established mismatch; a *SchemaGraphUnavailableError means the schema's
-// graph could not be fully resolved, so no verdict was reached.
+// evaluator could not establish a verdict, often because compilation needed
+// a schema resource the SDK does not have.
 if err := openbindings.ValidateOperationInput(value, iface, "listItems"); err != nil {
     log.Fatal(err)
 }

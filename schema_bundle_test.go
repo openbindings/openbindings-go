@@ -31,12 +31,12 @@ func inputOutcome(t *testing.T, document string, value any) string {
 // entries 2020-12 neither evaluates nor finds resources or anchors in.
 func TestStrictDefinitions(t *testing.T) {
 	// An $id under definitions embeds nothing: an absolute reference to it
-	// points outside the document, so its example is outside OBI-D-10, and
+	// points outside the document, so this SDK cannot decide OBI-D-10, and
 	// OBI-D-12 does not judge it.
 	external := `{"openbindings":"0.2.0","schemas":{"A":{"definitions":{"d":{"$id":"https://ex.test/d","type":"string"}}}},
 		"operations":{"op":{"input":{"$ref":"https://ex.test/d#/nope"},"examples":{"e":{"input":5}}}}}`
 	report := validateBytes(t, external)
-	if report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Evidence["OBI-D-12"] != EvidenceSatisfied {
+	if report.Evidence["OBI-D-10"] != EvidenceInconclusive || report.Evidence["OBI-D-12"] != EvidenceSatisfied {
 		t.Errorf("an $id under definitions: OBI-D-10 %q, OBI-D-12 %q", report.Evidence["OBI-D-10"], report.Evidence["OBI-D-12"])
 	}
 
@@ -352,8 +352,6 @@ func TestSchemaGraphIsolation(t *testing.T) {
 		}
 		var want string
 		switch {
-		case len(d11) == 0 && key == "external":
-			want = "unavailable" // outside OBI-D-10; the graph is not available
 		case len(d11) == 0:
 			want = "valid"
 		case d11[0] == string(EvidenceViolated):

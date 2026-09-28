@@ -48,8 +48,8 @@ func newOperationSchemas(view any, schemas documentSchemas) *operationSchemas {
 // depends on the order of map iteration.
 type graphFacts struct {
 	// outside is a resource outside the document the graph reaches, and
-	// metaSchema a JSON Schema meta-schema the library carries. Either puts
-	// the graph's examples outside OBI-D-10.
+	// metaSchema a JSON Schema meta-schema the library carries. This eager
+	// analysis cannot decide whether those resources affect an example.
 	outside, metaSchema string
 	// problem states why the graph cannot be evaluated.
 	problem string
@@ -73,9 +73,10 @@ func firstOf(a, b string) string {
 	return a
 }
 
-// schemaGraph is the graph the operation schemas reach (§5.2), walked once for
+// schemaGraph is the graph the operation schemas reach, walked once for
 // all of them: every position evaluation can apply, whatever an if would
-// select, and the targets of their references, transitively. What each graph
+// select, and the targets of their references, transitively. This is an
+// implementation strategy for the SDK's eager compiler. What each graph
 // holds is gathered over the strongly connected components, so a schema many
 // operations share is examined once.
 //

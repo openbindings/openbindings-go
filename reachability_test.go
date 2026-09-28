@@ -81,12 +81,12 @@ func TestReachability_Acceptance(t *testing.T) {
 		values: map[string]string{`"x"`: "unavailable"},
 		d11:    EvidenceInconclusive,
 	}, {
-		// A reached external reference still puts the examples outside the
-		// rule and leaves validation without a verdict.
+		// This SDK cannot establish whether the external reference affects the
+		// example, so both checks remain undecided.
 		name:     "a reached external reference",
 		document: `{"openbindings":"0.2.0","operations":{"op":{"input":{"properties":{"a":{"$ref":"https://external.example/x#/$defs/y"}}},"examples":{"e":{"input":{"a":1}}}}}}`,
 		values:   map[string]string{`{"a":1}`: "unavailable"},
-		d11:      EvidenceSatisfied,
+		d11:      EvidenceInconclusive,
 	}, {
 		// A root member named like a keyword of an older draft is never a
 		// schema, and never declares a resource.

@@ -21,8 +21,7 @@ source and binding content no Core interpretation. The former
 
 Document validation reports the core's §10.4 conformance conclusion in Go:
 `Interface.Validate(options)` and `ValidateDocument(data, options)` return a
-`ValidationReport` with per-rule evidence, findings, and OBI-T-02
-diagnostics. TypeScript applies OBI-T-09 to caller evidence through
+`ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-09 to caller evidence through
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
@@ -37,15 +36,13 @@ each of these observable behaviors:
 - **Rules over the document's JSON.** Every document rule is judged on the
   document's JSON, never its typed decoding, and literally on the values
   present; a resource limit is inconclusive, never a violation.
-- **Operation-contract validation.** The OBI root is not a schema; success
-  needs the complete statically reachable graph, available and well-formed,
-  whatever branches an evaluator would skip. An unreferenced `$defs` entry is
-  not part of that graph, while document well-formedness still checks it;
-  `format` never asserts, in any
-  dialect; a built-in meta-schema is available; an `$id` that names no one
-  embedded schema leaves only the graphs that reach it unavailable; a
-  version outside the supported set is refused; an alias names its
-  operation; a reference cycle that never advances is unavailable.
+- **Operation-contract validation.** The OBI root is the resolution context,
+  not a schema. A claimed value result follows the applicable JSON Schema
+  dialect; a missing capability or resource yields no verdict. Go currently
+  uses an eager compiler, so it can return no verdict for a graph containing
+  an unavailable branch even when a particular value does not enter that
+  branch. That limitation is Go behavior, not a Core or parity requirement.
+  Both SDKs must distinguish an established mismatch from no verdict.
 
 | Concept | Go | TypeScript |
 |---|---|---|
@@ -55,9 +52,9 @@ each of these observable behaviors:
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |
 
-Core parity means the same document fields and validation outcomes, exact
-kind comparisons, version refusals, operation resolution, schema graph
-outcomes, and conformance conclusions. Kind-specific support and invocation
+Core parity means the same document fields and established validation outcomes,
+exact kind comparisons, version refusals, operation resolution, and sound
+conformance conclusions. Kind-specific support and invocation
 behavior belong to later modules and are not established by this record.
 Parity does not require identical type casing, incidental error prose, or
 internal caches.
