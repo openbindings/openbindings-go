@@ -2,6 +2,8 @@ package openbindings
 
 import (
 	"encoding/json"
+	"errors"
+	"math"
 	"math/big"
 	"reflect"
 	"slices"
@@ -131,6 +133,45 @@ func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 	}
 }
 
+// The stand-in for a number beyond the limits equals another number of the
+// value exactly when that number does, whatever Go type holds it.
+func TestValidateOperationInput_StandInsAvoidGoNumbers(t *testing.T) {
+	document := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"uniqueItems":true}}}}`)
+	for _, tc := range []struct {
+		value []any
+		want  string
+	}{
+		{[]any{json.Number("1e99999"), 1}, "valid"},
+		{[]any{json.Number("1e99999"), uint8(1), 2.0, float32(3)}, "valid"},
+		{[]any{json.Number("1e99999"), json.Number("1e99999"), 1}, "mismatch"},
+		{[]any{json.Number("1.5e99999"), 1.5}, "valid"},
+	} {
+		if got := outcome(ValidateOperationInput(tc.value, document, "op")); got != tc.want {
+			t.Errorf("%v: %s, want %s", tc.value, got, tc.want)
+		}
+	}
+}
+
+// A count the schema library would convert to an int past math.MaxInt
+// reaches no verdict, since the keyword would bound a different count.
+func TestValidateOperationInput_CountsBeyondMaxInt(t *testing.T) {
+	for _, input := range []string{
+		`{"minLength":9223372036854775808}`,
+		`{"maxLength":18446744073709551617}`,
+		`{"properties":{"a":{"minItems":1e19}}}`,
+	} {
+		document := `{"openbindings":"0.2.0","operations":{"op":{"input":` + input + `}}}`
+		err := ValidateOperationInput(decodeValue(t, []byte(`{"a":[]}`)), mustDecodeInterface(t, document), "op")
+		if got := outcome(err); got != "unavailable" || !strings.Contains(err.Error(), "the largest the schema library reads") {
+			t.Errorf("%s: %s (%v)", input, got, err)
+		}
+	}
+	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"maxLength":9223372036854775807}}}}`
+	if got := outcome(ValidateOperationInput("x", mustDecodeInterface(t, document), "op")); got != "valid" {
+		t.Errorf("maxLength math.MaxInt: %s", got)
+	}
+}
+
 // A number the schema library only carries (in default, examples, or a
 // keyword it does not know) does not make a schema unavailable, however far
 // beyond the numeric limits it lies, even past what math/big reads. v6.0.3
@@ -158,6 +199,24 @@ func TestValidateOperationInput_CarriedNumbersAreNeverRead(t *testing.T) {
 		iface := mustDecodeInterface(t, document)
 		if got := outcome(ValidateOperationInput(decodeValue(t, []byte(`"s"`)), iface, "op")); got != "valid" {
 			t.Errorf("%s: \"s\" gave %s", input, got)
+		}
+	}
+}
+
+// A Go value with no JSON reading is refused before validation: it is neither
+// valid nor a mismatch.
+func TestValidateOperationInput_ValuesThatAreNotJSON(t *testing.T) {
+	document := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"maxLength":1,"pattern":"^.$"}}}}`)
+	for _, value := range []any{
+		"\xff",
+		map[string]any{"\xff": "x"},
+		[]any{"a", "b\xc3"},
+		math.NaN(),
+		struct{}{},
+	} {
+		err := ValidateOperationInput(value, document, "op")
+		if err == nil || errors.As(err, new(*SchemaValidationError)) || !strings.Contains(err.Error(), "not a JSON value") {
+			t.Errorf("%#v: %v", value, err)
 		}
 	}
 }

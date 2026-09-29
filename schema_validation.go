@@ -105,7 +105,11 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 // (TestMetaSchema_ComparesNumbersOnlyWithZero).
 func checkAgainstMetaSchema(schema any) ([]schemacompiler.Problem, error) {
 	checked := schemacompiler.Substitute(schema)
+	failures := schemacompiler.MatchFailures()
 	err := compiledMetaSchema.Validate(checked.Value)
+	if schemacompiler.MatchFailures() != failures {
+		return nil, schemacompiler.ErrMatchUnanswered
+	}
 	if err == nil {
 		return nil, nil
 	}
@@ -190,7 +194,15 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 		decided = append(decided, member.tokens)
 	}
 	checked := schemacompiler.Substitute(withoutMembers(view, decided))
-	if verr := compiledOBISchema.Validate(checked.Value); verr != nil {
+	failures := schemacompiler.MatchFailures()
+	verr := compiledOBISchema.Validate(checked.Value)
+	if schemacompiler.MatchFailures() != failures {
+		// A pattern match reached no answer, which the library read as a
+		// mismatch (§10.4).
+		c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", schemacompiler.ErrMatchUnanswered))
+		return
+	}
+	if verr != nil {
 		problems, mismatch := checked.Outcome(verr)
 		if !mismatch {
 			// An exceeded resource limit is not evidence of violation (§10.4).

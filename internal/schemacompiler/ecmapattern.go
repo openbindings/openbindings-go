@@ -12,14 +12,23 @@ import (
 // not known to match ECMA-262's, so no verdict rests on one.
 var errPropertyEscape = errors.New("a Unicode property escape, whose tables this SDK does not match to ECMA-262's")
 
-// checkUnicodePattern reports whether a pattern is a Pattern of ECMA-262
-// (11th edition, §21.2.1) parsed with the u flag, early errors included: the
-// grammar a JSON Schema pattern is read under (JSON Schema Core §6.4). The
-// engine the SDK matches with accepts some patterns the grammar refuses, such
-// as a class escape bounding a range ([\w-.]) or an identity escape of a
-// character that is not syntax (\-), so its compile is no check of validity.
+// errResetCapture is the error for a backreference to a group inside a
+// quantified atom. ECMA-262 clears such a group's capture at the start of each
+// iteration (§21.2.2.5.1, RepeatMatcher); the engine keeps the capture of an
+// earlier iteration, so ^(a|(b))*\2$ matches "aba" in ECMA-262 and not in
+// the engine. The pattern is valid, but no verdict rests on it.
+var errResetCapture = errors.New("a backreference whose capture semantics the engine does not match to ECMA-262's")
+
+// checkUnicodePattern returns nil for a Pattern of ECMA-262 (11th edition,
+// §21.2.1) parsed with the u flag, early errors included, the grammar a JSON
+// Schema pattern is read under (JSON Schema Core §6.4), that this SDK
+// evaluates. It returns an error for any other pattern, and for a valid one it
+// does not evaluate (errPropertyEscape, errResetCapture). The engine the SDK
+// matches with accepts some patterns the grammar refuses, such as a class
+// escape bounding a range ([\w-.]) or an identity escape of a character that
+// is not syntax (\-), so its compile is no check of validity.
 func checkUnicodePattern(pattern string) error {
-	p := &patternParser{src: []rune(pattern), names: map[string]bool{}}
+	p := &patternParser{src: []rune(pattern), names: map[string]bool{}, groupOf: map[string]int{}, reset: map[int]bool{}}
 	p.countGroups()
 	if err := p.disjunction(); err != nil {
 		return err
@@ -37,6 +46,16 @@ func checkUnicodePattern(pattern string) error {
 			return fmt.Errorf("the backreference \\k<%s> names no group", name)
 		}
 	}
+	for _, n := range p.backreferences {
+		if p.reset[int(n.Int64())] {
+			return errResetCapture
+		}
+	}
+	for _, name := range p.namedReferences {
+		if p.reset[p.groupOf[name]] {
+			return errResetCapture
+		}
+	}
 	return nil
 }
 
@@ -49,6 +68,12 @@ type patternParser struct {
 	// References are checked once every group is known.
 	backreferences  []*big.Int
 	namedReferences []string
+	// opened counts the capturing groups opened so far; groupOf numbers each
+	// named group; reset holds the groups inside a quantified atom
+	// (errResetCapture).
+	opened  int
+	groupOf map[string]int
+	reset   map[int]bool
 }
 
 func (p *patternParser) errorf(format string, args ...any) error {
@@ -87,12 +112,9 @@ func (p *patternParser) countGroups() {
 			p.groups++
 		case r == '(' && k+2 < len(p.src) && p.src[k+1] == '?' && p.src[k+2] == '<' && (k+3 >= len(p.src) || p.src[k+3] != '=' && p.src[k+3] != '!'):
 			p.groups++
-			end := k + 3
-			for end < len(p.src) && p.src[end] != '>' {
-				end++
-			}
-			if end < len(p.src) {
-				p.names[string(p.src[k+3:end])] = true
+			names := &patternParser{src: p.src, i: k + 3}
+			if name, err := names.groupName(); err == nil {
+				p.names[name] = true
 			}
 		}
 	}
@@ -125,6 +147,7 @@ func (p *patternParser) alternative() error {
 // assertion takes a quantifier, lookaheads included.
 func (p *patternParser) term() error {
 	quantifiable := true
+	before := p.opened
 	switch r := p.peek(0); {
 	case r == '^' || r == '$':
 		p.i++
@@ -159,6 +182,9 @@ func (p *patternParser) term() error {
 	if isQuantifierStart(p.peek(0)) {
 		if !quantifiable {
 			return p.errorf("nothing to repeat")
+		}
+		for group := before + 1; group <= p.opened; group++ {
+			p.reset[group] = true
 		}
 		return p.quantifier()
 	}
@@ -230,10 +256,13 @@ func (p *patternParser) group() error {
 			return p.errorf("duplicate group name %q", name)
 		}
 		p.declared[name] = true
+		p.opened++
+		p.groupOf[name] = p.opened
 	case p.lookingAt("(?"):
 		return p.errorf("invalid group")
 	default:
 		p.i++
+		p.opened++
 	}
 	if err := p.disjunction(); err != nil {
 		return err
@@ -517,26 +546,38 @@ func hexValue(r rune) rune {
 	return r - 'A' + 10
 }
 
-// The engine departs from ECMA-262 in two places, which forEngine rewrites
-// into forms it evaluates as ECMA-262 does: . matches U+2028 and U+2029, which
-// are line terminators, and \b and \B test for its Unicode word characters
-// rather than the ASCII ones \w matches (§21.2.2.6).
+// The engine departs from ECMA-262 in places forEngine rewrites into forms it
+// evaluates as ECMA-262 does: . matches U+2028 and U+2029, which are line
+// terminators; \b and \B test for its Unicode word characters rather than
+// the ASCII ones \w matches (§21.2.2.6); an escaped surrogate pair is read as
+// two code units rather than the one code point the u flag makes it; and its
+// unanchored search skips some start positions, so a pattern is matched
+// anchored behind a lazy prefix, which tries every start position in turn and
+// leaves ^, lookbehind, and group numbers as they were.
 const (
-	anyButLineTerminator = `[^\n\r  ]`
+	anyButLineTerminator = `[^\n\r\u2028\u2029]`
 	wordBoundary         = `(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))`
 	notWordBoundary      = `(?:(?<=[A-Za-z0-9_])(?=[A-Za-z0-9_])|(?<![A-Za-z0-9_])(?![A-Za-z0-9_]))`
+	anyStart             = `^[\s\S]*?(?:`
 )
 
 // forEngine returns a pattern checkUnicodePattern accepts as the engine is to
-// compile it: . outside a class and \b and \B rewritten.
+// compile it.
 func forEngine(pattern string) string {
 	src := []rune(pattern)
-	var out []rune
+	out := []rune(anyStart)
 	inClass := false
 	for k := 0; k < len(src); k++ {
 		switch r := src[k]; {
 		case r == '\\' && k+1 < len(src):
 			next := src[k+1]
+			if next == 'u' {
+				if value, width, ok := surrogatePair(src[k:]); ok {
+					out = append(out, []rune(fmt.Sprintf(`\u{%X}`, value))...)
+					k += width - 1
+					continue
+				}
+			}
 			k++
 			switch {
 			case !inClass && next == 'b':
@@ -558,5 +599,21 @@ func forEngine(pattern string) string {
 			out = append(out, r)
 		}
 	}
-	return string(out)
+	return string(append(out, ')'))
+}
+
+// surrogatePair reads an escaped lead surrogate and the escaped trail
+// surrogate after it (\uD83D\uDE00), returning the code point they make and
+// the runes they span.
+func surrogatePair(src []rune) (rune, int, bool) {
+	if len(src) < 12 || src[6] != '\\' || src[7] != 'u' {
+		return 0, 0, false
+	}
+	p := &patternParser{src: src}
+	lead, leadOK := p.hex4(2)
+	trail, trailOK := p.hex4(8)
+	if !leadOK || !trailOK || lead < 0xD800 || lead > 0xDBFF || trail < 0xDC00 || trail > 0xDFFF {
+		return 0, 0, false
+	}
+	return (lead-0xD800)<<10 + (trail - 0xDC00) + 0x10000, 12, true
 }

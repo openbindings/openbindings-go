@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
+	"math/big"
 	"net/url"
 	"reflect"
 	"slices"
@@ -248,7 +250,8 @@ func forEachSchemaReference(root any, at string, fn func(holder, ref string)) {
 
 // rootProblem states why the schema library cannot be given what a root
 // holds, or returns "": a resource limit it meets (limitProblem); a schema
-// that is not well-formed; a dialect other than 2020-12; a pattern that is not
+// that is not well-formed; a dialect other than 2020-12; an $id that gives
+// its schema no URI of its own; a pattern that is not
 // an ECMA-262 regular expression with Unicode semantics, whose evaluation
 // OBI-T-08 leaves without a verdict (the SDK's compilers accept every pattern,
 // so format "regex" never asserts, and leave this check here); a resource
@@ -281,6 +284,12 @@ func (o *operationSchemas) rootProblem(at string) string {
 		location := func() string { return at + jsonpointer.Format(path...) }
 		if dialect, present := object["$schema"]; present && dialect != draft202012URI && dialect != draft202012URI+"#" {
 			problems = append(problems, fmt.Sprintf("the schema at %s declares $schema %s, not %s", location(), describeJSON(dialect), draft202012URI))
+		}
+		if id, isString := object["$id"].(string); isString && strings.TrimSuffix(id, "#") == "" {
+			// The $id resolves to its base, so the schema claims a URI what
+			// encloses it already has, which JSON Schema leaves undefined
+			// (Core §8.2.1).
+			problems = append(problems, fmt.Sprintf("the schema at %s declares the $id %q, which gives it no URI of its own: it resolves to its base, the URI of what encloses it", location(), id))
 		}
 		patterns := sortedKeys(asObject(object["patternProperties"]))
 		if pattern, ok := object["pattern"].(string); ok {
@@ -342,11 +351,16 @@ var (
 	countKeywords      = map[string]bool{"maxLength": true, "minLength": true, "maxItems": true, "minItems": true, "maxContains": true, "minContains": true, "maxProperties": true, "minProperties": true}
 )
 
+// errCountLimit is the error for a count keyword's value beyond math.MaxInt:
+// the schema library converts a count to an int, which such a value
+// overflows, so the keyword would bound a different count.
+var errCountLimit = fmt.Errorf("a count beyond %d, the largest the schema library reads", math.MaxInt)
+
 // numberRead returns where, in a schema, the first number the schema library
-// reads lies beyond the numeric limits of schema evaluation, with the limits'
-// error, or a nil error when none does: the value of a comparison or count
-// keyword, or a number in const or enum, which the library compares with a
-// value's.
+// reads lies beyond the numeric limits of schema evaluation, or a count
+// beyond math.MaxInt, with the limit's error, or a nil error when none does:
+// the value of a comparison or count keyword, or a number in const or enum,
+// which the library compares with a value's.
 func numberRead(schema any) (string, error) {
 	var location string
 	var err error
@@ -357,6 +371,10 @@ func numberRead(schema any) (string, error) {
 			}
 			if where, limit := schemacompiler.NumericLimit(object[keyword]); limit != nil {
 				location, err = jsonpointer.Format(append(slices.Clip(path), keyword)...)+where, limit
+				return false
+			}
+			if countKeywords[keyword] && beyondMaxInt(object[keyword]) {
+				location, err = jsonpointer.Format(append(slices.Clip(path), keyword)...), errCountLimit
 				return false
 			}
 		}
@@ -410,6 +428,17 @@ func walkSchemaObjects(schema any, fn func(object map[string]any, path []string)
 		})
 	}
 	walk(schema)
+}
+
+// beyondMaxInt reports whether a value is a number, within the numeric limits
+// of schema evaluation, greater than math.MaxInt.
+func beyondMaxInt(value any) bool {
+	n, isNumber := value.(json.Number)
+	if !isNumber {
+		return false
+	}
+	count, ok := new(big.Rat).SetString(string(n))
+	return ok && count.Cmp(new(big.Rat).SetInt64(math.MaxInt)) > 0
 }
 
 func holdsNumber(value any) bool {

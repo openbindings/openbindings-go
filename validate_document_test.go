@@ -467,6 +467,8 @@ func TestValidateDocument_ReferencesFollowTheURIGrammar(t *testing.T) {
 		"percent-encoded registered name": {`{"$ref":"https://%41.example/s.json"}`, EvidenceSatisfied},
 		"IPv6 literal host":               {`{"$ref":"https://[::1]/s.json"}`, EvidenceSatisfied},
 		"unterminated IPv6 literal":       {`{"$ref":"https://[::1/s.json"}`, EvidenceViolated},
+		"IPvFuture literal":               {`{"$ref":"https://[v1F.a:b]/s.json"}`, EvidenceSatisfied},
+		"IPvFuture non-ASCII version":     {`{"$ref":"https://[vŁ.a]/s.json"}`, EvidenceViolated},
 		"non-string $ref":                 {`{"$ref":42}`, EvidenceViolated},
 	} {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"A":{}},"operations":{"a":{"input":`+tt.input+`}}}`)
@@ -499,6 +501,9 @@ func TestValidateDocument_ReferencesReachSchemaPlaces(t *testing.T) {
 		"into a resource":          `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/properties/i"}}}}`,
 		"a map of schemas":         `{"openbindings":"0.2.0","schemas":{"T":{"properties":{"i":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/properties"}}}}`,
 		"a dependencies array":     `{"openbindings":"0.2.0","schemas":{"T":{"dependencies":{"a":["b"]}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/dependencies/a"}}}}`,
+		"an allOf object's member": `{"openbindings":"0.2.0","schemas":{"T":{"allOf":{"x":{}}}},"operations":{"a":{"input":{"$ref":"#/schemas/T/allOf/x"}}}}`,
+		"a properties array entry": `{"openbindings":"0.2.0","schemas":{"T":{"properties":[{}]}},"operations":{"a":{"input":{"$ref":"#/schemas/T/properties/0"}}}}`,
+		"through a boolean schema": `{"openbindings":"0.2.0","schemas":{"T":{"not":true}},"operations":{"a":{"input":{"$ref":"#/schemas/T/not/not"}}}}`,
 		"a name declared nowhere":  `{"openbindings":"0.2.0","operations":{"a":{"input":{"$ref":"#nowhere"}}}}`,
 		"a name inside a resource": `{"openbindings":"0.2.0","schemas":{"T":{"$id":"https://e.com/t","$anchor":"t"}},"operations":{"a":{"input":{"$ref":"#t"}}}}`,
 	} {
@@ -989,11 +994,13 @@ func TestValidateDocument_DepthCountsSubschemasOnly(t *testing.T) {
 	}
 }
 
-// An $id that is empty once its fragment is removed declares no resource, as
-// the schema library reads it: the schema stays part of the resource around
-// it. OBI-D-13 still compares the identifier it resolves to, which is the
-// enclosing resource's.
-func TestValidateDocument_EmptyIDsDeclareNothing(t *testing.T) {
+// A schema with an $id member is a boundary whatever the member's value (§7):
+// the document-resource rules stop there, its anchors are its own, and a
+// pointer from the document resource cannot reach inside it. An $id empty once
+// its fragment is removed resolves to its base, a URI what encloses it
+// already has, so OBI-D-13 finds a duplicate within a resource, and value
+// validation reaches no verdict on a graph holding one.
+func TestValidateDocument_AnIDMemberIsABoundary(t *testing.T) {
 	for _, id := range []string{"", "#"} {
 		document := `{"openbindings":"0.2.0","schemas":{"R":{"$id":"https://example.com/r","properties":{"a":{"$id":"` + id + `","type":"string"}}}},
 			"operations":{"op":{"input":{"$ref":"https://example.com/r"}}}}`
@@ -1001,8 +1008,31 @@ func TestValidateDocument_EmptyIDsDeclareNothing(t *testing.T) {
 		if report.Evidence["OBI-D-12"] != EvidenceSatisfied || report.Evidence["OBI-D-13"] != EvidenceViolated {
 			t.Errorf("$id %q: OBI-D-12 %q, OBI-D-13 %q", id, report.Evidence["OBI-D-12"], report.Evidence["OBI-D-13"])
 		}
-		if got := inputVerdict(t, document, "op", map[string]any{"a": json.Number("1")}); got != "mismatch" {
-			t.Errorf("$id %q: %s, want a mismatch", id, got)
+		if got := inputVerdict(t, document, "op", map[string]any{"a": json.Number("1")}); got != "no verdict" {
+			t.Errorf("$id %q: %s, want no verdict", id, got)
+		}
+		document = `{"openbindings":"0.2.0","schemas":{"A":{"$id":"` + id + `","type":"string"}},"operations":{"op":{"input":{"$ref":"#/schemas/A"}}}}`
+		if got := inputVerdict(t, document, "op", json.Number("1")); got != "no verdict" {
+			t.Errorf("$id %q in the document resource: %s, want no verdict", id, got)
+		}
+	}
+	for _, tc := range []struct {
+		name, schemas string
+		want          map[string]RuleEvidenceStatus
+	}{
+		{"its own references", `{"A":{"$id":"","$ref":"#missing"}}`, map[string]RuleEvidenceStatus{"OBI-D-05": EvidenceViolated, "OBI-D-12": EvidenceSatisfied}},
+		{"references within", `{"A":{"$id":"#","properties":{"x":{"$ref":"#/nope"}}}}`, map[string]RuleEvidenceStatus{"OBI-D-12": EvidenceSatisfied}},
+		{"its anchors", `{"A":{"$id":"#","$anchor":"t"},"B":{"$anchor":"t"}}`, map[string]RuleEvidenceStatus{"OBI-D-13": EvidenceSatisfied}},
+		{"a pointer inside", `{"A":{"$id":"","properties":{"x":{}}},"B":{"$ref":"#/schemas/A/properties/x"}}`, map[string]RuleEvidenceStatus{"OBI-D-12": EvidenceViolated}},
+		{"a pointer inside one that is not a string", `{"A":{"$id":42,"properties":{"x":{}}},"B":{"$ref":"#/schemas/A/properties/x"}}`, map[string]RuleEvidenceStatus{"OBI-D-10": EvidenceViolated, "OBI-D-12": EvidenceViolated}},
+		{"the base for OBI-D-13", `{"A":{"$id":"https://x/a/","$defs":{"B":{"$id":42,"$defs":{"C":{"$id":"c"}}},"D":{"$id":"c"}}}}`, map[string]RuleEvidenceStatus{"OBI-D-10": EvidenceViolated, "OBI-D-13": EvidenceSatisfied}},
+		{"the base for OBI-D-13, compared", `{"A":{"$id":"https://x/a/","$defs":{"B":{"$id":"b/","$defs":{"C":{"$id":"c"}}},"D":{"$id":"b/c"}}}}`, map[string]RuleEvidenceStatus{"OBI-D-13": EvidenceViolated}},
+	} {
+		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":`+tc.schemas+`}`)
+		for rule, want := range tc.want {
+			if report.Evidence[rule] != want {
+				t.Errorf("%s: %s %q, want %q; findings %+v", tc.name, rule, report.Evidence[rule], want, report.Findings)
+			}
 		}
 	}
 }

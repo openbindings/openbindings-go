@@ -33,11 +33,16 @@ Go first; TypeScript alignment is pending for each of these:
   positions.
 - **Uniqueness.** OBI-D-13 counts each `$anchor` and `$dynamicAnchor`
   declaration and compares `$id`s after strict RFC 3986 §5.2 resolution.
+- **Resource boundaries.** A schema with an `$id` member is a boundary
+  whatever the member's value; a pointer from the document resource reaches
+  nothing inside one, for OBI-D-12 and value validation alike.
 - **Version decision.** A text beginning with a byte-order mark declares no
-  version (OBI-T-04).
+  version (OBI-T-04). A report names the release whose text it applies
+  (OBI-T-09).
 - **Value validation.** Patterns are ECMA-262 with the `u` flag (native in
   TypeScript); a match that reaches no answer, and an absent schema, give no
-  verdict (OBI-T-08).
+  verdict (OBI-T-08), as do a resource declaring one name twice, an `$id` of
+  `""` or `#`, and a cycle a `$dynamicRef` closes at run time.
 
 Document validation reports the core's §10.4 conformance conclusion in Go:
 `Interface.Validate(options)` and `ValidateDocument(data, options)` return a

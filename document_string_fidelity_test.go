@@ -39,6 +39,22 @@ func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 	}
 }
 
+// OBI-D-09 is decided on the member the exact scan reads the version from,
+// so a lone surrogate elsewhere leaves an established violation of it
+// established, and a satisfied one satisfied.
+func TestDocumentStrings_LoneSurrogatesLeaveTheVersionDecided(t *testing.T) {
+	for document, want := range map[string]RuleEvidenceStatus{
+		`{"operations":{},"description":"\ud800"}`:                        EvidenceViolated,
+		`{"openbindings":"0.2.0\ud800","operations":{}}`:                  EvidenceViolated,
+		`{"openbindings":"0.2.0","operations":{},"description":"\ud800"}`: EvidenceSatisfied,
+	} {
+		_, report, _ := ValidateDocument([]byte(document), ValidateOptions{})
+		if report.Evidence["OBI-D-09"] != want || report.Evidence["OBI-D-02"] != EvidenceInconclusive {
+			t.Errorf("%s: OBI-D-09 %q, want %q; OBI-D-02 %q", document, report.Evidence["OBI-D-09"], want, report.Evidence["OBI-D-02"])
+		}
+	}
+}
+
 // Member names are compared exactly: a lone surrogate and U+FFFD are two
 // names, and the same lone surrogate twice is a repeated one (OBI-D-01).
 func TestDocumentStrings_NamesCompareExactly(t *testing.T) {

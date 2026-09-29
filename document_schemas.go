@@ -38,6 +38,10 @@ type documentSchemas struct {
 	// identifiers maps each identifier OBI-D-13 compares to where every
 	// schema declaring it sits, in document order.
 	identifiers map[string][]*pathNode
+	// dynamicAnchors maps each name a $dynamicAnchor declares, in any
+	// resource, to where every schema declaring it sits, in document order: a
+	// $dynamicRef naming it may land on any of them at run time.
+	dynamicAnchors map[string][]string
 	// documentDynamicAnchor is true when the document resource declares a
 	// $dynamicAnchor, which the dynamic scope of an evaluation beginning there
 	// holds (§7.2).
@@ -51,17 +55,24 @@ type anchorDeclaration struct {
 	keyword string
 }
 
+// schemaResource is a schema that has an $id member, and what it encloses: a
+// boundary (§7) whatever the member's value.
 type schemaResource struct {
 	location string
 	schema   map[string]any
 	// uri is the absolute URI the resource's $id resolves to, without
 	// fragment; nil when it resolves to none, as a relative $id at an OBI
-	// position does. Such a resource is still a boundary: what lies within it
-	// is its own business (§7), and it can be addressed only from within.
+	// position or an $id that is not a string does. Such a resource is still a
+	// boundary: what lies within it is its own business (§7), and it can be
+	// addressed only from within. An $id empty once its fragment is removed
+	// ("" or "#") resolves to its base, a URI the schema enclosing it already
+	// has.
 	uri *url.URL
-	// anchors maps each plain-name anchor the resource declares, by $anchor or
-	// $dynamicAnchor, to where every schema declaring it sits, in document
-	// order, spelled out only when used. A nested resource's anchors are its
+	// anchors maps each plain-name anchor the resource declares to where the
+	// schema declaring it sits, once per declaration, by $anchor or
+	// $dynamicAnchor, in document order, spelled out only when used: JSON
+	// Schema leaves a name declared more than once in a resource undefined,
+	// even by one schema (Core §8.2.2). A nested resource's anchors are its
 	// own.
 	anchors map[string][]*pathNode
 }
@@ -69,10 +80,11 @@ type schemaResource struct {
 // collectDocumentSchemas walks the schemas a document's generic view contains.
 func collectDocumentSchemas(view any) documentSchemas {
 	d := documentSchemas{
-		at:          map[string]*schemaResource{},
-		resources:   map[string]*schemaResource{},
-		anchors:     map[string][]anchorDeclaration{},
-		identifiers: map[string][]*pathNode{},
+		at:             map[string]*schemaResource{},
+		resources:      map[string]*schemaResource{},
+		anchors:        map[string][]anchorDeclaration{},
+		identifiers:    map[string][]*pathNode{},
+		dynamicAnchors: map[string][]string{},
 	}
 	claimants := map[string][]*schemaResource{}
 	// identifier is the identifier OBI-D-13 compares for the nearest
@@ -84,38 +96,48 @@ func collectDocumentSchemas(view any) documentSchemas {
 		if !ok {
 			return
 		}
-		if raw, isString := object["$id"].(string); isString {
-			identifier = comparableID(raw, identifier)
+		if value, present := object["$id"]; present {
+			// An $id that is not a string is not compared, and neither is a
+			// relative $id within it.
+			raw, isString := value.(string)
+			enclosing := identifier
+			if identifier = ""; isString {
+				identifier = comparableID(raw, enclosing)
+			}
 			if identifier != "" {
 				d.identifiers[identifier] = append(d.identifiers[identifier], at)
 			}
-		}
-		if raw, declares := declaredID(object); declares {
 			var base *url.URL
 			if resource != nil {
 				base = resource.uri
 			}
 			location := at.from(nil)
-			resource = &schemaResource{location: location, schema: object, uri: resolveID(raw, base), anchors: map[string][]*pathNode{}}
+			resource = &schemaResource{location: location, schema: object, anchors: map[string][]*pathNode{}}
+			if isString {
+				resource.uri = resolveID(raw, base)
+			}
 			d.at[location] = resource
 			if resource.uri != nil {
 				key := resource.uri.String()
 				claimants[key] = append(claimants[key], resource)
 			}
 		}
-		if resource != nil {
-			for _, name := range anchorNames(object) {
+		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+			name, isString := object[keyword].(string)
+			if !isString {
+				continue
+			}
+			if resource != nil {
 				resource.anchors[name] = append(resource.anchors[name], at)
+			} else {
+				d.anchors[name] = append(d.anchors[name], anchorDeclaration{at: at, keyword: keyword})
 			}
-		} else {
-			for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
-				if name, isString := object[keyword].(string); isString {
-					d.anchors[name] = append(d.anchors[name], anchorDeclaration{at: at, keyword: keyword})
-				}
+			if keyword == "$dynamicAnchor" {
+				d.dynamicAnchors[name] = append(d.dynamicAnchors[name], at.from(nil))
 			}
-			if _, present := object["$dynamicAnchor"]; present {
-				d.documentDynamicAnchor = true
-			}
+		}
+		if _, present := object["$dynamicAnchor"]; present && resource == nil {
+			d.documentDynamicAnchor = true
 		}
 		forEachDescribedSubschema(object, func(child any, tokens ...string) {
 			walk(child, at.child(tokens...), resource, identifier)
@@ -220,28 +242,6 @@ func (n *pathNode) from(base *pathNode) string {
 	}
 	slices.Reverse(tokens)
 	return jsonpointer.Format(tokens...)
-}
-
-// anchorNames returns the plain-name anchors a schema object declares, by
-// $anchor or $dynamicAnchor, each once: one schema declaring a name both ways
-// declares it at one location.
-func anchorNames(object map[string]any) []string {
-	var names []string
-	for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
-		if name, ok := object[keyword].(string); ok && !slices.Contains(names, name) {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-// declaredID returns the $id a schema object declares a resource by, its
-// fragment removed: an $id that is empty once its fragment is removed ("" or
-// "#") declares nothing, as JSON Schema libraries read it.
-func declaredID(object map[string]any) (string, bool) {
-	raw, _ := object["$id"].(string)
-	id, _, _ := strings.Cut(raw, "#")
-	return id, id != ""
 }
 
 // resolveID returns the absolute URI, without fragment, that a declared $id

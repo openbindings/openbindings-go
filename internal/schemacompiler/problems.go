@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -155,14 +156,16 @@ func relativeText(base []string, problem Problem) string {
 }
 
 // ValueProblem states why v is not a JSON value the validator accepts, or
-// returns "" when it is one: nil, a bool, a string, a number (a valid
-// json.Number, a finite float, or an integer type), or a []any or
-// map[string]any of JSON values. A value outside that domain has no JSON
+// returns "" when it is one: nil, a bool, a string of well-formed UTF-8, a
+// number (a valid json.Number, a finite float, or an integer type), or a
+// []any or map[string]any of JSON values, whose keys are well-formed UTF-8. A value outside that domain has no JSON
 // meaning to validate, so validation reaches no verdict on it.
 func ValueProblem(v any) string {
 	switch v := v.(type) {
-	case nil, bool, string, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return ""
+	case string:
+		return textProblem(v)
 	case json.Number:
 		if !IsNumber(v) {
 			return fmt.Sprintf("json.Number %q is not a JSON number", string(v))
@@ -181,6 +184,9 @@ func ValueProblem(v any) string {
 		return ""
 	case map[string]any:
 		for _, key := range slices.Sorted(maps.Keys(v)) {
+			if problem := textProblem(key); problem != "" {
+				return "a member name: " + problem
+			}
 			if problem := ValueProblem(v[key]); problem != "" {
 				return jsonpointer.Format(key) + ": " + problem
 			}
@@ -196,6 +202,16 @@ func ValueProblem(v any) string {
 func IsNumber(n json.Number) bool {
 	s := string(n)
 	return s != "" && (s[0] == '-' || s[0] >= '0' && s[0] <= '9') && strings.TrimSpace(s) == s && json.Valid([]byte(s))
+}
+
+// textProblem states why a Go string is not the text of a JSON string, or
+// returns "" when it is: JSON text is Unicode (RFC 8259 §8.1), and a Go string
+// that is not well-formed UTF-8 has no Unicode reading.
+func textProblem(s string) string {
+	if !utf8.ValidString(s) {
+		return fmt.Sprintf("%q is not well-formed UTF-8", s)
+	}
+	return ""
 }
 
 func finiteProblem(f float64) string {

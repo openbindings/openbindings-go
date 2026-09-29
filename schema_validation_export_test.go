@@ -260,20 +260,29 @@ func TestValidateOperationInput_FormatIsAnnotationInEveryDialect(t *testing.T) {
 	}
 }
 
-// A same-document pointer into the interior of an embedded resource resolves
-// the references inside it against that resource's base.
-func TestValidateOperationInput_PointerIntoAResourceUsesItsBase(t *testing.T) {
-	iface := mustDecode(t, `{"openbindings":"0.2.0",
-		"x-decoy":{"$defs":{"X":{"type":"number"}}},
-		"$defs":{"X":{"type":"number"}},
-		"schemas":{"T":{"$id":"https://e.com/T","$defs":{"X":{"type":"string"}},"properties":{"a":{"$ref":"#/$defs/X"}}}},
-		"operations":{"op":{"input":{"$ref":"#/schemas/T/properties/a"}}}}`)
+// A reference by the resource's URI into the interior of an embedded resource
+// resolves the references inside it against that resource's base. A pointer
+// from the document resource reaches nothing inside it (OBI-D-12), so a graph
+// holding one reaches no verdict.
+func TestValidateOperationInput_PointerIntoAResource(t *testing.T) {
+	document := func(ref string) *Interface {
+		return mustDecode(t, `{"openbindings":"0.2.0",
+			"x-decoy":{"$defs":{"X":{"type":"number"}}},
+			"$defs":{"X":{"type":"number"}},
+			"schemas":{"T":{"$id":"https://e.com/T","$defs":{"X":{"type":"string"}},"properties":{"a":{"$ref":"#/$defs/X"}}}},
+			"operations":{"op":{"input":{"$ref":"`+ref+`"}}}}`)
+	}
+	iface := document("https://e.com/T#/properties/a")
 	if err := ValidateOperationInput("text", iface, "op"); err != nil {
 		t.Fatalf("the reference inside the resource resolves against the resource: %v", err)
 	}
 	var mismatch *SchemaValidationError
 	if err := ValidateOperationInput(5, iface, "op"); !errors.As(err, &mismatch) {
 		t.Fatalf("want a mismatch against the resource's own definition, got %v", err)
+	}
+	var unavailable *SchemaGraphUnavailableError
+	if err := ValidateOperationInput("text", document("#/schemas/T/properties/a"), "op"); !errors.As(err, &unavailable) {
+		t.Fatalf("a pointer from the document resource into the resource: want no verdict, got %v", err)
 	}
 }
 

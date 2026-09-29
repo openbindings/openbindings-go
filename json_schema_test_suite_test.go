@@ -108,7 +108,7 @@ func asResource(t *testing.T, schema json.RawMessage) json.RawMessage {
 	if json.Unmarshal(schema, &object) != nil || object == nil {
 		return schema
 	}
-	if _, declares := declaredID(object); declares {
+	if id, _ := object["$id"].(string); id != "" && !strings.HasPrefix(id, "#") {
 		return schema
 	}
 	object["$id"] = suiteURL

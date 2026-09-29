@@ -68,12 +68,12 @@ type Finding struct {
 // violation is therefore not conformance: a caller reporting a result must use
 // Conclusion, and must not present an undetermined result as conformant.
 type ValidationReport struct {
-	// Version is the specification version whose rules the report applies,
-	// and to which its rule identifiers belong (§10): the version the
-	// document declares when this SDK supports it, and otherwise
-	// AuthoringVersion, under whose rules a document declaring no version
-	// this SDK can interpret is judged (§8.1). A report ConcludeConformance
-	// builds from evidence alone carries no Version.
+	// Version is the release of the specification whose text the report
+	// applies, and to which its rule identifiers belong (§10, OBI-T-09):
+	// 0.2.0, as its working draft until that version is released, whatever
+	// release of the 0.2 line the document declares, since the patch number
+	// a document declares carries no meaning (§8.1). A report
+	// ConcludeConformance builds from evidence alone carries no Version.
 	Version    string
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per rule considered. Reports from
@@ -250,15 +250,4 @@ func formatFinding(path, message, rule string) string {
 		return fmt.Sprintf("%s (%s)", message, rule)
 	}
 	return fmt.Sprintf("%s: %s (%s)", path, message, rule)
-}
-
-// reportVersion is the specification version whose rules judge a document
-// declaring declared: that version when this SDK supports it, and otherwise
-// AuthoringVersion (§8.1). A declared version the SDK refuses is never
-// judged, so it never reaches here.
-func reportVersion(declared string) string {
-	if supported, _ := IsSupportedVersion(declared); supported {
-		return declared
-	}
-	return AuthoringVersion
 }

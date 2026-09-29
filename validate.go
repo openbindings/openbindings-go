@@ -51,7 +51,7 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 	if err != nil {
 		return ValidationReport{}, err
 	}
-	c := ruleChecks{version: reportVersion(i.OpenBindings)}
+	c := ruleChecks{version: appliedRelease}
 	c.inconclusive("OBI-D-01", "", "decided on the exact input bytes, which a host object no longer carries; ValidateDocument decides it")
 	checkDocument(&c, view, options)
 	return c.conclude()
@@ -68,9 +68,9 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // reported as that rule's
 // violation, with every other rule inconclusive, since which of its values
 // the document holds is not established. A document holding a string that
-// escapes a lone UTF-16 surrogate has OBI-D-01 decided and every other rule
-// inconclusive; one nesting deeper than encoding/json reads (10000 levels)
-// has OBI-D-09 decided as well, on the version it declares.
+// escapes a lone UTF-16 surrogate, or nesting deeper than encoding/json reads
+// (10000 levels), has OBI-D-01 and OBI-D-09 decided, OBI-D-09 on the version
+// it declares, and every other rule inconclusive.
 //
 // A document declaring a well-formed version outside the supported set is not
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
@@ -79,14 +79,12 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // options gives the capabilities validation does not carry itself, as for
 // Interface.Validate.
 func ValidateDocument(data []byte, options ValidateOptions) (*Interface, ValidationReport, error) {
-	var c ruleChecks
+	c := ruleChecks{version: appliedRelease}
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
 		if refusal := inputVersionRefusal(data); refusal != nil {
 			return nil, ValidationReport{}, refusal
 		}
-		declared, _ := declaredVersion(data)
-		c.version = reportVersion(declared)
 		var lone *loneSurrogateError
 		switch {
 		case errors.Is(err, errNestingLimit):
@@ -98,8 +96,11 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 			checkDeclaredVersion(&c, versionView(data))
 		case errors.As(err, &lone):
 			// OBI-D-01 is decided: the input is UTF-8 JSON with no repeated
-			// name. The other rules read values this SDK cannot carry.
-			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01")
+			// name. So is OBI-D-09, on the member the exact scan reads the
+			// version from. The other rules read values this SDK cannot
+			// carry.
+			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01", "OBI-D-09")
+			checkDeclaredVersion(&c, versionView(data))
 		default:
 			c.findings = append(c.findings, d01Violation(err))
 			c.inconclusiveExcept("OBI-D-01 refuses the input, so this rule was not checked", "OBI-D-01")
@@ -110,8 +111,6 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 	if refusal := declaredVersionRefusal(view); refusal != nil {
 		return nil, ValidationReport{}, refusal
 	}
-	declared, _ := view.(map[string]any)["openbindings"].(string)
-	c.version = reportVersion(declared)
 	checkDocument(&c, view, options)
 	report, verr := c.conclude()
 	var iface Interface
@@ -448,8 +447,9 @@ func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool
 			} else if !hasScheme {
 				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("%q must be an absolute URI", id))
 			}
-			// An $id empty once its fragment is removed declares no resource.
-			_, inResource = declaredID(s)
+			// A schema with an $id member is a boundary, whatever the
+			// member's value (§7).
+			inResource = true
 		}
 	}
 
@@ -517,54 +517,68 @@ func (d *documentCheck) checkDocumentReference(path, holder, keyword, ref string
 
 // checkFragmentTarget applies OBI-D-12's target clause to a same-document
 // reference in the document resource: it identifies a schema at an OBI
-// position, never the OBI document, a value that is not a schema, or a
-// location inside a schema that declares $id, whose contents a reference
-// reaches through that $id. A schemas entry declaring $id is itself at an OBI
-// position.
+// position, never the OBI document or a value that is not a schema. The
+// resolver has already refused a location inside a schema with an $id member;
+// a schemas entry declaring $id is itself at an OBI position.
 func (d *documentCheck) checkFragmentTarget(path, ref, target string) {
-	var enclosing *schemaResource
-	if end := strings.LastIndexByte(target, '/'); end >= 0 {
-		enclosing = d.schemas.resourceAt(target[:end])
-	}
 	value, _ := jsonpointer.Resolve(d.view, target)
 	_, isObject := value.(map[string]any)
 	_, isBoolean := value.(bool)
 	switch {
 	case target == "":
 		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q names the OBI document itself, which is not a schema", ref))
-	case enclosing != nil:
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q resolves into the schema resource declared at %s, whose contents a reference reaches through its $id", ref, enclosing.location))
-	case !isOBIPosition(target) || !isObject && !isBoolean:
+	case !isOBIPosition(d.view, target) || !isObject && !isBoolean:
 		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q resolves to %s, which is not a schema at an OBI position", ref, target))
 	}
 }
 
-// isOBIPosition reports whether a location is an OBI position by its path:
-// an operation's input or output, an entry of schemas, or reached from one
-// through the keywords the 2020-12 meta-schema validates as schemas, the
-// legacy definitions and dependencies included (§7).
-func isOBIPosition(location string) bool {
+// isOBIPosition reports whether a location in a document's generic view is an
+// OBI position (§7): an operation's input or output, an entry of schemas, or
+// reached from one through the keywords the 2020-12 meta-schema validates as
+// schemas, the legacy definitions and dependencies included. Each step is
+// read in what the view holds, so a keyword holding a map or an array of
+// schemas leads to an entry only when its value is an object or an array:
+// allOf holding an object has no entries.
+func isOBIPosition(view any, location string) bool {
 	tokens, _ := jsonpointer.Parse(location)
-	var i int
+	root, _ := view.(map[string]any)
+	var node any
+	present := false
 	switch {
 	case len(tokens) >= 2 && tokens[0] == "schemas":
-		i = 2
+		schemas, _ := root["schemas"].(map[string]any)
+		node, present = schemas[tokens[1]]
+		tokens = tokens[2:]
 	case len(tokens) >= 3 && tokens[0] == "operations" && (tokens[2] == "input" || tokens[2] == "output"):
-		i = 3
-	default:
-		return false
+		operations, _ := root["operations"].(map[string]any)
+		operation, _ := operations[tokens[1]].(map[string]any)
+		node, present = operation[tokens[2]]
+		tokens = tokens[3:]
 	}
-	for i < len(tokens) {
-		switch keyword := tokens[i]; {
-		case schemaMapKeywords[keyword], describedMapKeywords[keyword], arraySchemaKeywords[keyword]:
-			i += 2
+	for present && len(tokens) > 0 {
+		schema, _ := node.(map[string]any)
+		value, has := schema[tokens[0]]
+		switch keyword := tokens[0]; {
+		case !has:
+			return false
 		case singleSchemaKeywords[keyword]:
-			i++
+			node, tokens = value, tokens[1:]
+			continue
+		case len(tokens) < 2:
+			return false
+		case schemaMapKeywords[keyword], describedMapKeywords[keyword]:
+			entries, _ := value.(map[string]any)
+			node, present = entries[tokens[1]]
+		case arraySchemaKeywords[keyword]:
+			_, isArray := value.([]any)
+			node, present = jsonpointer.Resolve(value, jsonpointer.Format(tokens[1]))
+			present = present && isArray
 		default:
 			return false
 		}
+		tokens = tokens[2:]
 	}
-	return i == len(tokens)
+	return present
 }
 
 // describeLocation names a document location for a message.

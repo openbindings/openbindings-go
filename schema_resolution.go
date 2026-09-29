@@ -59,9 +59,10 @@ const (
 // which has no URI anything can name, a same-document reference is looked up
 // as OBI-D-12 looks it up (§7.2): the empty reference and an empty fragment
 // name the OBI document itself; any other fragment is percent-decoded once,
-// and then one beginning with / is a JSON Pointer from the document root and
-// any other a plain name the document resource declares. A relative
-// reference there has no base. Inside a resource, a fragment resolves within
+// and then one beginning with / is a JSON Pointer from the document root,
+// which reaches no location inside a schema with an $id member, and any other
+// a plain name the document resource declares. A relative reference there has
+// no base. Inside a resource, a fragment resolves within
 // it, and any other reference against its URI; an absolute URI names the
 // embedded resource declaring it, a carried meta-schema, or a resource
 // outside the document.
@@ -132,6 +133,13 @@ func (d documentSchemas) resolveFragment(resource *schemaResource, fragment stri
 		location := root + jsonpointer.Format(tokens...)
 		if _, ok := jsonpointer.Resolve(view, location); !ok {
 			return reference{origin: unresolved, exists: missing, within: resource, why: "does not resolve within " + describeBase(resource)}
+		}
+		if end := strings.LastIndexByte(location, '/'); resource == nil && end >= 0 {
+			// What a schema with an $id member encloses is reached through
+			// that $id (§7.2).
+			if enclosing := d.resourceAt(location[:end]); enclosing != nil {
+				return reference{origin: unresolved, exists: missing, why: fmt.Sprintf("resolves into the schema resource declared at %s, whose contents a reference reaches through its $id", enclosing.location)}
+			}
 		}
 		return reference{origin: inDocument, location: location, exists: exists, within: resource}
 	}

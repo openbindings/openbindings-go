@@ -51,7 +51,8 @@ document's schemas: an example is an author claim, which
 Patterns are ECMA-262 regular expressions with Unicode semantics: a strict
 grammar check refuses what the `u` flag refuses, and
 [`dlclark/regexp2`](https://github.com/dlclark/regexp2) evaluates the rest,
-with `.`, `\b`, and `\B` rewritten to ECMA-262's meaning. To exercise the core conformance corpus, check out the
+with `.`, `\b`, `\B`, and escaped surrogate pairs rewritten to ECMA-262's
+meaning. To exercise the core conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
 point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
 
@@ -60,9 +61,11 @@ than the JSON decoder's 10,000-level limit prevents full document inspection.
 OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Contract
 validation reports schema graph unavailability for schemas the evaluator
 cannot safely evaluate, including patterns that are not ECMA-262 regular
-expressions with Unicode semantics, Unicode property escapes, pattern matches
-that exceed `schemacompiler.PatternMatchTimeout`, relevant numbers beyond its
-limits, non-advancing reference cycles, and a `$dynamicRef` when the document
+expressions with Unicode semantics, Unicode property escapes, backreferences to
+a group inside a quantified atom, pattern matches that exceed
+`schemacompiler.PatternMatchTimeout`, relevant numbers beyond its limits,
+counts beyond `math.MaxInt`, non-advancing reference cycles (including one a
+`$dynamicRef` closes at run time), and a `$dynamicRef` when the document
 resource declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle
 does not reproduce. An
 inconclusive rule or unavailable graph is never reported as success or

@@ -3,6 +3,7 @@ package openbindings
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -84,12 +85,14 @@ func firstOf(a, b string) string {
 // are not implicit edges, nor are then and else without a sibling if. An
 // applicable reference can still reach any of those schema positions (§5.2).
 // With if present, both branches count regardless of which an instance takes.
-// References follow $ref and $dynamicRef to their static targets.
-// A dynamic reference may land elsewhere at run time, but only on a
-// $dynamicAnchor of a resource the graph enters, which the schema library
-// compiles whenever it compiles that resource: one reaching outside the
-// document makes the compile fail, so the graph then gets no verdict without
-// core finding it. $recursiveRef and dependencies are not 2020-12 keywords and
+// References follow $ref and $dynamicRef to their static targets, and a
+// $dynamicRef naming a plain name also to every schema in the document that
+// declares the name as a $dynamicAnchor: at run time it may land on any of
+// them the dynamic scope holds, so a cycle only that landing closes is found.
+// It lands on no other: only on a $dynamicAnchor of a resource the graph
+// enters, which the schema library compiles whenever it compiles that
+// resource, and one reaching outside the document makes the compile fail, so
+// the graph then gets no verdict without core finding it. $recursiveRef and dependencies are not 2020-12 keywords and
 // are not followed.
 type schemaGraph struct {
 	// id identifies a schema as compiled from a root: the same location
@@ -286,6 +289,7 @@ func (o *operationSchemas) examine(at, root string) schemaNode {
 		}
 		if keyword == "$dynamicRef" {
 			node.dynamicRef, node.local.dynamicRef = true, true
+			node.inPlaceTo = append(node.inPlaceTo, o.schemas.dynamicAnchors[plainName(ref)]...)
 		}
 		switch target := o.schemas.resolve(ref, at, o.view); target.origin {
 		case inDocument:
@@ -463,13 +467,21 @@ func rootOf(location string) string {
 	return location
 }
 
+// plainName returns the plain name a reference's fragment is, once
+// percent-decoded, or "" when its fragment is empty, a JSON Pointer, or
+// absent.
+func plainName(ref string) string {
+	parsed, err := url.Parse(ref)
+	if err != nil || strings.HasPrefix(parsed.Fragment, "/") {
+		return ""
+	}
+	return parsed.Fragment
+}
+
 // identityKeyword returns the first keyword by which a schema object declares
 // a resource or an anchor, or "".
 func identityKeyword(object map[string]any) string {
-	if _, declares := declaredID(object); declares {
-		return "$id"
-	}
-	for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+	for _, keyword := range []string{"$id", "$anchor", "$dynamicAnchor"} {
 		if _, present := object[keyword]; present {
 			return keyword
 		}

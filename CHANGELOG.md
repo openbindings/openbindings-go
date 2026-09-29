@@ -25,17 +25,39 @@
   - OBI-D-13 counts each `$anchor` and `$dynamicAnchor` declaration of a
     plain name, and compares `$id`s after strict RFC 3986 §5.2 resolution and
     empty-fragment removal, with no other normalization.
+  - A schema with an `$id` member is a resource boundary whatever the
+    member's value (§7): the document-resource rules stop there, its anchors
+    are its own, a pointer from the document resource reaches nothing inside
+    it (for OBI-D-12 and value validation alike), and OBI-D-13 compares no
+    relative `$id` below one that is not compared. OBI-D-12 reads OBI
+    positions from the document's structure, so `allOf` holding an object has
+    no entries.
   - OBI-D-06 accepts the 2020-12 dialect URI with an empty fragment.
   - A text beginning with a byte-order mark declares no version, so it is
-    never refused (OBI-T-04).
+    never refused (OBI-T-04). A lone escaped surrogate leaves OBI-D-09
+    decided on the declared version.
+  - `ValidationReport.Version` names the release whose text the SDK applies
+    (0.2.0), not the patch release a document declares (OBI-T-09).
   - Value validation reads patterns as ECMA-262 regular expressions with
     Unicode semantics (OBI-T-08): a strict grammar check refuses what the `u`
     flag refuses, and `dlclark/regexp2` evaluates the rest, with `.`, `\b`,
-    and `\B` rewritten to ECMA-262's meaning. A pattern the check refuses, a
-    Unicode property escape, or a match that exceeds
-    `schemacompiler.PatternMatchTimeout` gives no verdict, as does a graph
-    holding a `$dynamicRef` when the document resource declares a
-    `$dynamicAnchor`. `format` stays an annotation.
+    `\B`, and escaped surrogate pairs rewritten to ECMA-262's meaning and
+    each match anchored behind a lazy prefix, which avoids a start-position
+    bug in the engine's unanchored search. A pattern the check refuses, a
+    Unicode property escape, a backreference to a group inside a quantified
+    atom (whose capture ECMA-262 resets each iteration and the engine keeps),
+    or a match that exceeds `schemacompiler.PatternMatchTimeout` gives no
+    verdict, and a timed-out match leaves OBI-D-02 or OBI-D-10 inconclusive.
+    A graph holding a `$dynamicRef` gives no verdict when the document
+    resource declares a `$dynamicAnchor`, or when a landing on any
+    `$dynamicAnchor` of its name closes a cycle that never advances. A graph
+    reaching a resource that declares one name twice, even by one schema, or
+    an `$id` of `""` or `#`, which resolves to a URI what encloses it
+    already has, gives no verdict. `format` stays an annotation.
+  - Value validation refuses a string or member name that is not well-formed
+    UTF-8, gives no verdict on a count keyword beyond `math.MaxInt`, which the
+    schema library would overflow, and picks number stand-ins that avoid
+    every Go numeric type in the value.
   - The duplicate OBI-T-02 unknown-field advisory and its
     `ValidationReport.Diagnostics` field are removed; unknown unprefixed
     fields remain OBI-D-02 violations.

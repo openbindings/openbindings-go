@@ -19,6 +19,13 @@ const SupportedVersions = "0.2.x"
 // it; a producer sets Interface.OpenBindings to it.
 const AuthoringVersion = "0.2.0"
 
+// appliedRelease is the release of the specification whose text this SDK
+// applies, which a validation report names (OBI-T-09): 0.2.0, as its working
+// draft until that version is released. A document declaring any release of
+// the 0.2 line is judged under it, since the patch number a document declares
+// carries no meaning (§8.1).
+const appliedRelease = "0.2.0"
+
 // supportedPrereleases lists the prerelease versions this SDK supports, each
 // named explicitly: a prerelease is a draft, and supporting its release does
 // not imply supporting it (§8.1). There are none; naming one means stating it

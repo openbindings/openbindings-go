@@ -57,7 +57,7 @@ func (s *CompiledSchema) Validate(value any) error {
 	if schemacompiler.MatchFailures() != failures {
 		// A pattern match reached no answer, which the library read as a
 		// mismatch (§10.4).
-		return &SchemaGraphUnavailableError{Cause: fmt.Errorf("a pattern match reached no answer within this SDK's limits (%v per match)", schemacompiler.PatternMatchTimeout)}
+		return &SchemaGraphUnavailableError{Cause: schemacompiler.ErrMatchUnanswered}
 	}
 	return schemaValidationError(err, checked)
 }

@@ -89,8 +89,8 @@ func ipLiteral(s string) bool {
 		if dot < 2 || dot == len(s)-1 {
 			return false
 		}
-		for _, c := range s[1:dot] {
-			if !isHex(byte(c)) {
+		for i := 1; i < dot; i++ {
+			if !isHex(s[i]) {
 				return false
 			}
 		}

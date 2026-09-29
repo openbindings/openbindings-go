@@ -71,6 +71,10 @@ var matchFailures atomic.Uint64
 // conservative, never wrong.
 func MatchFailures() uint64 { return matchFailures.Load() }
 
+// ErrMatchUnanswered is the error for a validation during which a pattern
+// match reached no answer (MatchFailures): it reaches no verdict.
+var ErrMatchUnanswered = fmt.Errorf("a pattern match reached no answer within this SDK's limits (%v per match, or the engine's backtracking limit)", PatternMatchTimeout)
+
 // CompilePattern compiles a pattern as an ECMA-262 regular expression with
 // Unicode semantics (the u flag). It returns an error for a pattern that is
 // not one, which has no meaning to evaluate, and for one this SDK does not
