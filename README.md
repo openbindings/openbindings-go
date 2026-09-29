@@ -31,14 +31,14 @@ specification version its rule identifiers belong to.
 No document rule requires an implementation or publication for a source's
 kind. Core carries source and binding `content` without interpreting it.
 `Interface.Validate(options)` does the same for a document already in
-memory, where OBI-D-01 is inconclusive because a host object no longer
-carries the exact input bytes. The rules judge the JSON a document is, never
+memory, judging its serialization, which is what a claim about a value in
+memory is about (§10); to judge a file, pass its bytes to `ValidateDocument`.
+The rules judge the JSON a document is, never
 its typed decoding, so a document the typed model cannot carry is still judged
 in full, with two exceptions the SDK cannot read in full: a document holding a
 string that escapes a lone UTF-16 surrogate, and input nested deeper than
-encoding/json reads (10000 levels). For both, OBI-D-01 is decided; for deep
-input, OBI-D-09 is also decided from the declared version. The other rules
-are inconclusive. Both return a `*ValidationError` beside the
+encoding/json reads (10000 levels). For both, OBI-D-01 is decided, and so
+is OBI-D-09, from the declared version. The other rules are inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).

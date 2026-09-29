@@ -39,20 +39,29 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_HostObjectCannotDecideD01(t *testing.T) {
-	iface, err := ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"tasks.create":{}}}`))
+// A claim about a value in memory is a claim about its serialization (§10),
+// which the model writes only when it decodes back unchanged, so a host
+// object decides OBI-D-01 and a well-formed one concludes conformant, whether
+// decoded or built in code.
+func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
+	decoded, err := ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"tasks.create":{}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := iface.Validate(ValidateOptions{})
-	if err != nil {
-		t.Fatal(err)
+	built := Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"tasks.create": {}}}
+	for name, iface := range map[string]Interface{"decoded": *decoded, "built": built} {
+		report, err := iface.Validate(ValidateOptions{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if report.Conclusion != ConclusionConformant || report.Evidence["OBI-D-01"] != EvidenceSatisfied || len(report.Inconclusive) != 0 {
+			t.Fatalf("%s: conclusion %s, OBI-D-01 %s, inconclusive %v", name, report.Conclusion, report.Evidence["OBI-D-01"], report.Inconclusive)
+		}
 	}
-	if report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("conclusion = %s, want conformance-undetermined", report.Conclusion)
-	}
-	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
-		t.Fatalf("inconclusive = %v, want only OBI-D-01", report.Inconclusive)
+	// A value with no JSON serialization gets no report.
+	broken := Interface{OpenBindings: "0.2.0", Name: Present("\xff"), Operations: map[string]Operation{}}
+	if report, err := broken.Validate(ValidateOptions{}); err == nil || report.Evidence != nil {
+		t.Fatalf("a string that is not UTF-8: report %+v, err %v", report, err)
 	}
 }
 
@@ -88,8 +97,8 @@ func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
 	}
 }
 
-// hostReport validates a document as a host object, whose report leaves
-// OBI-D-01 inconclusive: only the exact bytes decide it.
+// hostReport validates a document as a host object, judging its
+// serialization.
 func hostReport(t *testing.T, document string) (ValidationReport, error) {
 	t.Helper()
 	var iface Interface
@@ -99,21 +108,12 @@ func hostReport(t *testing.T, document string) (ValidationReport, error) {
 	return iface.Validate(ValidateOptions{})
 }
 
-func TestConcludeConformance_CallerEvidenceCompletesAReport(t *testing.T) {
-	report, err := hostReport(t, documentWithBinding)
-	if err != nil || !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
-		t.Fatalf("err %v, inconclusive = %v, want only OBI-D-01", err, report.Inconclusive)
-	}
-	// A caller that checked the exact bytes itself supplies the evidence a
-	// host object cannot.
-	report.Evidence["OBI-D-01"] = EvidenceSatisfied
-	if got := ConcludeConformance(report.Evidence).Conclusion; got != ConclusionConformant {
-		t.Fatalf("conclusion with OBI-D-01 decided = %s, want conformant", got)
-	}
-}
-
 func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t *testing.T) {
+	// A schema nested past the meta-schema check's depth limit leaves
+	// OBI-D-10 inconclusive (§10.4).
+	deep := strings.Repeat(`{"not":`, schemaDepthLimit+1) + `{}` + strings.Repeat(`}`, schemaDepthLimit+1)
 	document := strings.Replace(documentWithBinding, `"operation": "tasks.create", "source"`, `"operation": "tasks.missing", "source"`, 1)
+	document = strings.Replace(document, `"operations": {"tasks.create": {}}`, `"operations": {"tasks.create": {}}, "schemas": {"Deep": `+deep+`}`, 1)
 	report, err := hostReport(t, document)
 	if !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant {
 		t.Fatalf("conclusion = %s, want non-conformant", report.Conclusion)
@@ -121,8 +121,8 @@ func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t 
 	if report.Evidence["OBI-D-07"] != EvidenceViolated {
 		t.Fatalf("OBI-D-07 = %s, want violated", report.Evidence["OBI-D-07"])
 	}
-	if report.Evidence["OBI-D-01"] != EvidenceInconclusive {
-		t.Fatalf("OBI-D-01 = %s, want inconclusive and retained", report.Evidence["OBI-D-01"])
+	if report.Evidence["OBI-D-10"] != EvidenceInconclusive {
+		t.Fatalf("OBI-D-10 = %s, want inconclusive and retained", report.Evidence["OBI-D-10"])
 	}
 	violations := report.Violations()
 	if len(violations) != 1 || violations[0].Path != `/bindings/tasks.create.api/operation` {

@@ -38,6 +38,10 @@
     decided on the declared version.
   - `ValidationReport.Version` names the release whose text the SDK applies
     (0.2.0), not the patch release a document declares (OBI-T-09).
+  - `Interface.Validate` decides OBI-D-01 on the host object's
+    serialization, which is what a claim about a value in memory is about
+    (§10), so a well-formed host object can conclude conformant. It judges
+    the value, not the bytes it may have been decoded from.
   - Value validation reads patterns as ECMA-262 regular expressions with
     Unicode semantics (OBI-T-08): a strict grammar check refuses what the `u`
     flag refuses, and `dlclark/regexp2` evaluates the rest, with `.`, `\b`,

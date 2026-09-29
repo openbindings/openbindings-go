@@ -36,6 +36,8 @@ Go first; TypeScript alignment is pending for each of these:
 - **Resource boundaries.** A schema with an `$id` member is a boundary
   whatever the member's value; a pointer from the document resource reaches
   nothing inside one, for OBI-D-12 and value validation alike.
+- **Host objects.** Validating a document in memory decides OBI-D-01 on its
+  serialization (§10), so it can conclude conformant.
 - **Version decision.** A text beginning with a byte-order mark declares no
   version (OBI-T-04). A report names the release whose text it applies
   (OBI-T-09).

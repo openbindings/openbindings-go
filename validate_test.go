@@ -3,7 +3,6 @@ package openbindings
 import (
 	"encoding/json"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -188,8 +187,8 @@ func TestInterfaceValidate_SourceAndBindingContentAreTheKindifications(t *testin
 	if err != nil {
 		t.Fatalf("source and binding content are the binding specification's, got %v", err)
 	}
-	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
-		t.Fatalf("only OBI-D-01, decided on bytes, may be inconclusive for a host object, got %v", report.Inconclusive)
+	if report.Conclusion != ConclusionConformant {
+		t.Fatalf("every rule is decided for a host object: conclusion %s, inconclusive %v", report.Conclusion, report.Inconclusive)
 	}
 }
 
@@ -518,8 +517,8 @@ func TestInterfaceValidate_ExamplesAreAuthorClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a false example is not a document-rule violation, got %v", err)
 	}
-	if !reflect.DeepEqual(report.Inconclusive, []string{"OBI-D-01"}) {
-		t.Fatalf("only OBI-D-01, decided on bytes, may be inconclusive for a host object, got %v", report.Inconclusive)
+	if report.Conclusion != ConclusionConformant {
+		t.Fatalf("every rule is decided for a host object: conclusion %s, inconclusive %v", report.Conclusion, report.Inconclusive)
 	}
 }
 

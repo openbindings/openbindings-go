@@ -23,9 +23,13 @@ type ValidateOptions struct{}
 // and the §10.4 conformance conclusion.
 //
 // The rules judge the document the host object encodes, exactly as
-// ValidateDocument judges bytes. OBI-D-01 is always inconclusive here,
-// because it is decided on the exact input bytes, which a host object no
-// longer carries; ValidateDocument decides it.
+// ValidateDocument judges bytes: a claim about a value in memory is a claim
+// about its serialization as UTF-8 JSON text with no byte-order mark, each
+// number written at its exact value (§10). That text is the encoding Validate
+// judges, which the model writes only when it decodes back unchanged, so
+// OBI-D-01 holds whenever there is a report. The report is about the value,
+// not about any bytes it was decoded from: to judge a file, pass its bytes to
+// ValidateDocument.
 //
 // The error is a *ValidationError listing every established violation, so
 // `if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil`
@@ -52,7 +56,6 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 		return ValidationReport{}, err
 	}
 	c := ruleChecks{version: appliedRelease}
-	c.inconclusive("OBI-D-01", "", "decided on the exact input bytes, which a host object no longer carries; ValidateDocument decides it")
 	checkDocument(&c, view, options)
 	return c.conclude()
 }
