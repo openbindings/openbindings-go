@@ -18,9 +18,9 @@ its environment, independently of protocol. See the
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
-This implementation targets the pruned Core 0.2 draft on
-`codex/prune-core-tool-policy` at `0e2a8d5`, whose conformance corpus it
-passes.
+This implementation targets the Core 0.2 working draft as
+[openbindings/spec#129](https://github.com/openbindings/spec/pull/129) leaves
+it on the spec's `release/0.2` branch, whose conformance corpus it passes.
 
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of

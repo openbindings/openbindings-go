@@ -6,7 +6,7 @@
 
 ### Changed
 
-- **Aligned with the 0.2 Core draft at spec `0e2a8d5` (breaking, pre-1.0).**
+- **Aligned with the 0.2 Core draft of openbindings/spec#129 (breaking, pre-1.0).**
   - Rule identifiers follow the draft: OBI-D-07 and OBI-D-08 are binding
     operation and source keys, OBI-D-09 the declared version, OBI-D-10
     meta-schema validity, OBI-D-11 dependency operation keys, and OBI-D-13

@@ -19,7 +19,7 @@ support. Go accepts unknown kinds while validating a document and gives
 source and binding content no Core interpretation. The former
 `bindingSpec`/`bindingSpecs` names are unknown fields, not aliases.
 
-The core alignment with spec draft `0e2a8d5` (2026-09-29) is established in
+The core alignment with the spec draft of openbindings/spec#129 (2026-09-29) is established in
 Go first; TypeScript alignment is pending for each of these:
 
 - **Model.** `idempotent` is a binding member; a dependency carries an
