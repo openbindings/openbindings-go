@@ -110,9 +110,9 @@ func TestReachability_Acceptance(t *testing.T) {
 		document: `{"openbindings":"0.2.0","schemas":{"A":{"anyOf":[{"dependencies":{"x":{"$ref":"#/schemas/A"}}},{"type":"object"}]}},"operations":{"op":{"input":{"$ref":"#/schemas/A"}}}}`,
 		values:   map[string]string{`{"x":1}`: "valid"},
 	}, {
-		// §5.2 counts then without if, and contentSchema, as reachable, so a
-		// pattern there that Go's regexp cannot compile leaves the graph
-		// unevaluable.
+		// These positions are not validation edges. The schema library still
+		// compiles the whole containing resource, so its regexp limitation
+		// leaves validation without a verdict.
 		name:     "an uncompilable pattern under then without if",
 		document: `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"pattern":"(?=a)"}}}}}`,
 		values:   map[string]string{`"s"`: "unavailable"},

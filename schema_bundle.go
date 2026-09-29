@@ -317,7 +317,7 @@ func (o *operationSchemas) rootProblem(at string) string {
 // limitProblem states a resource limit a root meets, or returns "":
 // nesting past schemaDepthLimit, or a number the schema library reads beyond
 // the numeric limits of schema evaluation, which the library crashes or
-// stalls on (§10.5). The library reads a number that is a keyword's value, or
+// stalls on (§10.4). The library reads a number that is a keyword's value, or
 // in const or enum; one elsewhere, as in default, is only carried. It is
 // found once per root, before the graph is walked into it, so the walk never
 // does work that grows with a depth the limit refuses.

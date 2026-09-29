@@ -11,7 +11,15 @@ This record covers the core. The layers the Go repository no longer carries
 are preserved with their parity record on the `legacy/pre-core-rebuild`
 branch; each rebuilt layer brings its parity entries back with it.
 
-Document validation reports the core's §10.5 conformance conclusion in Go:
+SDK-01 aligns Go with spec draft `ccfe0b6`: `Source.Kind` and
+`DependencyEntry.Kinds` carry the new JSON names exactly, the embedded schema
+is copied from that revision, and `DependencyEntry.AllowsKind` implements the
+Core any-of constraint with exact string equality independent of runtime
+support. Go accepts unknown kinds while validating a document and gives
+source and binding content no Core interpretation. The former
+`bindingSpec`/`bindingSpecs` names are unknown fields, not aliases.
+
+Document validation reports the core's §10.4 conformance conclusion in Go:
 `Interface.Validate(options)` and `ValidateDocument(data, options)` return a
 `ValidationReport` with per-rule evidence, findings, and OBI-T-02
 diagnostics. TypeScript applies OBI-T-09 to caller evidence through
@@ -31,7 +39,9 @@ each of these observable behaviors:
   present; a resource limit is inconclusive, never a violation.
 - **Operation-contract validation.** The OBI root is not a schema; success
   needs the complete statically reachable graph, available and well-formed,
-  whatever branches an evaluator would skip; `format` never asserts, in any
+  whatever branches an evaluator would skip. An unreferenced `$defs` entry is
+  not part of that graph, while document well-formedness still checks it;
+  `format` never asserts, in any
   dialect; a built-in meta-schema is available; an `$id` that names no one
   embedded schema leaves only the graphs that reach it unavailable; a
   version outside the supported set is refused; an alias names its
@@ -41,16 +51,16 @@ each of these observable behaviors:
 |---|---|---|
 | validate a document, with its conformance conclusion | `Interface.Validate(options)` / `ValidateDocument(data, options)` | `validateInterface(...)` (report pending) |
 | apply OBI-T-09 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
+| compare a dependency's declared kind constraint | `DependencyEntry.AllowsKind(...)` | pending |
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |
 
-Parity means the same behavior at the OpenBindings boundary: exact
-`bindingSpec` support, resolution and refusal decisions, input/output values,
-stream cardinality and ordering, pre-dispatch context challenges,
-classification, cancellation effects, and conformance outcomes. It does not
-mean identical class/type casing, goroutines versus promises and async
-iterables, stack traces, incidental error prose, caches, connection pools, or
-other details that the OpenBindings contract does not expose.
+Core parity means the same document fields and validation outcomes, exact
+kind comparisons, version refusals, operation resolution, schema graph
+outcomes, and conformance conclusions. Kind-specific support and invocation
+behavior belong to later modules and are not established by this record.
+Parity does not require identical type casing, incidental error prose, or
+internal caches.
 
 Names intentionally remain recognizable across languages whenever idiom
 allows: `ValidateDocument` corresponds to `validateInterface`,

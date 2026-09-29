@@ -21,7 +21,7 @@ type ValidateOptions struct{}
 
 // Validate checks a document already in memory against every document rule
 // this SDK can decide. It reports the per-rule evidence, the located findings,
-// OBI-T-02 diagnostics, and the §10.5 conformance conclusion.
+// OBI-T-02 diagnostics, and the §10.4 conformance conclusion.
 //
 // The rules judge the document the host object encodes, exactly as
 // ValidateDocument judges bytes. OBI-D-01 is always inconclusive here,
@@ -37,7 +37,7 @@ type ValidateOptions struct{}
 // knowledge: a source's and a binding's content are the binding
 // specification's, and no core rule judges them. OBI-D-13 is inconclusive
 // for the subschemas a schema nests deeper than 256 levels, where the
-// meta-schema check meets a resource limit (§10.5).
+// meta-schema check meets a resource limit (§10.4).
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (OBI-T-04). A host
@@ -94,7 +94,7 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 			// OBI-D-01 is decided on the input, which the exact scan reads at
 			// any depth, and so is OBI-D-11, on the member the scan reads the
 			// version from. The other rules read the decoded document, which
-			// meets a resource limit and is no evidence either way (§10.5).
+			// meets a resource limit and is no evidence either way (§10.4).
 			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-D-01", "OBI-D-11")
 			checkDeclaredVersion(&c, versionView(data))
 		case errors.As(err, &lone):

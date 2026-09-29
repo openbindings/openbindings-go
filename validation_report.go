@@ -6,7 +6,7 @@ import (
 )
 
 // RuleEvidenceStatus records a validator's evidence for one applicable or
-// considered OBI-D rule. The statuses mirror §10.5 of the core specification.
+// considered OBI-D rule. The statuses mirror §10.4 of the core specification.
 type RuleEvidenceStatus string
 
 const (
@@ -72,7 +72,7 @@ type Diagnostic struct {
 }
 
 // ValidationReport is a validator's account of one document under the core
-// specification's §10.5 vocabulary.
+// specification's §10.4 vocabulary.
 //
 // Conclusion is conformant only when every document rule was decided and none
 // was violated; any established violation makes it non-conformant; otherwise

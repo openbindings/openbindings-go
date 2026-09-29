@@ -4,6 +4,23 @@
 
 > A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
 
+### Changed
+
+- **Core now uses kinds (breaking, pre-1.0).** `Source.BindingSpec` and its
+  `bindingSpec` JSON member become `Source.Kind` and `kind`;
+  `DependencyEntry.BindingSpecs` and `bindingSpecs` become `Kinds` and `kinds`.
+  The embedded Core schema now requires a nonempty source kind and, when
+  present, a nonempty list of unique nonempty dependency kinds. Former JSON
+  names are unknown fields, not compatibility aliases.
+- **Kind matching is explicit.** `DependencyEntry.AllowsKind` applies the
+  Core §5.5 any-of constraint by exact string equality, independent of which
+  kinds a runtime supports. Core validation accepts unsupported kinds and
+  does not interpret source or binding content.
+- **Current Core draft alignment.** The Go corpus now runs against the
+  `ccfe0b6` spec draft, including the distinct-string kind cases, the
+  OBI-D-10 unreferenced `$defs` case, and version-scoped rule identifiers.
+  Documentation uses the current §10.4 conformance conclusion section.
+
 ### Fixed
 
 - **One operation's evidence no longer depends on another's, and the same

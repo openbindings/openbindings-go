@@ -167,15 +167,15 @@ func containsProblem(err error, want string) bool {
 // value its source's binding specification defines (§5.3): a source without
 // content, source and binding content of every JSON type, and anything within
 // them, relative addresses and $ref members included, break no core rule.
-func TestInterfaceValidate_SourceAndBindingContentAreTheBindingSpecifications(t *testing.T) {
+func TestInterfaceValidate_SourceAndBindingContentAreTheKindifications(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"a": {}},
 		Sources: map[string]Source{
-			"bare":     {BindingSpec: "x@1"},
-			"null":     {BindingSpec: "x@1", Content: json.RawMessage(`null`)},
-			"relative": {BindingSpec: "x@1", Content: json.RawMessage(`{"location":"./openapi.json","$ref":"#anchor"}`)},
-			"text":     {BindingSpec: "x@1", Content: json.RawMessage(`"openapi: 3.1.0"`)},
+			"bare":     {Kind: "x@1"},
+			"null":     {Kind: "x@1", Content: json.RawMessage(`null`)},
+			"relative": {Kind: "x@1", Content: json.RawMessage(`{"location":"./openapi.json","$ref":"#anchor"}`)},
+			"text":     {Kind: "x@1", Content: json.RawMessage(`"openapi: 3.1.0"`)},
 		},
 		Bindings: map[string]BindingEntry{
 			"a.bare":     {Operation: "a", Source: "bare"},
@@ -462,7 +462,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1"},
+			"api": {Kind: "openapi@3.1"},
 		},
 		Bindings: map[string]BindingEntry{
 			"nonexistent.api": {
@@ -717,9 +717,9 @@ func TestParseDocument_RemovedTransformMembersViolateOBI_D_02(t *testing.T) {
 	// define, so each makes the document non-conformant (§12).
 	for member, doc := range map[string]string{
 		"transforms":      `{"openbindings":"0.2.0","operations":{"op":{}},"transforms":{"t":"$.payload"}}`,
-		"selector":        `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","selector":"#/paths/~1op/get"}}}`,
-		"inputTransform":  `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","inputTransform":"$"}}}`,
-		"outputTransform": `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"bindingSpec":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","outputTransform":{"$ref":"#/transforms/t"}}}}`,
+		"selector":        `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"kind":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","selector":"#/paths/~1op/get"}}}`,
+		"inputTransform":  `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"kind":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","inputTransform":"$"}}}`,
+		"outputTransform": `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"kind":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","outputTransform":{"$ref":"#/transforms/t"}}}}`,
 	} {
 		var violation *ValidationError
 		if _, err := ParseDocument([]byte(doc)); !errors.As(err, &violation) || !strings.Contains(err.Error(), member) || !strings.Contains(err.Error(), "OBI-D-02") {
@@ -1015,10 +1015,10 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 
 	emptyConstraint := valid
 	emptyConstraint.Dependencies = map[string]DependencyEntry{
-		"customer.delivery": {Operation: "deliver", BindingSpecs: []string{}},
+		"customer.delivery": {Operation: "deliver", Kinds: []string{}},
 	}
 	if _, err := emptyConstraint.Validate(ValidateOptions{}); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
-		t.Fatalf("empty bindingSpecs validation = %v, want OBI-D-02", err)
+		t.Fatalf("empty kinds validation = %v, want OBI-D-02", err)
 	}
 
 	missingOperation := valid
@@ -1083,7 +1083,7 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsAreDiagnosed(t *test
 		},
 		Sources: map[string]Source{
 			"src": {
-				BindingSpec: "openapi@3.1",
+				Kind: "openapi@3.1",
 				LosslessFields: LosslessFields{
 					Unknown: map[string]json.RawMessage{
 						"unknownField": json.RawMessage(`{"value":"unknownFieldValue"}`),
@@ -1135,7 +1135,7 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsAreDiagnosed(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {BindingSpec: "openapi@3.1"},
+			"api": {Kind: "openapi@3.1"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {

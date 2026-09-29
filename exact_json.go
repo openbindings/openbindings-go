@@ -21,7 +21,7 @@ const jsonNestingLimit = 10000
 
 // errNestingLimit is the error for input nested deeper than jsonNestingLimit:
 // a resource limit met, which is no evidence about any rule but OBI-D-01
-// (§10.5).
+// (§10.4).
 var errNestingLimit = fmt.Errorf("nested deeper than the decoder reads (%d levels)", jsonNestingLimit)
 
 // errUnexpectedEnd is the syntax error for input that ends inside a value.
@@ -31,7 +31,7 @@ var errUnexpectedEnd = errors.New("unexpected end of JSON input")
 // (a lone \uD800, say). RFC 8259 admits it, so it breaks no document rule,
 // but a Go string cannot hold it and encoding/json would replace it with
 // U+FFFD, altering the document; the document model does not carry it
-// (§10.5: a capability this SDK lacks).
+// (§10.4: a capability this SDK lacks).
 type loneSurrogateError struct {
 	// location is the JSON Pointer of the string value holding it, or of the
 	// object whose member name holds it.

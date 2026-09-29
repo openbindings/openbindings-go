@@ -119,19 +119,17 @@ func (o Operation) MarshalJSON() ([]byte, error) {
 	return encodeObject(operationMembers(o), o.LosslessFields)
 }
 
-// Source is a binding specification's identifier and the content that
-// specification defines (§5.4).
+// Source carries a kind and optional content read under that kind (§5.4).
 type Source struct {
-	// BindingSpec is the binding-specification identifier governing this
-	// source: exact and opaque (§6: never dereferenced, never range-matched).
-	BindingSpec string `json:"bindingSpec"`
-	// Content is what the source carries for its binding specification: any
-	// JSON value, carried as raw JSON because member presence is distinct from
+	// Kind is an exact, opaque, non-empty token used to select an
+	// interpretation of this source and its bindings (§6). Core never
+	// dereferences it or infers relationships between distinct strings.
+	Kind string `json:"kind"`
+	// Content is any JSON value carried under the source's kind, kept as raw
+	// JSON because member presence is distinct from
 	// value (§5.4). Nil means the member is absent; the bytes `null` are a
 	// present null. An empty, non-nil json.RawMessage holds no value and
-	// encodes as absent. The core gives content no meaning; the governing
-	// binding specification defines whether it may be absent, which values it
-	// accepts, and what they mean.
+	// encodes as absent. Core gives content no meaning.
 	Content     json.RawMessage `json:"content,omitempty"`
 	Description *string         `json:"description,omitempty"`
 
@@ -155,15 +153,13 @@ func (s Source) MarshalJSON() ([]byte, error) {
 type BindingEntry struct {
 	Operation string `json:"operation"`
 	Source    string `json:"source"`
-	// Content is what the binding carries for its source's binding
-	// specification: any JSON value, typically which target realizes the
-	// operation and how values are adapted to it (§5.3). It is carried as raw
-	// JSON because member presence is distinct from value. Nil means the
-	// member is absent, which the governing binding specification gives its
-	// own meaning; the bytes `null` are a present null. An empty, non-nil
-	// json.RawMessage holds no value and encodes as absent. The core gives
-	// binding content no meaning; the source's binding specification defines
-	// which values it accepts and what they mean.
+	// Content is what the binding carries under its source's kind: any JSON
+	// value, possibly identifying a target or describing value adaptation
+	// (§5.3). It is carried as raw JSON because member presence is distinct
+	// from value. Nil means the
+	// member is absent; the bytes `null` are a present null. An empty, non-nil
+	// json.RawMessage holds no value and encodes as absent. Core gives
+	// binding content no meaning.
 	Content json.RawMessage `json:"content,omitempty"`
 	// Preference is the author's signed integer preference among bindings of
 	// the same operation, nil when absent (no preference, not zero).
@@ -191,13 +187,13 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 }
 
 // DependencyEntry names an operation contract consumed at a local
-// consumption point (§5.5). BindingSpecs, when present, is an unordered any-of list
-// of exact binding-specification identifiers accepted at that point. A nil
-// slice leaves the dependency unconstrained by binding family. Operation is
+// consumption point (§5.5). Kinds, when present, is an unordered any-of list
+// of exact, opaque kind strings accepted at that point. A nil slice leaves
+// the dependency unconstrained by kind. Operation is
 // the canonical key of an operation in the same document.
 type DependencyEntry struct {
-	Operation    string   `json:"operation"`
-	BindingSpecs []string `json:"bindingSpecs,omitzero"`
+	Operation string   `json:"operation"`
+	Kinds     []string `json:"kinds,omitzero"`
 
 	LosslessFields
 }
@@ -212,6 +208,23 @@ func (d *DependencyEntry) decodeVerified(b []byte) error {
 
 func (d DependencyEntry) MarshalJSON() ([]byte, error) {
 	return encodeObject(dependencyEntryMembers(d), d.LosslessFields)
+}
+
+// AllowsKind reports whether a source kind meets this dependency's declared
+// kind constraint (§5.5). An omitted Kinds list imposes no constraint.
+// Comparison is exact and independent of whether a processor supports the
+// kind. This only checks the kind constraint; it says nothing about operation
+// compatibility, provider selection, or whether a binding can be used.
+func (d DependencyEntry) AllowsKind(kind string) bool {
+	if d.Kinds == nil {
+		return true
+	}
+	for _, acceptable := range d.Kinds {
+		if kind == acceptable {
+			return true
+		}
+	}
+	return false
 }
 
 // Interface is the OpenBindings document shape (§5). OpenBindings is the

@@ -33,7 +33,7 @@
 //
 //	iface, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
 //	// report.Conclusion is conformant, non-conformant, or
-//	// conformance-undetermined (§10.5); err is a *ValidationError when a
+//	// conformance-undetermined (§10.4); err is a *ValidationError when a
 //	// violation was established, and a *VersionRefusalError when the declared
 //	// version is outside the supported set.
 //

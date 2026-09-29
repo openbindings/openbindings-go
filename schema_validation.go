@@ -65,7 +65,7 @@ func init() {
 // The meta-schema validator's work grows faster than linearly with a
 // schema's depth, so the subschemas a schema nests deeper than
 // schemaDepthLimit are not checked, which leaves the rule inconclusive there
-// (§10.5). The rest of the schema is checked all the same: the meta-schemas
+// (§10.4). The rest of the schema is checked all the same: the meta-schemas
 // judge each subschema by what it holds, whatever its subschemas hold.
 func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
@@ -192,7 +192,7 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 	if verr := compiledOBISchema.Validate(checked.Value); verr != nil {
 		problems, mismatch := checked.Outcome(verr)
 		if !mismatch {
-			// An exceeded resource limit is not evidence of violation (§10.5).
+			// An exceeded resource limit is not evidence of violation (§10.4).
 			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
 			return
 		}
@@ -361,7 +361,7 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // part of it; otherwise a *SchemaGraphUnavailableError says why. A graph is
 // unavailable when it reaches a resource the document does not embed, has a
 // reference that does not resolve, or holds a schema that is not well-formed.
-// It cannot be evaluated here when it meets one of this SDK's limits (§10.5):
+// It cannot be evaluated here when it meets one of this SDK's limits (§10.4):
 // a schema nesting subschemas deeper than 256 levels, a number beyond the
 // numeric limits of schema evaluation where the schema library reads one (a
 // comparison or count keyword's value, or const or enum), a pattern Go's
