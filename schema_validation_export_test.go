@@ -424,10 +424,10 @@ func TestValidateOperationInput_ProgresslessCyclesAreUnavailable(t *testing.T) {
 	}
 }
 
-// An embedded $id is the embedded schema's, whatever URI it is (§7). The
-// schema backend resolves a meta-schema's URI to the meta-schema it carries,
-// so a graph reaching an embedded schema that declares one is unavailable;
-// graphs that do not reach it are unaffected.
+// An embedded $id is the embedded schema's, whatever URI it is (§7), a
+// meta-schema's included: a reference to it reaches the embedded schema, not
+// the meta-schema the schema library carries, and graphs that do not reach it
+// are unaffected.
 func TestValidateOperationInput_EmbeddedIDsNameTheEmbeddedSchema(t *testing.T) {
 	document := func(id string) *Interface {
 		return mustDecode(t, `{"openbindings":"0.2.0","schemas":{"X":{"$id":"`+id+`","type":"number"}},
@@ -483,9 +483,9 @@ func TestValidateOperationInput_NestedRelativeIDsResolveOnce(t *testing.T) {
 	}
 }
 
-// Only the meta-schemas the SDK carries are reserved; any other URI under
-// json-schema.org is an ordinary embedded $id.
-func TestValidateOperationInput_OnlyBuiltInMetaSchemaIDsAreReserved(t *testing.T) {
+// A URI under json-schema.org that names no carried meta-schema is an
+// ordinary embedded $id.
+func TestValidateOperationInput_JSONSchemaOrgIDsAreOrdinary(t *testing.T) {
 	iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"S":{"$id":"https://json-schema.org/example/custom","type":"string"}},
 		"operations":{"op":{"input":{"$ref":"https://json-schema.org/example/custom"}}}}`)
 	if err := ValidateOperationInput("x", iface, "op"); err != nil {

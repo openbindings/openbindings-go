@@ -207,7 +207,13 @@ func TestValidateOperationInput_CarriedNumbersAreNeverRead(t *testing.T) {
 // valid nor a mismatch.
 func TestValidateOperationInput_ValuesThatAreNotJSON(t *testing.T) {
 	document := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"maxLength":1,"pattern":"^.$"}}}}`)
+	cyclicMap := map[string]any{}
+	cyclicMap["self"] = cyclicMap
+	cyclicSlice := []any{nil}
+	cyclicSlice[0] = cyclicSlice
 	for _, value := range []any{
+		cyclicMap,
+		cyclicSlice,
 		"\xff",
 		map[string]any{"\xff": "x"},
 		[]any{"a", "b\xc3"},
@@ -216,7 +222,7 @@ func TestValidateOperationInput_ValuesThatAreNotJSON(t *testing.T) {
 	} {
 		err := ValidateOperationInput(value, document, "op")
 		if err == nil || errors.As(err, new(*SchemaValidationError)) || !strings.Contains(err.Error(), "not a JSON value") {
-			t.Errorf("%#v: %v", value, err)
+			t.Errorf("%.40v: %v", value, err)
 		}
 	}
 }

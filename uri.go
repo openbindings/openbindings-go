@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"bytes"
 	"net/netip"
 	"regexp"
 	"strings"
@@ -233,9 +234,11 @@ func mergePaths(base uriParts, path string) string {
 }
 
 // removeDotSegmentsStrict removes the "." and ".." segments of a path by the
-// algorithm of RFC 3986 §5.2.4.
+// algorithm of RFC 3986 §5.2.4, in time proportional to the path's length:
+// removing the last segment of the output shortens it in place, scanning back
+// only over the segment removed.
 func removeDotSegmentsStrict(input string) string {
-	var output strings.Builder
+	output := make([]byte, 0, len(input))
 	for input != "" {
 		switch {
 		case strings.HasPrefix(input, "../"):
@@ -252,11 +255,7 @@ func removeDotSegmentsStrict(input string) string {
 			} else {
 				input = input[3:]
 			}
-			out := output.String()
-			output.Reset()
-			if i := strings.LastIndexByte(out, '/'); i >= 0 {
-				output.WriteString(out[:i])
-			}
+			output = output[:max(bytes.LastIndexByte(output, '/'), 0)]
 		case input == "." || input == "..":
 			input = ""
 		default:
@@ -266,9 +265,9 @@ func removeDotSegmentsStrict(input string) string {
 			} else {
 				end++
 			}
-			output.WriteString(input[:end])
+			output = append(output, input[:end]...)
 			input = input[end:]
 		}
 	}
-	return output.String()
+	return string(output)
 }

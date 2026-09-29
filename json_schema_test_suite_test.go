@@ -18,17 +18,17 @@ import (
 // document, a fragment outside every resource would mean a location in the
 // document instead (§7).
 //
-// The bundle the SDK gives the schema library must not change an answer: each
-// verdict is the suite's, or, where the library itself answers otherwise when
-// given the schema alone, the library's. A case gets no verdict only when its
-// schema references one of the suite's remote schemas, which no document
-// here embeds.
+// Each verdict is the suite's: neither the bundle the SDK gives the schema
+// library nor the library itself may change an answer. A failure names what
+// the library answers given the schema alone, to tell the two apart. A case
+// gets no verdict only when its schema references one of the suite's remote
+// schemas, which no document here embeds.
 func TestJSONSchemaTestSuite(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("testdata", "json-schema-test-suite", "*.json"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no suite files: %v", err)
 	}
-	var cases, agreed, libraryDiffers, refused int
+	var cases, agreed, refused int
 	for _, file := range files {
 		data, err := os.ReadFile(file)
 		if err != nil {
@@ -67,16 +67,13 @@ func TestJSONSchemaTestSuite(t *testing.T) {
 					}
 				case ours == want:
 					agreed++
-				case ours == library:
-					libraryDiffers++
-					t.Logf("the library answers %s given the schema alone, as here: %s", library, name)
 				default:
 					t.Errorf("%s: got %s; the suite says %s, the library alone %s", name, ours, want, library)
 				}
 			}
 		}
 	}
-	t.Logf("%d cases: %d as the suite says, %d as the library alone answers, %d without a verdict", cases, agreed, libraryDiffers, refused)
+	t.Logf("%d cases: %d as the suite says, %d without a verdict", cases, agreed, refused)
 }
 
 // compileStandalone compiles a suite schema as the only resource of an SDK

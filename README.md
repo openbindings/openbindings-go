@@ -62,12 +62,19 @@ OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Contract
 validation reports schema graph unavailability for schemas the evaluator
 cannot safely evaluate, including patterns that are not ECMA-262 regular
 expressions with Unicode semantics, Unicode property escapes, backreferences to
-a group inside a quantified atom, pattern matches that exceed
-`schemacompiler.PatternMatchTimeout`, relevant numbers beyond its limits,
-counts beyond `math.MaxInt`, non-advancing reference cycles (including one a
-`$dynamicRef` closes at run time), and a `$dynamicRef` when the document
-resource declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle
-does not reproduce. An
+a group inside a quantified atom, patterns nesting groups deeper than 256
+levels, pattern matches that exceed `schemacompiler.PatternMatchTimeout`,
+relevant numbers beyond its limits, counts beyond `math.MaxInt`, references
+that are not URI-references, non-advancing reference cycles (including one a
+`$dynamicRef` closes at run time), a `$dynamicRef` when the document resource
+declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle does not
+reproduce, and a reference into a JSON Schema meta-schema's interior, or to a
+whole one when the document declares a `$dynamicAnchor` named `meta`. Before
+evaluating a value, validation counts the schema applications the graph can
+make on it, which the schema library does not bound: past 4,194,304 (2^22)
+it reaches no verdict, so a small graph that applies a schema twice at each
+of many levels cannot run for hours. The schema library's own compile takes
+time that grows faster than the number of schemas a graph uses. An
 inconclusive rule or unavailable graph is never reported as success or
 unqualified conformance. The Core corpus does not exercise every behavior in
 OBI-T-01: the exact kind comparison has direct Go tests, while Core has no

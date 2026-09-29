@@ -7,6 +7,7 @@ import (
 	"maps"
 	"math"
 	"math/big"
+	"reflect"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -161,6 +162,35 @@ func relativeText(base []string, problem Problem) string {
 // []any or map[string]any of JSON values, whose keys are well-formed UTF-8. A value outside that domain has no JSON
 // meaning to validate, so validation reaches no verdict on it.
 func ValueProblem(v any) string {
+	return valueProblem(v, map[container]bool{})
+}
+
+// container identifies a map or a non-empty slice by its backing storage.
+type container struct {
+	at     uintptr
+	length int
+}
+
+// valueProblem is ValueProblem, with open holding the containers being
+// walked: a value holding itself is no JSON value, and walking it would never
+// end.
+func valueProblem(v any, open map[container]bool) string {
+	var held container
+	switch v := v.(type) {
+	case map[string]any:
+		held = container{at: reflect.ValueOf(v).Pointer(), length: -1}
+	case []any:
+		if len(v) > 0 {
+			held = container{at: reflect.ValueOf(v).Pointer(), length: len(v)}
+		}
+	}
+	if held.at != 0 {
+		if open[held] {
+			return "holds itself; a JSON value holds no cycle"
+		}
+		open[held] = true
+		defer delete(open, held)
+	}
 	switch v := v.(type) {
 	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return ""
@@ -177,7 +207,7 @@ func ValueProblem(v any) string {
 		return finiteProblem(v)
 	case []any:
 		for i, item := range v {
-			if problem := ValueProblem(item); problem != "" {
+			if problem := valueProblem(item, open); problem != "" {
 				return fmt.Sprintf("/%d: %s", i, problem)
 			}
 		}
@@ -187,7 +217,7 @@ func ValueProblem(v any) string {
 			if problem := textProblem(key); problem != "" {
 				return "a member name: " + problem
 			}
-			if problem := ValueProblem(v[key]); problem != "" {
+			if problem := valueProblem(v[key], open); problem != "" {
 				return jsonpointer.Format(key) + ": " + problem
 			}
 		}

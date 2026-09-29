@@ -28,8 +28,9 @@ import (
 //     Pointer from the OBI document root, points into the bundle instead. A
 //     reference inside a resource that declares $id is left as written, and
 //     the library resolves it by that $id, as it would any schema's.
-//   - dependencies, $recursiveRef, and $recursiveAnchor are dropped: 2020-12
-//     does not evaluate them, though the library still would.
+//   - dependencies, $recursiveRef, $recursiveAnchor, and additionalItems are
+//     dropped: 2020-12 does not evaluate them, though the library still would,
+//     or would collect identifiers within them.
 //   - Nothing else changes, so the library meets exactly the schemas the
 //     document holds.
 //
@@ -38,8 +39,10 @@ import (
 const bundleURI = "https://openbindings.invalid/document"
 
 // strictlyExcluded are keywords the library evaluates in a 2020-12 schema
-// though 2020-12 does not define them.
-var strictlyExcluded = map[string]bool{"dependencies": true, "$recursiveRef": true, "$recursiveAnchor": true}
+// though 2020-12 does not define them, or whose value it reads as schemas,
+// collecting the identifiers they declare: additionalItems, whose value
+// 2020-12 reads as data, like any unknown keyword's.
+var strictlyExcluded = map[string]bool{"dependencies": true, "$recursiveRef": true, "$recursiveAnchor": true, "additionalItems": true}
 
 // copiedAt returns the location a schema is copied at: the OBI schema position
 // holding it, whole, or the schema itself when it lies elsewhere in the
@@ -90,7 +93,9 @@ func (c *copyGraph) analyze(o *operationSchemas) {
 	*c = copyGraph{id: map[string]int{}}
 	var queue []string
 	for _, node := range o.graph.nodes {
-		queue = append(queue, node.root)
+		if !node.hub {
+			queue = append(queue, node.root)
+		}
 	}
 	for len(queue) > 0 {
 		root := queue[0]
@@ -634,37 +639,6 @@ type compiled struct {
 	err    error
 }
 
-// compile compiles the schemas at each start, analyzed and found evaluable.
-// They are compiled from one bundle and one compiler, so a schema several
-// graphs share is compiled once. The bundle holds every copy whose own graph
-// of copies is fit to hand the library; a start that does not compile from it
-// is compiled again from a bundle of its own graph, so another graph's schemas
-// never cost it its verdict.
-func (o *operationSchemas) compile(starts []string) map[string]compiled {
-	out := map[string]compiled{}
-	fit := map[string]bool{}
-	for i, node := range o.copies.nodes {
-		if o.copies.closure[i] == "" && copiedAt(node.location) == node.location {
-			fit[node.location] = true
-		}
-	}
-	shared := o.bundle(outermost(fit))
-	c := schemacompiler.New()
-	sharedErr := c.AddResource(bundleURI, shared.document)
-	for _, start := range starts {
-		if sharedErr == nil {
-			if address, ok := shared.address(start); ok {
-				if schema, err := c.Compile(address); err == nil {
-					out[start] = compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
-					continue
-				}
-			}
-		}
-		out[start] = o.compileAlone(start)
-	}
-	return out
-}
-
 // compileAlone compiles the schema at start from a bundle of the copies its
 // root reaches.
 func (o *operationSchemas) compileAlone(start string) compiled {
@@ -678,7 +652,7 @@ func (o *operationSchemas) compileAlone(start string) compiled {
 	if err != nil {
 		return compiled{err: own.describe(err)}
 	}
-	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
+	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start), cost: o.costGraph(start)}}
 }
 
 // comparison states where what the library compiles for start compares a

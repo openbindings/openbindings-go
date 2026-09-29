@@ -298,14 +298,20 @@ func metaSchemaCacheKey(schema map[string]any) string {
 // a schema nesting subschemas deeper than 256 levels, a number beyond the
 // numeric limits of schema evaluation where the schema library reads one (a
 // comparison or count keyword's value, or const or enum), a pattern that is
-// not an ECMA-262 regular expression with Unicode semantics or holds a Unicode
-// property escape, a cycle of references that never advances into the value,
-// or a $dynamicRef when the document resource declares a $dynamicAnchor,
-// whose dynamic scope the bundle does not reproduce. The schema library is given the schemas the
-// graph uses as a JSON Schema 2020-12 bundle, never the OBI document itself,
-// and evaluates strictly as 2020-12: dependencies, $recursiveRef, and
-// $recursiveAnchor constrain nothing. A JSON Schema meta-schema is outside the
-// document but available: the schema library carries it. A document is
+// not an ECMA-262 regular expression with Unicode semantics, holds a Unicode
+// property escape or a backreference to a group within a quantified atom, or
+// nests groups deeper than 256 levels, a cycle of references that never
+// advances into the value (including one a $dynamicRef closes at run time), a
+// reference that is not a URI-reference, or a $dynamicRef when the document
+// resource declares a $dynamicAnchor, whose dynamic scope the bundle does not
+// reproduce. The schema library is given the schemas the graph uses as a JSON
+// Schema 2020-12 bundle, never the OBI document itself, and evaluates strictly
+// as 2020-12: dependencies, $recursiveRef, $recursiveAnchor, and
+// additionalItems constrain nothing. A JSON Schema meta-schema is outside the
+// document but available as a whole, since the schema library carries it,
+// unless the document declares a $dynamicAnchor named "meta", which could
+// capture the meta-schema's own $dynamicRef; a reference into its interior is
+// not, as this SDK does not analyze the meta-schemas' contents. A document is
 // interpreted only under a supported version: one declaring a well-formed
 // version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
 // no valid version returns an error (OBI-D-09). Any other error means nothing

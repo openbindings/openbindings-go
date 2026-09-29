@@ -69,15 +69,18 @@
 // string member, or a binding preference that is not an integer number in
 // range. ValidateDocument still judges such a document in full, except input
 // OBI-D-01 refuses (not UTF-8, or repeating a member name), where which values
-// the document holds is not established; a document holding a lone
-// surrogate, where it decides OBI-D-01 and leaves the other rules
-// inconclusive; and input nested deeper than encoding/json reads (10000
-// levels), where it decides OBI-D-01, and OBI-D-09 on the version it reads
-// from the bytes, and leaves the other rules inconclusive.
+// the document holds is not established; and a document holding a lone
+// surrogate, or input nested deeper than encoding/json reads (10000 levels),
+// where it decides OBI-D-01, and OBI-D-09 on the version it reads from the
+// bytes, and leaves the other rules inconclusive.
 //
 // Encoding refuses the same inexact bytes in the members the model carries as
-// raw JSON (example values, source and binding content, and kept members), so the model
-// encodes only what it would decode back unchanged.
+// raw JSON (example values, source and binding content, and kept members),
+// and a string that is not UTF-8 or a value that holds itself anywhere, so
+// what it writes is the value the model holds. It does not refuse what
+// decoding refuses for the typed members, such as a null where the model types
+// a value or a preference out of range; Validate reports those as the
+// violations they are.
 //
 // A typed field alone states its member: an Unknown or Extensions entry
 // named like a typed member is never encoded, so a nil field is absent.

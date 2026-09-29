@@ -62,6 +62,26 @@
     UTF-8, gives no verdict on a count keyword beyond `math.MaxInt`, which the
     schema library would overflow, and picks number stand-ins that avoid
     every Go numeric type in the value.
+  - Value validation gives no verdict on a reference into a JSON Schema
+    meta-schema's interior, a graph reaching a meta-schema when the document
+    declares a `$dynamicAnchor` named `meta`, which can capture the
+    meta-schema's own `$dynamicRef`, or a reference that is not a
+    URI-reference. `additionalItems` is data, as in 2020-12: the schema
+    library no longer collects identifiers within it.
+  - Validation counts, before evaluating a value, the schema applications the
+    graph can make on it, and past 2^22 gives no verdict, so a small acyclic
+    graph that applies a schema twice at each level no longer runs for
+    exponential time. `then` and `else`, and the places a `$dynamicRef` may
+    land, count once.
+  - A host value or object that holds itself returns an error instead of
+    exhausting the stack. Dynamic references to many anchors of one name,
+    references to a URI many schemas declare, `$id`s of many dot segments,
+    references at every level of a deep schema, and nested quantified
+    pattern groups take work in proportion to their size; patterns nest
+    groups at most 256 levels. `$id` and reference resolution use the SDK's
+    strict RFC 3986 resolver throughout.
+  - The JSON Schema Test Suite check requires the suite's verdict, or no
+    verdict, for every case.
   - The duplicate OBI-T-02 unknown-field advisory and its
     `ValidationReport.Diagnostics` field are removed; unknown unprefixed
     fields remain OBI-D-02 violations.

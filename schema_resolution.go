@@ -65,9 +65,21 @@ const (
 // no base. Inside a resource, a fragment resolves within
 // it, and any other reference against its URI; an absolute URI names the
 // embedded resource declaring it, a carried meta-schema, or a resource
-// outside the document.
+// outside the document. A reference into a meta-schema's interior is not
+// followed: this SDK does not analyze the meta-schemas the library carries.
+// A reference that is not a URI-reference (RFC 3986 §4.1) resolves to
+// nothing: JSON Schema requires one (Core §8.2.3.1) and leaves any other
+// undefined.
 func (d documentSchemas) resolve(ref, holder string, view any) reference {
-	resource := d.resourceAt(holder)
+	return d.resolveFrom(ref, d.resourceAt(holder), view)
+}
+
+// resolveFrom resolves a reference held in a resource, or in the document
+// resource when resource is nil, as resolve does.
+func (d documentSchemas) resolveFrom(ref string, resource *schemaResource, view any) reference {
+	if wellFormed, _ := uriReference(ref); !wellFormed {
+		return reference{origin: unresolved, exists: undecided, why: "is not a URI-reference (RFC 3986 §4.1), which JSON Schema leaves undefined"}
+	}
 	if ref == "" {
 		return d.resolveFragment(resource, "", view)
 	}
@@ -91,25 +103,26 @@ func (d documentSchemas) resolve(ref, holder string, view any) reference {
 	if !parsed.IsAbs() && base == nil {
 		return reference{origin: unresolved, exists: undecided, why: "is relative, with no base to resolve against"}
 	}
-	target := resolveURI(base, parsed)
+	target, resolved := resolveURI(base, parsed)
+	if !resolved {
+		return reference{origin: unresolved, exists: undecided, why: "does not resolve to a URL"}
+	}
 	fragment := target.Fragment
 	target.Fragment, target.RawFragment = "", ""
 	id := target.String()
 	if why, isAmbiguous := d.ambiguous[id]; isAmbiguous {
-		// The reference names no one schema; when its fragment resolves within
-		// none of the schemas declaring the URI, it resolves nowhere.
-		r := reference{origin: ambiguous, uri: id, exists: missing, why: "names no one embedded schema: " + why}
-		for _, claimant := range d.claimants[id] {
-			if within := d.resolveFragment(claimant, fragment, view); within.exists != missing {
-				r.exists = undecided
-			}
-		}
-		return r
+		// The reference names no one schema. OBI-D-12 never asks whether it
+		// exists: it judges only same-document references in the document
+		// resource, which name no URI.
+		return reference{origin: ambiguous, uri: id, exists: undecided, why: "names no one embedded schema: " + why}
 	}
 	if embedded, isEmbedded := d.resources[id]; isEmbedded {
 		return d.resolveFragment(embedded, fragment, view)
 	}
 	if isBuiltInMetaSchema(id) {
+		if fragment != "" {
+			return reference{origin: unresolved, exists: undecided, why: fmt.Sprintf("reaches inside the meta-schema %s, whose contents this SDK does not analyze", id)}
+		}
 		return reference{origin: inMetaSchema, uri: id, exists: undecided}
 	}
 	return reference{origin: outside, uri: id, exists: undecided}

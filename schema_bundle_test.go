@@ -159,6 +159,20 @@ func TestSchemaGraphEdgeCases(t *testing.T) {
 			map[string]any{"a": 1.0}, "valid"},
 		{"a pattern that is not an ECMA-262 regular expression with Unicode semantics",
 			`"S":{"type":"string","pattern":"^a{"}`, `{"$ref":"#/schemas/S"}`, "a", "unavailable"},
+		{"a reference inside a meta-schema",
+			`"S":true`, `{"$ref":"https://json-schema.org/draft/2020-12/meta/validation#/$defs"}`, 0, "unavailable"},
+		{"a meta-schema whose #meta the document resource captures",
+			`"M":{"$dynamicAnchor":"meta","type":"string"}`, `{"$ref":"https://json-schema.org/draft/2020-12/schema"}`,
+			map[string]any{"properties": map[string]any{"a": map[string]any{}}}, "unavailable"},
+		{"a meta-schema whose #meta a resource captures",
+			`"S":true`, `{"$id":"urn:A","$dynamicAnchor":"meta","not":{"$ref":"https://json-schema.org/draft/2020-12/schema"}}`, 0, "unavailable"},
+		{"additionalItems is data, as in 2020-12",
+			`"T":{"$id":"https://ex.test/t","$dynamicAnchor":"node","type":"object","properties":{"c":{"$dynamicRef":"#node"}}}`,
+			`{"$ref":"https://ex.test/t","additionalItems":{"$dynamicAnchor":"node","type":"string"}}`,
+			map[string]any{"c": map[string]any{"c": map[string]any{}}}, "valid"},
+		{"a reference that is not a URI-reference",
+			`"T":{"$id":"https://ex.test/task","type":"object","properties":{"my type":{"type":"string"}},"$ref":"#/properties/my type"}`,
+			`{"$ref":"https://ex.test/task"}`, 5, "unavailable"},
 		{"a meta-schema reached is available",
 			`"S":{"$ref":"https://json-schema.org/draft/2020-12/schema"}`, `{"$ref":"#/schemas/S"}`,
 			map[string]any{"type": 5.0}, "mismatch"},
@@ -229,8 +243,9 @@ func TestCarriedDataIsLinear(t *testing.T) {
 	}
 }
 
-// Many referenced schemas entries, each its own copy, cost work in proportion
-// to their number.
+// Many referenced schemas entries, each its own copy, allocate memory in
+// proportion to their number. The schema library's compile takes time that
+// grows faster: it scans its queue for each schema it adds.
 func TestManyReferencedSchemasAreLinear(t *testing.T) {
 	build := func(n int) *Interface {
 		var lib, refs []string

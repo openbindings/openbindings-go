@@ -474,17 +474,6 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	}
 }
 
-// containsProblemSubstring reports whether the error is a *ValidationError with
-// at least one Problem containing substr.
-func containsProblemSubstring(err error, substr string) bool {
-	for _, p := range problemLines(err) {
-		if strings.Contains(p, substr) {
-			return true
-		}
-	}
-	return false
-}
-
 // newInterfaceWithExamples builds a minimal valid Interface with one operation
 // that has the given input/output schemas and the given examples map.
 func newInterfaceWithExamples(inputSchema, outputSchema JSONSchema, examples map[string]OperationExample) Interface {

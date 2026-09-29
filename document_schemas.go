@@ -28,9 +28,8 @@ type documentSchemas struct {
 	// declares, without fragment, to it.
 	resources map[string]*schemaResource
 	// ambiguous maps an absolute URI that more than one schema declares as its
-	// $id to why it names no one resource, and claimants to those schemas.
+	// $id to why it names no one resource.
 	ambiguous map[string]string
-	claimants map[string][]*schemaResource
 	// anchors maps each plain name the document resource declares to every
 	// declaration of it, in document order: one per $anchor and one per
 	// $dynamicAnchor, as OBI-D-13 counts them (JSON Schema Core §8.2.2).
@@ -169,10 +168,15 @@ func collectDocumentSchemas(view any) documentSchemas {
 		}
 		sort.Strings(locations)
 		if d.ambiguous == nil {
-			d.ambiguous, d.claimants = map[string]string{}, map[string][]*schemaResource{}
+			d.ambiguous = map[string]string{}
 		}
-		d.ambiguous[id] = fmt.Sprintf("the schemas at %s all declare it", strings.Join(locations, ", "))
-		d.claimants[id] = resources
+		// The message names a few declarations, so a message per reference
+		// does not grow with how many schemas declare the URI.
+		named := strings.Join(locations[:min(len(locations), 3)], ", ")
+		if more := len(locations) - 3; more > 0 {
+			named += fmt.Sprintf(", and %d more", more)
+		}
+		d.ambiguous[id] = fmt.Sprintf("the schemas at %s all declare it", named)
 	}
 	return d
 }
@@ -251,59 +255,27 @@ func resolveID(raw string, base *url.URL) *url.URL {
 	if err != nil {
 		return nil
 	}
-	parsed = resolveURI(base, parsed)
-	if !parsed.IsAbs() {
+	parsed, resolved := resolveURI(base, parsed)
+	if !resolved || !parsed.IsAbs() {
 		return nil
 	}
 	parsed.Fragment, parsed.RawFragment = "", ""
 	return parsed
 }
 
-// resolveURI resolves ref against base by RFC 3986 §5.2. base may be nil when
-// ref is absolute. net/url follows the RFC except against a base whose path is
-// rootless (urn:x:y), where it would give urn:///b for b; the RFC merges the
-// paths, giving urn:b.
-func resolveURI(base, ref *url.URL) *url.URL {
-	if base == nil {
-		base = &url.URL{}
+// resolveURI resolves ref against base, which may be nil when ref is
+// absolute, strictly by RFC 3986 §5.2 (resolveURIReference), in time
+// proportional to their length. It reports false when the target does not
+// parse as a URL. net/url's own resolution differs from the RFC against a
+// base whose path is rootless (urn:x:y), and repeats work for each ".."
+// segment.
+func resolveURI(base, ref *url.URL) (*url.URL, bool) {
+	var from uriParts
+	if base != nil {
+		from = splitURI(base.String())
 	}
-	if base.Opaque == "" || ref.Scheme != "" || ref.Host != "" || ref.User != nil || ref.Path == "" || strings.HasPrefix(ref.Path, "/") {
-		return base.ResolveReference(ref)
-	}
-	directory := base.Opaque[:strings.LastIndexByte(base.Opaque, '/')+1]
-	return &url.URL{
-		Scheme:      base.Scheme,
-		Opaque:      removeDotSegments(directory + ref.Path),
-		RawQuery:    ref.RawQuery,
-		Fragment:    ref.Fragment,
-		RawFragment: ref.RawFragment,
-	}
-}
-
-// removeDotSegments removes the "." and ".." segments of a path (RFC 3986
-// §5.2.4).
-func removeDotSegments(path string) string {
-	var out []string
-	segments := strings.Split(path, "/")
-	for i, segment := range segments {
-		last := i == len(segments)-1
-		switch segment {
-		case ".":
-			if last {
-				out = append(out, "")
-			}
-		case "..":
-			if len(out) > 0 {
-				out = out[:len(out)-1]
-			}
-			if last {
-				out = append(out, "")
-			}
-		default:
-			out = append(out, segment)
-		}
-	}
-	return strings.Join(out, "/")
+	target, err := url.Parse(resolveURIReference(from, splitURI(ref.String())).String())
+	return target, err == nil
 }
 
 // Keyword tables. Most entries name schema-bearing positions under JSON

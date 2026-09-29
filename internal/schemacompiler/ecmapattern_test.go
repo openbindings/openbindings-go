@@ -2,7 +2,9 @@ package schemacompiler
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
 // The patterns a JSON Schema reads with the u flag (JSON Schema Core §6.4),
@@ -36,6 +38,32 @@ func TestCheckUnicodePattern(t *testing.T) {
 		if err := checkUnicodePattern(pattern); !errors.Is(err, errResetCapture) {
 			t.Errorf("%q: want the backreference left unevaluated, got %v", pattern, err)
 		}
+	}
+	for _, pattern := range []string{`(a)(b)*\1`, `(a)*(b)\2`, `((a)*)(b)\3`} {
+		if err := checkUnicodePattern(pattern); err != nil {
+			t.Errorf("%q: a backreference to a group no quantified atom holds is evaluated, got %v", pattern, err)
+		}
+	}
+}
+
+// Checking a pattern takes time in proportion to its length, and nesting is
+// bounded, however many quantified groups hold one another.
+func TestCheckUnicodePattern_Limits(t *testing.T) {
+	nested := func(n int) string { return strings.Repeat("(", n) + "a" + strings.Repeat(")*", n) }
+	if err := checkUnicodePattern(nested(maxPatternNesting)); err != nil {
+		t.Fatalf("nesting at the limit: %v", err)
+	}
+	if err := checkUnicodePattern(nested(maxPatternNesting + 1)); !errors.Is(err, errPatternNesting) {
+		t.Fatalf("nesting past the limit: %v", err)
+	}
+	// Many quantified groups beside one another, each marking itself.
+	wide := strings.Repeat("(a)*", 200000) + `\1`
+	start := time.Now()
+	if err := checkUnicodePattern(wide); !errors.Is(err, errResetCapture) {
+		t.Fatalf("want the backreference left unevaluated, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("checking an 800,000-character pattern took %v", elapsed)
 	}
 }
 

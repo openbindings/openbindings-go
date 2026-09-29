@@ -162,8 +162,9 @@ func TestReachability_CompileCostFollowsTheGraph(t *testing.T) {
 	}
 }
 
-// The work is linear in the document however deeply it nests: a deep and wide
-// schema is refused at the depth limit before the walk goes deeper.
+// The walk allocates in proportion to the document however deeply it nests:
+// a deep and wide schema is refused at the depth limit before the walk goes
+// deeper.
 func TestReachability_WorkIsLinear(t *testing.T) {
 	deepWide := func(depth, width int) string {
 		var properties []string

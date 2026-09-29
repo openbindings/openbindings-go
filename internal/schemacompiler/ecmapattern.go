@@ -19,17 +19,30 @@ var errPropertyEscape = errors.New("a Unicode property escape, whose tables this
 // the engine. The pattern is valid, but no verdict rests on it.
 var errResetCapture = errors.New("a backreference whose capture semantics the engine does not match to ECMA-262's")
 
+// maxPatternNesting bounds how deeply a pattern nests groups. Checking and
+// compiling a pattern recurses once per level, and patterns never nest near
+// this deep, so a deeper one is a resource limit met (§10.4), not evidence
+// about the pattern.
+const maxPatternNesting = 256
+
+// errPatternNesting is the error for a pattern nesting groups deeper than
+// maxPatternNesting.
+var errPatternNesting = fmt.Errorf("a pattern nesting groups deeper than %d levels, a resource limit of this SDK", maxPatternNesting)
+
 // checkUnicodePattern returns nil for a Pattern of ECMA-262 (11th edition,
 // §21.2.1) parsed with the u flag, early errors included, the grammar a JSON
 // Schema pattern is read under (JSON Schema Core §6.4), that this SDK
 // evaluates. It returns an error for any other pattern, and for a valid one it
-// does not evaluate (errPropertyEscape, errResetCapture). The engine the SDK
+// does not evaluate (errPropertyEscape, errResetCapture) or that meets a
+// resource limit (errPatternNesting). It takes time in proportion to the
+// pattern's length. The engine the SDK
 // matches with accepts some patterns the grammar refuses, such as a class
 // escape bounding a range ([\w-.]) or an identity escape of a character that
 // is not syntax (\-), so its compile is no check of validity.
 func checkUnicodePattern(pattern string) error {
-	p := &patternParser{src: []rune(pattern), names: map[string]bool{}, groupOf: map[string]int{}, reset: map[int]bool{}}
+	p := &patternParser{src: []rune(pattern), names: map[string]bool{}, groupOf: map[string]int{}}
 	p.countGroups()
+	p.quantified = make([]int, p.groups+2)
 	if err := p.disjunction(); err != nil {
 		return err
 	}
@@ -46,13 +59,17 @@ func checkUnicodePattern(pattern string) error {
 			return fmt.Errorf("the backreference \\k<%s> names no group", name)
 		}
 	}
+	// quantified counts, for each group, the quantified atoms holding it.
+	for group := 1; group < len(p.quantified); group++ {
+		p.quantified[group] += p.quantified[group-1]
+	}
 	for _, n := range p.backreferences {
-		if p.reset[int(n.Int64())] {
+		if p.quantified[n.Int64()] > 0 {
 			return errResetCapture
 		}
 	}
 	for _, name := range p.namedReferences {
-		if p.reset[p.groupOf[name]] {
+		if p.quantified[p.groupOf[name]] > 0 {
 			return errResetCapture
 		}
 	}
@@ -69,11 +86,14 @@ type patternParser struct {
 	backreferences  []*big.Int
 	namedReferences []string
 	// opened counts the capturing groups opened so far; groupOf numbers each
-	// named group; reset holds the groups inside a quantified atom
-	// (errResetCapture).
-	opened  int
-	groupOf map[string]int
-	reset   map[int]bool
+	// named group. quantified marks the groups each quantified atom holds, a
+	// range of group numbers, by its differences: +1 at the first group, -1
+	// past the last (errResetCapture).
+	opened     int
+	groupOf    map[string]int
+	quantified []int
+	// depth is how many groups the parser is inside.
+	depth int
 }
 
 func (p *patternParser) errorf(format string, args ...any) error {
@@ -183,8 +203,9 @@ func (p *patternParser) term() error {
 		if !quantifiable {
 			return p.errorf("nothing to repeat")
 		}
-		for group := before + 1; group <= p.opened; group++ {
-			p.reset[group] = true
+		if p.opened > before {
+			p.quantified[before+1]++
+			p.quantified[p.opened+1]--
 		}
 		return p.quantifier()
 	}
@@ -241,6 +262,10 @@ func (p *patternParser) digits() (*big.Int, bool) {
 }
 
 func (p *patternParser) group() error {
+	if p.depth++; p.depth > maxPatternNesting {
+		return errPatternNesting
+	}
+	defer func() { p.depth-- }()
 	switch {
 	case p.lookingAt("(?=") || p.lookingAt("(?!") || p.lookingAt("(?:"):
 		p.i += 3

@@ -79,8 +79,7 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
 // (OBI-T-04). The version is read first, from any input that is one JSON
 // value, however deeply it nests.
-// options gives the capabilities validation does not carry itself, as for
-// Interface.Validate.
+// options configures validation, as for Interface.Validate.
 func ValidateDocument(data []byte, options ValidateOptions) (*Interface, ValidationReport, error) {
 	c := ruleChecks{version: appliedRelease}
 	view, err := decodeDocumentBytes(data)
@@ -441,14 +440,13 @@ func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool
 
 	if !inResource {
 		if value, present := s["$id"]; present {
-			idPath := path.at("$id")
 			id, isString := value.(string)
 			if !isString {
-				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("an $id is an absolute URI string; got %s", jsonTypeName(value)))
+				d.c.violated("OBI-D-05", path.at("$id"), fmt.Sprintf("an $id is an absolute URI string; got %s", jsonTypeName(value)))
 			} else if wellFormed, hasScheme := uriReference(id); !wellFormed {
-				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("%q is not a well-formed URI-reference (RFC 3986 §4.1)", id))
+				d.c.violated("OBI-D-05", path.at("$id"), fmt.Sprintf("%q is not a well-formed URI-reference (RFC 3986 §4.1)", id))
 			} else if !hasScheme {
-				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("%q must be an absolute URI", id))
+				d.c.violated("OBI-D-05", path.at("$id"), fmt.Sprintf("%q must be an absolute URI", id))
 			}
 			// A schema with an $id member is a boundary, whatever the
 			// member's value (§7).
@@ -462,11 +460,10 @@ func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool
 			if !present {
 				continue
 			}
-			refPath := path.at(keyword)
 			if ref, ok := value.(string); ok {
-				d.checkDocumentReference(refPath, path.at(), keyword, ref)
+				d.checkDocumentReference(path, keyword, ref)
 			} else {
-				d.c.violated("OBI-D-05", refPath, fmt.Sprintf("a %s is a URI-reference string; got %s", keyword, jsonTypeName(value)))
+				d.c.violated("OBI-D-05", path.at(keyword), fmt.Sprintf("a %s is a URI-reference string; got %s", keyword, jsonTypeName(value)))
 			}
 		}
 	}
@@ -480,8 +477,9 @@ func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool
 
 // schemaPath is where a walk of a schema is: the location of the schema it
 // began at, and the reference tokens from there to the schema it is at. A
-// location is formatted only when a finding needs one, so the walk itself
-// does no work per node that grows with depth; each finding costs its path.
+// location is formatted only when a finding needs one, so the walk itself,
+// references included, does no work per node that grows with depth; each
+// finding costs its path.
 type schemaPath struct {
 	start string
 	below []string
@@ -493,28 +491,29 @@ func (p *schemaPath) at(tokens ...string) string {
 	return p.start + jsonpointer.Format(slices.Concat(p.below, tokens)...)
 }
 
-// checkDocumentReference applies OBI-D-05 and OBI-D-12 to a $ref or
-// $dynamicRef in the document resource, held by the schema at holder.
-func (d *documentCheck) checkDocumentReference(path, holder, keyword, ref string) {
+// checkDocumentReference applies OBI-D-05 and OBI-D-12 to the $ref or
+// $dynamicRef keyword names, held by the schema a walk of the document
+// resource is at.
+func (d *documentCheck) checkDocumentReference(path *schemaPath, keyword, ref string) {
 	wellFormed, hasScheme := uriReference(ref)
 	sameDocument := ref == "" || strings.HasPrefix(ref, "#")
 	switch {
 	case !wellFormed:
-		d.c.violated("OBI-D-05", path, fmt.Sprintf("%q is not a well-formed URI-reference (RFC 3986 §4.1)", ref))
+		d.c.violated("OBI-D-05", path.at(keyword), fmt.Sprintf("%q is not a well-formed URI-reference (RFC 3986 §4.1)", ref))
 		return
 	case sameDocument:
 	case hasScheme:
 		// An absolute URI is outside OBI-D-12; JSON Schema resolves it.
 		return
 	default:
-		d.c.violated("OBI-D-05", path, fmt.Sprintf("%q must be an absolute URI or a same-document reference, not a relative reference", ref))
+		d.c.violated("OBI-D-05", path.at(keyword), fmt.Sprintf("%q must be an absolute URI or a same-document reference, not a relative reference", ref))
 		return
 	}
-	switch r := d.schemas.resolve(ref, holder, d.view); {
+	switch r := d.schemas.resolveFrom(ref, nil, d.view); {
 	case r.exists == missing:
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("the %s %q %s", keyword, ref, r.why))
+		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("the %s %q %s", keyword, ref, r.why))
 	case r.origin == inDocument:
-		d.checkFragmentTarget(path, ref, r.location)
+		d.checkFragmentTarget(path, keyword, ref, r.location)
 	}
 }
 
@@ -523,15 +522,15 @@ func (d *documentCheck) checkDocumentReference(path, holder, keyword, ref string
 // position, never the OBI document or a value that is not a schema. The
 // resolver has already refused a location inside a schema with an $id member;
 // a schemas entry declaring $id is itself at an OBI position.
-func (d *documentCheck) checkFragmentTarget(path, ref, target string) {
+func (d *documentCheck) checkFragmentTarget(path *schemaPath, keyword, ref, target string) {
 	value, _ := jsonpointer.Resolve(d.view, target)
 	_, isObject := value.(map[string]any)
 	_, isBoolean := value.(bool)
 	switch {
 	case target == "":
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q names the OBI document itself, which is not a schema", ref))
+		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("%q names the OBI document itself, which is not a schema", ref))
 	case !isOBIPosition(d.view, target) || !isObject && !isBoolean:
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q resolves to %s, which is not a schema at an OBI position", ref, target))
+		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("%q resolves to %s, which is not a schema at an OBI position", ref, target))
 	}
 }
 
