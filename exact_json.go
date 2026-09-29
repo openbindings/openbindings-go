@@ -94,11 +94,16 @@ func verifyExactJSON(b []byte) error {
 }
 
 // declaredVersion reads the version a document declares from its bytes,
-// before any other rule is decided (§10.1): the value of the root object's
-// openbindings member, when the input, after any leading byte-order mark, is
-// one JSON value whose root object has exactly one such member, holding a
-// string. It reads input of any depth, and input that repeats a member name,
-// holds invalid UTF-8, or holds a lone surrogate.
+// before any other rule is decided (OBI-T-04): the value of the root object's
+// openbindings member, when the input has no byte-order mark and is one JSON
+// value whose root object has exactly one such member, holding a string. The
+// input is read as OBI-T-04 decodes it: a byte outside a well-formed UTF-8
+// sequence is a syntax error between tokens and within an escape, and
+// changes only the string that holds it, so one in another member's string
+// leaves the decision unchanged and one in the version or in the member's
+// name leaves the input declaring no version. It reads input of any depth,
+// and input that repeats a member name elsewhere or holds a lone surrogate;
+// OBI-D-01 judges those, under a supported version.
 func declaredVersion(data []byte) (string, bool) {
 	raw, declared := versionMember(data)
 	if !declared || raw[0] != '"' {
@@ -111,7 +116,7 @@ func declaredVersion(data []byte) (string, bool) {
 // versionMember returns the raw value of the root object's openbindings
 // member, read as declaredVersion reads it, whatever its type.
 func versionMember(data []byte) ([]byte, bool) {
-	scan := exactScan{b: bytes.TrimPrefix(data, byteOrderMark), readVersion: true}
+	scan := exactScan{b: data, readVersion: true}
 	if scan.run() != nil || len(scan.versions) != 1 {
 		return nil, false
 	}

@@ -6,6 +6,89 @@
 
 ### Changed
 
+- **Aligned with the 0.2 Core draft of openbindings/spec#129 (breaking, pre-1.0).**
+  - Rule identifiers follow the draft: OBI-D-07 and OBI-D-08 are binding
+    operation and source keys, OBI-D-09 the declared version, OBI-D-10
+    meta-schema validity, OBI-D-11 dependency operation keys, and OBI-D-13
+    plain-name and `$id` uniqueness. The `$vocabulary` rule and example
+    validity are gone: an example is an author claim no document rule checks
+    (OBI-T-10, OBI-T-11), which `ValidateOperationInput` and
+    `ValidateOperationOutput` can check.
+  - `Operation.Idempotent` moves to `BindingEntry.Idempotent`, and
+    `DependencyEntry` gains `Description`.
+  - OBI-D-05 admits plain-name fragments, `$dynamicRef`, and `$dynamicAnchor`
+    in the document resource. OBI-D-12 decodes a same-document fragment once,
+    then reads a JSON Pointer or a plain name the document resource declares;
+    the empty reference and `#` name the document and never qualify, and an
+    absolute reference is JSON Schema's. The legacy `definitions` and the
+    schema values of `dependencies` hold OBI positions.
+  - OBI-D-13 counts each `$anchor` and `$dynamicAnchor` declaration of a
+    plain name, and compares `$id`s after strict RFC 3986 §5.2 resolution and
+    empty-fragment removal, with no other normalization.
+  - A schema with an `$id` member is a resource boundary whatever the
+    member's value (§7): the document-resource rules stop there, its anchors
+    are its own, a pointer from the document resource reaches nothing inside
+    it (for OBI-D-12 and value validation alike), and OBI-D-13 compares no
+    relative `$id` below one that is not compared. OBI-D-12 reads OBI
+    positions from the document's structure, so `allOf` holding an object has
+    no entries.
+  - OBI-D-06 accepts the 2020-12 dialect URI with an empty fragment.
+  - A text beginning with a byte-order mark declares no version, so it is
+    never refused (OBI-T-04). A lone escaped surrogate leaves OBI-D-09
+    decided on the declared version.
+  - `ValidationReport.Version` names the release whose text the SDK applies
+    (0.2.0), not the patch release a document declares (OBI-T-09).
+  - `Interface.Validate` decides OBI-D-01 on the host object's
+    serialization, which is what a claim about a value in memory is about
+    (§10), so a well-formed host object can conclude conformant. It judges
+    the value, not the bytes it may have been decoded from.
+  - Value validation reads patterns as ECMA-262 regular expressions with
+    Unicode semantics (OBI-T-08): a strict grammar check refuses what the `u`
+    flag refuses, and `dlclark/regexp2` evaluates the rest, with `.`, `\b`,
+    `\B`, and escaped surrogate pairs rewritten to ECMA-262's meaning and
+    each match anchored behind a lazy prefix, which avoids a start-position
+    bug in the engine's unanchored search. A pattern the check refuses, a
+    Unicode property escape, a backreference to a group inside a quantified
+    atom (whose capture ECMA-262 resets each iteration and the engine keeps),
+    or a match that exceeds `schemacompiler.PatternMatchTimeout` gives no
+    verdict, and a timed-out match leaves OBI-D-02 or OBI-D-10 inconclusive.
+    A graph holding a `$dynamicRef` gives no verdict when the document
+    resource declares a `$dynamicAnchor`, or when a landing on any
+    `$dynamicAnchor` of its name closes a cycle that never advances. A graph
+    reaching a resource that declares one name twice, even by one schema, or
+    an `$id` of `""` or `#`, which resolves to a URI what encloses it
+    already has, gives no verdict. `format` stays an annotation.
+  - Value validation refuses a string or member name that is not well-formed
+    UTF-8, gives no verdict on a count keyword beyond `math.MaxInt`, which the
+    schema library would overflow, and picks number stand-ins that avoid
+    every Go numeric type in the value.
+  - Value validation gives no verdict on a reference into a JSON Schema
+    meta-schema's interior, a graph reaching a meta-schema when the document
+    declares a `$dynamicAnchor` named `meta`, which can capture the
+    meta-schema's own `$dynamicRef`, or a reference that is not a
+    URI-reference. `additionalItems` is data, as in 2020-12: the schema
+    library no longer collects identifiers within it.
+  - Validation counts, before evaluating a value, the schema applications the
+    graph can make on it, and past 2^22 gives no verdict, so a small acyclic
+    graph that applies a schema twice at each level no longer runs for
+    exponential time. `then` and `else`, and the places a `$dynamicRef` may
+    land, count once.
+  - A host value or object that holds itself returns an error instead of
+    exhausting the stack. Dynamic references to many anchors of one name,
+    references to a URI many schemas declare, `$id`s of many dot segments,
+    references at every level of a deep schema, and nested quantified
+    pattern groups take work in proportion to their size; patterns nest
+    groups at most 256 levels. `$id` and reference resolution use the SDK's
+    strict RFC 3986 resolver throughout.
+  - The whole draft2020-12 JSON Schema Test Suite runs, optional tests
+    included, but for the format-assertion and dependencies-compatibility
+    files, which test what OBI-T-08 rules out. Every case must reach the
+    suite's verdict, or no verdict for a stated reason: a remote schema the
+    document does not embed, a Unicode property escape, or a reference to a
+    value no keyword holds as a schema.
+  - The duplicate OBI-T-02 unknown-field advisory and its
+    `ValidationReport.Diagnostics` field are removed; unknown unprefixed
+    fields remain OBI-D-02 violations.
 - **Core now uses kinds (breaking, pre-1.0).** `Source.BindingSpec` and its
   `bindingSpec` JSON member become `Source.Kind` and `kind`;
   `DependencyEntry.BindingSpecs` and `bindingSpecs` become `Kinds` and `kinds`.

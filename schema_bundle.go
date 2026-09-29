@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
+	"math/big"
 	"net/url"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -27,8 +28,9 @@ import (
 //     Pointer from the OBI document root, points into the bundle instead. A
 //     reference inside a resource that declares $id is left as written, and
 //     the library resolves it by that $id, as it would any schema's.
-//   - dependencies, $recursiveRef, and $recursiveAnchor are dropped: 2020-12
-//     does not evaluate them, though the library still would.
+//   - dependencies, $recursiveRef, $recursiveAnchor, and additionalItems are
+//     dropped: 2020-12 does not evaluate them, though the library still would,
+//     or would collect identifiers within them.
 //   - Nothing else changes, so the library meets exactly the schemas the
 //     document holds.
 //
@@ -37,8 +39,10 @@ import (
 const bundleURI = "https://openbindings.invalid/document"
 
 // strictlyExcluded are keywords the library evaluates in a 2020-12 schema
-// though 2020-12 does not define them.
-var strictlyExcluded = map[string]bool{"dependencies": true, "$recursiveRef": true, "$recursiveAnchor": true}
+// though 2020-12 does not define them, or whose value it reads as schemas,
+// collecting the identifiers they declare: additionalItems, whose value
+// 2020-12 reads as data, like any unknown keyword's.
+var strictlyExcluded = map[string]bool{"dependencies": true, "$recursiveRef": true, "$recursiveAnchor": true, "additionalItems": true}
 
 // copiedAt returns the location a schema is copied at: the OBI schema position
 // holding it, whole, or the schema itself when it lies elsewhere in the
@@ -89,7 +93,9 @@ func (c *copyGraph) analyze(o *operationSchemas) {
 	*c = copyGraph{id: map[string]int{}}
 	var queue []string
 	for _, node := range o.graph.nodes {
-		queue = append(queue, node.root)
+		if !node.hub {
+			queue = append(queue, node.root)
+		}
 	}
 	for len(queue) > 0 {
 		root := queue[0]
@@ -249,19 +255,22 @@ func forEachSchemaReference(root any, at string, fn func(holder, ref string)) {
 
 // rootProblem states why the schema library cannot be given what a root
 // holds, or returns "": a resource limit it meets (limitProblem); a schema
-// that is not well-formed; a dialect or vocabulary §5.2 excludes; a pattern
-// Go's regexp cannot compile, which cannot be evaluated (the SDK's compilers
-// accept every pattern, so format "regex" never asserts, and leave this
-// check to core); a resource whose base has no hierarchical path (urn:x:y)
+// that is not well-formed; a dialect other than 2020-12; an $id that gives
+// its schema no URI of its own; a pattern that is not
+// an ECMA-262 regular expression with Unicode semantics, whose evaluation
+// OBI-T-08 leaves without a verdict (the SDK's compilers accept every pattern,
+// so format "regex" never asserts, and leave this check here); a resource
+// whose base has no hierarchical path (urn:x:y)
 // holding a relative reference, which the library resolves differently from
 // RFC 3986; or, for a root outside the schema positions, an identity keyword,
 // which only a schema position declares (§7).
 func (o *operationSchemas) rootProblem(at string) string {
-	// A schema $ref reaches only a schema the document model places
-	// (OBI-D-12); JSON Schema 2020-12 leaves any other target undefined
-	// (§9.4.2), so nothing elsewhere is evaluated as a schema.
+	// JSON Schema 2020-12 leaves a reference to anything but a schema
+	// undefined (§9.4.2), so nothing elsewhere is evaluated as a schema; the
+	// legacy dependencies, which strict 2020-12 drops, are not evaluated
+	// either.
 	if !atSchemaPosition(at) {
-		return fmt.Sprintf("%s is not a schema position; a schema $ref reaches only a schema the document model places (OBI-D-12)", describeLocation(at))
+		return fmt.Sprintf("%s is not a schema position the schema library evaluates, so a reference to it reaches no schema there", describeLocation(at))
 	}
 	if problem := o.limitProblem(at); problem != "" {
 		return problem
@@ -278,19 +287,22 @@ func (o *operationSchemas) rootProblem(at string) string {
 	var problems []string
 	walkSchemaObjects(value, func(object map[string]any, path []string) bool {
 		location := func() string { return at + jsonpointer.Format(path...) }
-		if dialect, present := object["$schema"]; present && dialect != draft202012URI {
+		if dialect, present := object["$schema"]; present && dialect != draft202012URI && dialect != draft202012URI+"#" {
 			problems = append(problems, fmt.Sprintf("the schema at %s declares $schema %s, not %s", location(), describeJSON(dialect), draft202012URI))
 		}
-		if _, present := object["$vocabulary"]; present {
-			problems = append(problems, fmt.Sprintf("the schema at %s declares $vocabulary", location()))
+		if id, isString := object["$id"].(string); isString && strings.TrimSuffix(id, "#") == "" {
+			// The $id resolves to its base, so the schema claims a URI what
+			// encloses it already has, which JSON Schema leaves undefined
+			// (Core §8.2.1).
+			problems = append(problems, fmt.Sprintf("the schema at %s declares the $id %q, which gives it no URI of its own: it resolves to its base, the URI of what encloses it", location(), id))
 		}
 		patterns := sortedKeys(asObject(object["patternProperties"]))
 		if pattern, ok := object["pattern"].(string); ok {
 			patterns = append(patterns, pattern)
 		}
 		for _, pattern := range patterns {
-			if _, err := regexp.Compile(pattern); err != nil {
-				problems = append(problems, fmt.Sprintf("the pattern %q at %s cannot be evaluated: Go's regexp does not support it (%v)", pattern, location(), err))
+			if _, err := schemacompiler.CompilePattern(pattern); err != nil {
+				problems = append(problems, fmt.Sprintf("the pattern %q at %s cannot be evaluated as an ECMA-262 regular expression with Unicode semantics: %v", pattern, location(), err))
 			}
 		}
 		return true
@@ -344,11 +356,16 @@ var (
 	countKeywords      = map[string]bool{"maxLength": true, "minLength": true, "maxItems": true, "minItems": true, "maxContains": true, "minContains": true, "maxProperties": true, "minProperties": true}
 )
 
+// errCountLimit is the error for a count keyword's value beyond math.MaxInt:
+// the schema library converts a count to an int, which such a value
+// overflows, so the keyword would bound a different count.
+var errCountLimit = fmt.Errorf("a count beyond %d, the largest the schema library reads", math.MaxInt)
+
 // numberRead returns where, in a schema, the first number the schema library
-// reads lies beyond the numeric limits of schema evaluation, with the limits'
-// error, or a nil error when none does: the value of a comparison or count
-// keyword, or a number in const or enum, which the library compares with a
-// value's.
+// reads lies beyond the numeric limits of schema evaluation, or a count
+// beyond math.MaxInt, with the limit's error, or a nil error when none does:
+// the value of a comparison or count keyword, or a number in const or enum,
+// which the library compares with a value's.
 func numberRead(schema any) (string, error) {
 	var location string
 	var err error
@@ -359,6 +376,10 @@ func numberRead(schema any) (string, error) {
 			}
 			if where, limit := schemacompiler.NumericLimit(object[keyword]); limit != nil {
 				location, err = jsonpointer.Format(append(slices.Clip(path), keyword)...)+where, limit
+				return false
+			}
+			if countKeywords[keyword] && beyondMaxInt(object[keyword]) {
+				location, err = jsonpointer.Format(append(slices.Clip(path), keyword)...), errCountLimit
 				return false
 			}
 		}
@@ -412,6 +433,17 @@ func walkSchemaObjects(schema any, fn func(object map[string]any, path []string)
 		})
 	}
 	walk(schema)
+}
+
+// beyondMaxInt reports whether a value is a number, within the numeric limits
+// of schema evaluation, greater than math.MaxInt.
+func beyondMaxInt(value any) bool {
+	n, isNumber := value.(json.Number)
+	if !isNumber {
+		return false
+	}
+	count, ok := new(big.Rat).SetString(string(n))
+	return ok && count.Cmp(new(big.Rat).SetInt64(math.MaxInt)) > 0
 }
 
 func holdsNumber(value any) bool {
@@ -607,37 +639,6 @@ type compiled struct {
 	err    error
 }
 
-// compile compiles the schemas at each start, analyzed and found evaluable.
-// They are compiled from one bundle and one compiler, so a schema several
-// graphs share is compiled once. The bundle holds every copy whose own graph
-// of copies is fit to hand the library; a start that does not compile from it
-// is compiled again from a bundle of its own graph, so another graph's schemas
-// never cost it its verdict.
-func (o *operationSchemas) compile(starts []string) map[string]compiled {
-	out := map[string]compiled{}
-	fit := map[string]bool{}
-	for i, node := range o.copies.nodes {
-		if o.copies.closure[i] == "" && copiedAt(node.location) == node.location {
-			fit[node.location] = true
-		}
-	}
-	shared := o.bundle(outermost(fit))
-	c := schemacompiler.New()
-	sharedErr := c.AddResource(bundleURI, shared.document)
-	for _, start := range starts {
-		if sharedErr == nil {
-			if address, ok := shared.address(start); ok {
-				if schema, err := c.Compile(address); err == nil {
-					out[start] = compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
-					continue
-				}
-			}
-		}
-		out[start] = o.compileAlone(start)
-	}
-	return out
-}
-
 // compileAlone compiles the schema at start from a bundle of the copies its
 // root reaches.
 func (o *operationSchemas) compileAlone(start string) compiled {
@@ -651,7 +652,7 @@ func (o *operationSchemas) compileAlone(start string) compiled {
 	if err != nil {
 		return compiled{err: own.describe(err)}
 	}
-	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
+	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start), cost: o.costGraph(start)}}
 }
 
 // comparison states where what the library compiles for start compares a

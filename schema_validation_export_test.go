@@ -39,21 +39,19 @@ func TestValidateOperationInput_ResolvesNamedSchemasThroughTheDocument(t *testin
 	}
 }
 
-// TestValidateOperationInput_ExternalRefFailsClosed pins OBI-T-08's
-// complete-graph requirement: validation is against the FULLY RESOLVED schema, so a
-// schema carrying an external $ref the tool cannot fetch is a validation
-// error (fail closed), never a partial pass.
-func TestValidateOperationInput_ExternalRefFailsClosed(t *testing.T) {
+// TestValidateOperationInput_ExternalRefReturnsNoVerdict checks that this SDK
+// returns no verdict when its eager compiler needs a resource it cannot load.
+func TestValidateOperationInput_ExternalRefReturnsNoVerdict(t *testing.T) {
 	opSchema := map[string]any{"$ref": "https://example.com/schemas/user-input.json"}
 	err := ValidateOperationInput(map[string]any{"id": "u1"}, documentWithInput(opSchema, nil), "op")
-	if err == nil {
-		t.Fatal("external $ref should fail closed, not validate partially")
+	if !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("external $ref should leave the result unavailable, got %v", err)
 	}
 }
 
-// TestValidateOperationInput_FormatIsAnnotationOnly pins §6.2's boundary
-// rule: `format` never asserts at OBI validation boundaries — a value
-// violating `format` still validates; enforced syntax belongs to `pattern`.
+// TestValidateOperationInput_FormatIsAnnotationOnly checks the embedded
+// 2020-12 dialect, where `format` is an annotation. External dialects may
+// define different format semantics.
 func TestValidateOperationInput_FormatIsAnnotationOnly(t *testing.T) {
 	opSchema := map[string]any{"type": "string", "format": "email"}
 	if err := ValidateOperationInput("not-an-email", documentWithInput(opSchema, nil), "op"); err != nil {
@@ -65,13 +63,20 @@ func TestValidateOperationInput_FormatIsAnnotationOnly(t *testing.T) {
 	}
 }
 
-// Patterns use the schema library's engine, Go's regexp. A pattern it cannot
-// compile, such as an ECMAScript lookahead, leaves no verdict rather than a
-// wrong one.
+// Patterns are ECMA-262 regular expressions with Unicode semantics (OBI-T-08):
+// a lookahead is evaluated, and a pattern the grammar refuses leaves no
+// verdict rather than a wrong one.
 func TestValidateOperationInput_PatternDialect(t *testing.T) {
 	lookahead := map[string]any{"type": "string", "pattern": "^(?=.*[A-Z]).*$"}
-	if err := ValidateOperationInput("Password1", documentWithInput(lookahead, nil), "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
-		t.Fatalf("a lookahead pattern must leave the graph unavailable, got %v", err)
+	if err := ValidateOperationInput("Password1", documentWithInput(lookahead, nil), "op"); err != nil {
+		t.Fatalf("a lookahead pattern is ECMA-262, got %v", err)
+	}
+	if err := ValidateOperationInput("password1", documentWithInput(lookahead, nil), "op"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Fatalf("want a mismatch, got %v", err)
+	}
+	invalid := map[string]any{"type": "string", "pattern": `[\w-.]`}
+	if err := ValidateOperationInput("x", documentWithInput(invalid, nil), "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("a pattern the u flag refuses must leave the graph unavailable, got %v", err)
 	}
 	digits := map[string]any{"type": "string", "pattern": "^[0-9]+$"}
 	if err := ValidateOperationInput("123", documentWithInput(digits, nil), "op"); err != nil {
@@ -255,20 +260,29 @@ func TestValidateOperationInput_FormatIsAnnotationInEveryDialect(t *testing.T) {
 	}
 }
 
-// A same-document pointer into the interior of an embedded resource resolves
-// the references inside it against that resource's base.
-func TestValidateOperationInput_PointerIntoAResourceUsesItsBase(t *testing.T) {
-	iface := mustDecode(t, `{"openbindings":"0.2.0",
-		"x-decoy":{"$defs":{"X":{"type":"number"}}},
-		"$defs":{"X":{"type":"number"}},
-		"schemas":{"T":{"$id":"https://e.com/T","$defs":{"X":{"type":"string"}},"properties":{"a":{"$ref":"#/$defs/X"}}}},
-		"operations":{"op":{"input":{"$ref":"#/schemas/T/properties/a"}}}}`)
+// A reference by the resource's URI into the interior of an embedded resource
+// resolves the references inside it against that resource's base. A pointer
+// from the document resource reaches nothing inside it (OBI-D-12), so a graph
+// holding one reaches no verdict.
+func TestValidateOperationInput_PointerIntoAResource(t *testing.T) {
+	document := func(ref string) *Interface {
+		return mustDecode(t, `{"openbindings":"0.2.0",
+			"x-decoy":{"$defs":{"X":{"type":"number"}}},
+			"$defs":{"X":{"type":"number"}},
+			"schemas":{"T":{"$id":"https://e.com/T","$defs":{"X":{"type":"string"}},"properties":{"a":{"$ref":"#/$defs/X"}}}},
+			"operations":{"op":{"input":{"$ref":"`+ref+`"}}}}`)
+	}
+	iface := document("https://e.com/T#/properties/a")
 	if err := ValidateOperationInput("text", iface, "op"); err != nil {
 		t.Fatalf("the reference inside the resource resolves against the resource: %v", err)
 	}
 	var mismatch *SchemaValidationError
 	if err := ValidateOperationInput(5, iface, "op"); !errors.As(err, &mismatch) {
 		t.Fatalf("want a mismatch against the resource's own definition, got %v", err)
+	}
+	var unavailable *SchemaGraphUnavailableError
+	if err := ValidateOperationInput("text", document("#/schemas/T/properties/a"), "op"); !errors.As(err, &unavailable) {
+		t.Fatalf("a pointer from the document resource into the resource: want no verdict, got %v", err)
 	}
 }
 
@@ -336,11 +350,10 @@ func TestValidateOperationInput_ConditionalReachability(t *testing.T) {
 			t.Errorf("%s: want valid, got %v", name, err)
 		}
 	}
-	// An external reference in an orphan then does not exempt a mismatched
-	// example from OBI-D-10.
-	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"$ref":"https://ext.example/x.json"}},"examples":{"e":{"input":5}}}}}`), ValidateOptions{})
-	if report.Evidence["OBI-D-10"] != EvidenceViolated {
-		t.Fatalf("OBI-D-10 %q", report.Evidence["OBI-D-10"])
+	// An external reference in an orphan then does not stop a mismatch.
+	orphan := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"$ref":"https://ext.example/x.json"}}}}}`)
+	if err := ValidateOperationInput(json.Number("5"), orphan, "op"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Fatalf("want a mismatch, got %v", err)
 	}
 }
 
@@ -368,7 +381,6 @@ func TestValidateOperationInput_IllFormedGraphsAreUnavailable(t *testing.T) {
 	var unavailable *SchemaGraphUnavailableError
 	for name, input := range map[string]string{
 		"draft-07 dialect": `{"$schema":"http://json-schema.org/draft-07/schema#","type":"string"}`,
-		"vocabulary":       `{"$vocabulary":{},"type":"string"}`,
 		"non-string title": `{"$ref":"#/x-lib/T"}`,
 	} {
 		iface := mustDecode(t, `{"openbindings":"0.2.0","x-lib":{"T":{"type":"string","title":5}},"operations":{"op":{"input":`+input+`}}}`)
@@ -412,10 +424,10 @@ func TestValidateOperationInput_ProgresslessCyclesAreUnavailable(t *testing.T) {
 	}
 }
 
-// An embedded $id is the embedded schema's, whatever URI it is (§7). The
-// schema backend resolves a meta-schema's URI to the meta-schema it carries,
-// so a graph reaching an embedded schema that declares one is unavailable;
-// graphs that do not reach it are unaffected.
+// An embedded $id is the embedded schema's, whatever URI it is (§7), a
+// meta-schema's included: a reference to it reaches the embedded schema, not
+// the meta-schema the schema library carries, and graphs that do not reach it
+// are unaffected.
 func TestValidateOperationInput_EmbeddedIDsNameTheEmbeddedSchema(t *testing.T) {
 	document := func(id string) *Interface {
 		return mustDecode(t, `{"openbindings":"0.2.0","schemas":{"X":{"$id":"`+id+`","type":"number"}},
@@ -471,9 +483,9 @@ func TestValidateOperationInput_NestedRelativeIDsResolveOnce(t *testing.T) {
 	}
 }
 
-// Only the meta-schemas the SDK carries are reserved; any other URI under
-// json-schema.org is an ordinary embedded $id.
-func TestValidateOperationInput_OnlyBuiltInMetaSchemaIDsAreReserved(t *testing.T) {
+// A URI under json-schema.org that names no carried meta-schema is an
+// ordinary embedded $id.
+func TestValidateOperationInput_JSONSchemaOrgIDsAreOrdinary(t *testing.T) {
 	iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{"S":{"$id":"https://json-schema.org/example/custom","type":"string"}},
 		"operations":{"op":{"input":{"$ref":"https://json-schema.org/example/custom"}}}}`)
 	if err := ValidateOperationInput("x", iface, "op"); err != nil {
@@ -548,5 +560,32 @@ func TestValidateOperationInput_MalformedVersionsAreNotInterpreted(t *testing.T)
 		if err == nil || errors.As(err, new(*SchemaValidationError)) || errors.As(err, new(*SchemaGraphUnavailableError)) {
 			t.Errorf("%q: want a plain refusal to interpret, got %v", version, err)
 		}
+	}
+}
+
+// A pattern match that reaches no answer within the SDK's limits, as a
+// catastrophically backtracking one does, gives no verdict rather than the
+// mismatch the schema library would read it as (§10.4, OBI-T-08).
+func TestValidateOperationInput_UnansweredPatternMatchesGiveNoVerdict(t *testing.T) {
+	schema := map[string]any{"type": "string", "pattern": "^(a|aa)+$"}
+	value := strings.Repeat("a", 60) + "b"
+	if err := ValidateOperationInput(value, documentWithInput(schema, nil), "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("want no verdict, got %v", err)
+	}
+	if err := ValidateOperationInput("aaaa", documentWithInput(schema, nil), "op"); err != nil {
+		t.Fatalf("a match that answers: %v", err)
+	}
+}
+
+// When the document resource declares a $dynamicAnchor, an evaluation that
+// begins there holds it in the dynamic scope (§7.2), which this SDK's bundle
+// does not reproduce, so a graph holding a $dynamicRef reaches no verdict.
+func TestValidateOperationInput_DocumentDynamicAnchorsGiveNoVerdict(t *testing.T) {
+	iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{
+		"Node":{"$dynamicAnchor":"node","type":"string"},
+		"Tree":{"$id":"https://ex.com/tree","$dynamicAnchor":"node","type":"array","items":{"$dynamicRef":"#node"}}},
+		"operations":{"op":{"output":{"$ref":"https://ex.com/tree"}}}}`)
+	if err := ValidateOperationOutput([]any{[]any{}}, iface, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("want no verdict, got %v", err)
 	}
 }

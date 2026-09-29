@@ -27,60 +27,62 @@ func inputOutcome(t *testing.T, document string, value any) string {
 	return outcome(ValidateOperationInput(value, mustDecodeInterface(t, document), "op"))
 }
 
-// The answers strict 2020-12 changes for definitions and dependencies, whose
-// entries 2020-12 neither evaluates nor finds resources or anchors in.
-func TestStrictDefinitions(t *testing.T) {
-	// An $id under definitions embeds nothing: an absolute reference to it
-	// points outside the document, so its example is outside OBI-D-10, and
-	// OBI-D-12 does not judge it.
-	external := `{"openbindings":"0.2.0","schemas":{"A":{"definitions":{"d":{"$id":"https://ex.test/d","type":"string"}}}},
-		"operations":{"op":{"input":{"$ref":"https://ex.test/d#/nope"},"examples":{"e":{"input":5}}}}}`
-	report := validateBytes(t, external)
-	if report.Evidence["OBI-D-10"] != EvidenceSatisfied || report.Evidence["OBI-D-12"] != EvidenceSatisfied {
-		t.Errorf("an $id under definitions: OBI-D-10 %q, OBI-D-12 %q", report.Evidence["OBI-D-10"], report.Evidence["OBI-D-12"])
-	}
-
-	// The reference rules do not look inside definitions or dependencies.
-	for name, entry := range map[string]string{
-		"relative $ref":  `{"$ref":"other.json"}`,
-		"$dynamicRef":    `{"$dynamicRef":"#x"}`,
-		"unresolved ref": `{"$ref":"#/nope"}`,
-		"relative $id":   `{"$id":"rel"}`,
+// The legacy definitions and the schema values of the legacy dependencies are
+// OBI positions (§7): the 2020-12 meta-schema validates them as schemas, so
+// the reference rules judge what they hold as they judge any schema's.
+func TestLegacyDefinitionsAreOBIPositions(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entry, rule string
+	}{
+		"relative $ref":  {`{"$ref":"other.json"}`, "OBI-D-05"},
+		"$dynamicRef":    {`{"$dynamicRef":"#x"}`, "OBI-D-12"},
+		"unresolved ref": {`{"$ref":"#/nope"}`, "OBI-D-12"},
+		"relative $id":   {`{"$id":"rel"}`, "OBI-D-05"},
 	} {
 		for _, keyword := range []string{"definitions", "dependencies"} {
-			document := `{"openbindings":"0.2.0","schemas":{"A":{"` + keyword + `":{"d":` + entry + `}}},"operations":{}}`
-			report := validateBytes(t, document)
-			if report.Evidence["OBI-D-05"] != EvidenceSatisfied || report.Evidence["OBI-D-12"] != EvidenceSatisfied {
-				t.Errorf("%s under %s: OBI-D-05 %q, OBI-D-12 %q", name, keyword, report.Evidence["OBI-D-05"], report.Evidence["OBI-D-12"])
+			document := `{"openbindings":"0.2.0","schemas":{"A":{"` + keyword + `":{"d":` + tc.entry + `}}},"operations":{}}`
+			if report := validateBytes(t, document); !reflect.DeepEqual(report.Violated, []string{tc.rule}) {
+				t.Errorf("%s under %s: violated %v, want %s", name, keyword, report.Violated, tc.rule)
 			}
 		}
 	}
-	// The shape rules still follow the meta-schema into them.
 	shape := validateBytes(t, `{"openbindings":"0.2.0","schemas":{"A":{"definitions":{"d":{"$schema":"http://json-schema.org/draft-07/schema#"}}}},"operations":{}}`)
 	if shape.Evidence["OBI-D-06"] != EvidenceViolated {
 		t.Errorf("$schema under definitions: OBI-D-06 %q", shape.Evidence["OBI-D-06"])
 	}
-
-	// An anchor under definitions is not its resource's.
-	anchor := validateBytes(t, `{"openbindings":"0.2.0","schemas":{"R":{"$id":"https://ex.test/r","definitions":{"d":{"$anchor":"a"}}}},
-		"operations":{"op":{"input":{"$ref":"https://ex.test/r#a"}}}}`)
-	if anchor.Evidence["OBI-D-12"] != EvidenceViolated {
-		t.Errorf("an anchor under definitions: OBI-D-12 %q", anchor.Evidence["OBI-D-12"])
+	// A plain name declared under definitions belongs to the document
+	// resource, and a pointer lands on an entry there.
+	for _, ref := range []string{"#a", "#/schemas/A/definitions/d"} {
+		document := `{"openbindings":"0.2.0","schemas":{"A":{"definitions":{"d":{"$anchor":"a","type":"string"}}}},"operations":{"op":{"input":{"$ref":"` + ref + `"}}}}`
+		if report := validateBytes(t, document); report.Conclusion != ConclusionConformant {
+			t.Errorf("%s: conclusion %s; findings %+v", ref, report.Conclusion, report.Findings)
+		}
+	}
+	// An absolute reference is JSON Schema's, even to an $id under
+	// definitions; this one resolves nowhere, so a value reaches no verdict.
+	external := `{"openbindings":"0.2.0","schemas":{"A":{"definitions":{"d":{"$id":"https://ex.test/d","type":"string"}}}},
+		"operations":{"op":{"input":{"$ref":"https://ex.test/d#/nope"}}}}`
+	if report := validateBytes(t, external); report.Evidence["OBI-D-12"] != EvidenceSatisfied {
+		t.Errorf("an $id under definitions: OBI-D-12 %q", report.Evidence["OBI-D-12"])
+	}
+	if got := inputOutcome(t, external, 5); got != "unavailable" {
+		t.Errorf("an $id under definitions: %s", got)
 	}
 }
 
-// References resolve by RFC 3986, a base whose path is not hierarchical
-// included: b against urn:x:y is urn:b.
+// Identifiers resolve by RFC 3986, a base whose path is not hierarchical
+// included: b against urn:x:y is urn:b, which OBI-D-13 then compares.
 func TestReferencesResolveByRFC3986(t *testing.T) {
 	document := func(ref string) string {
 		return `{"openbindings":"0.2.0","schemas":{"A":{"$id":"urn:x:y","$defs":{"b":{"$id":"b","type":"string"}}}},
 			"operations":{"op":{"input":{"$ref":"` + ref + `"}}}}`
 	}
-	if report := validateBytes(t, document("urn:b#/nope")); report.Evidence["OBI-D-12"] != EvidenceViolated {
-		t.Errorf("urn:b#/nope: OBI-D-12 %q", report.Evidence["OBI-D-12"])
+	collision := `{"openbindings":"0.2.0","schemas":{"A":{"$id":"urn:x:y","$defs":{"b":{"$id":"b"}}},"B":{"$id":"urn:b"}},"operations":{}}`
+	if report := validateBytes(t, collision); report.Evidence["OBI-D-13"] != EvidenceViolated {
+		t.Errorf("b against urn:x:y is urn:b: OBI-D-13 %q", report.Evidence["OBI-D-13"])
 	}
-	if report := validateBytes(t, document("urn:x:y#/$defs/b")); report.Evidence["OBI-D-12"] != EvidenceSatisfied {
-		t.Errorf("urn:x:y#/$defs/b: OBI-D-12 %q", report.Evidence["OBI-D-12"])
+	if report := validateBytes(t, document("urn:x:y#/$defs/b")); report.Conclusion != ConclusionConformant {
+		t.Errorf("urn:x:y#/$defs/b: conclusion %s; findings %+v", report.Conclusion, report.Findings)
 	}
 	// The schema library resolves a relative reference under such a base
 	// differently, so a graph holding one gets no verdict.
@@ -106,9 +108,12 @@ func TestSchemaGraphEdgeCases(t *testing.T) {
 		value                any
 		want                 string
 	}{
-		{"a pointer through an array into an $id resource uses its base",
+		{"a pointer through an array into an $id resource reaches no verdict (OBI-D-12)",
 			`"U":{"allOf":[{"$id":"https://ex.test/r","type":"object","properties":{"a":{"$ref":"#"}}}]}`,
-			`{"$ref":"#/schemas/U/allOf/0/properties/a"}`, "hello", "mismatch"},
+			`{"$ref":"#/schemas/U/allOf/0/properties/a"}`, "hello", "unavailable"},
+		{"the resource's URI reaches inside it, and its references use its base",
+			`"U":{"allOf":[{"$id":"https://ex.test/r","type":"object","properties":{"a":{"$ref":"#"}}}]}`,
+			`{"$ref":"https://ex.test/r#/properties/a"}`, "hello", "mismatch"},
 		{"an enclosing resource's dialect",
 			`"R":{"$id":"https://ex.test/r","$schema":"http://json-schema.org/draft-07/schema#","definitions":{"a":{"type":"string"}},"properties":{"p":{"type":"string"}}}`,
 			`{"$ref":"#/schemas/R/properties/p"}`, 5, "unavailable"},
@@ -140,11 +145,34 @@ func TestSchemaGraphEdgeCases(t *testing.T) {
 			`"K":{"$id":"https://ex.test/k","$defs":{"name":{"$dynamicAnchor":"name","type":"string"}},"items":{"$dynamicRef":"#name"}},
 			 "O":{"$id":"https://ex.test/o","$ref":"k","$defs":{"name":{"$dynamicAnchor":"name","pattern":"^a"}}}`,
 			`{"$ref":"https://ex.test/o"}`, []any{"b"}, "mismatch"},
+		{"a name a resource declares twice, by one schema",
+			`"R":{"$id":"https://ex.test/r","$anchor":"n","$dynamicAnchor":"n","type":"string"}`,
+			`{"$ref":"https://ex.test/r#n"}`, 5, "unavailable"},
+		{"a name a resource declares once",
+			`"R":{"$id":"https://ex.test/r","$anchor":"n","type":"string"}`,
+			`{"$ref":"https://ex.test/r#n"}`, 5, "mismatch"},
+		{"a cycle only a dynamic landing closes",
+			`"B":{"$id":"urn:B","$defs":{"n":{"$dynamicAnchor":"n"}},"not":{"$dynamicRef":"#n"}}`,
+			`{"$id":"urn:A","$dynamicAnchor":"n","$ref":"urn:B"}`, 5, "unavailable"},
 		{"strict keywords constrain nothing",
 			`"S":{"type":"object","dependencies":{"a":["b"]},"$recursiveRef":"#"}`, `{"$ref":"#/schemas/S"}`,
 			map[string]any{"a": 1.0}, "valid"},
-		{"a pattern Go's regexp cannot compile",
-			`"S":{"type":"string","pattern":"^(?=a)"}`, `{"$ref":"#/schemas/S"}`, "a", "unavailable"},
+		{"a pattern that is not an ECMA-262 regular expression with Unicode semantics",
+			`"S":{"type":"string","pattern":"^a{"}`, `{"$ref":"#/schemas/S"}`, "a", "unavailable"},
+		{"a reference inside a meta-schema",
+			`"S":true`, `{"$ref":"https://json-schema.org/draft/2020-12/meta/validation#/$defs"}`, 0, "unavailable"},
+		{"a meta-schema whose #meta the document resource captures",
+			`"M":{"$dynamicAnchor":"meta","type":"string"}`, `{"$ref":"https://json-schema.org/draft/2020-12/schema"}`,
+			map[string]any{"properties": map[string]any{"a": map[string]any{}}}, "unavailable"},
+		{"a meta-schema whose #meta a resource captures",
+			`"S":true`, `{"$id":"urn:A","$dynamicAnchor":"meta","not":{"$ref":"https://json-schema.org/draft/2020-12/schema"}}`, 0, "unavailable"},
+		{"additionalItems is data, as in 2020-12",
+			`"T":{"$id":"https://ex.test/t","$dynamicAnchor":"node","type":"object","properties":{"c":{"$dynamicRef":"#node"}}}`,
+			`{"$ref":"https://ex.test/t","additionalItems":{"$dynamicAnchor":"node","type":"string"}}`,
+			map[string]any{"c": map[string]any{"c": map[string]any{}}}, "valid"},
+		{"a reference that is not a URI-reference",
+			`"T":{"$id":"https://ex.test/task","type":"object","properties":{"my type":{"type":"string"}},"$ref":"#/properties/my type"}`,
+			`{"$ref":"https://ex.test/task"}`, 5, "unavailable"},
 		{"a meta-schema reached is available",
 			`"S":{"$ref":"https://json-schema.org/draft/2020-12/schema"}`, `{"$ref":"#/schemas/S"}`,
 			map[string]any{"type": 5.0}, "mismatch"},
@@ -158,44 +186,32 @@ func TestSchemaGraphEdgeCases(t *testing.T) {
 
 // A value in an annotation is never a schema position, so a reference that
 // names one reaches no schema (JSON Schema 2020-12 §9.4.2): the graph is
-// unavailable and the example's check inconclusive, whatever the value
-// holds. A reference held in an annotation's data leads nowhere, and an
-// annotation no reference names is only carried.
+// unavailable, whatever the value holds. A reference held in an annotation's
+// data leads nowhere, and an annotation no reference names is only carried.
 func TestSchemasHeldInAnnotations(t *testing.T) {
 	for _, c := range []struct {
 		name, operations string
 		op               string
 		value            any
 		want             string
-		examples         RuleEvidenceStatus
 	}{
 		{"a named annotation reaches no schema",
-			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":100}},"examples":{"e":{"input":5}}}`,
-			"op", json.Number("5"), "unavailable", EvidenceInconclusive},
+			`"op":{"input":{"$ref":"#/operations/op/input/x-note","x-note":{"minimum":100}}}`,
+			"op", json.Number("5"), "unavailable"},
 		{"a reference in an annotation's data leads nowhere",
-			`"op":{"input":{"type":"number","x-note":{"$ref":"#/x-memo"}},"examples":{"e":{"input":"bad"}}}`,
-			"op", "bad", "mismatch", EvidenceViolated},
+			`"op":{"input":{"type":"number","x-note":{"$ref":"#/x-memo"}}}`,
+			"op", "bad", "mismatch"},
 		{"an annotation no reference names is only carried",
-			`"op":{"input":{"type":"string","x-note":{"minimum":1e1000000000,"type":42}},"examples":{"e":{"input":"s"}}}`,
-			"op", "s", "valid", EvidenceSatisfied},
+			`"op":{"input":{"type":"string","x-note":{"minimum":1e1000000000,"type":42}}}`,
+			"op", "s", "valid"},
 		{"another operation naming the annotation reaches no schema",
 			`"op":{"input":{"type":"string","x-note":{"minimum":1}}},
-			 "other":{"input":{"$ref":"#/operations/op/input/x-note"},"examples":{"e":{"input":5}}}`,
-			"other", json.Number("5"), "unavailable", EvidenceInconclusive},
+			 "other":{"input":{"$ref":"#/operations/op/input/x-note"}}`,
+			"other", json.Number("5"), "unavailable"},
 	} {
 		document := `{"openbindings":"0.2.0","x-memo":"text","operations":{` + c.operations + `}}`
 		if got := outcome(ValidateOperationInput(c.value, mustDecodeInterface(t, document), c.op)); got != c.want {
 			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
-		}
-		report := validateBytes(t, document)
-		var examples RuleEvidenceStatus = EvidenceSatisfied
-		for _, f := range report.Findings {
-			if f.Rule == "OBI-D-10" && strings.HasPrefix(f.Path, "/operations/"+c.op+"/") && examples != EvidenceViolated {
-				examples = f.Status
-			}
-		}
-		if examples != c.examples {
-			t.Errorf("%s: the example's OBI-D-10 evidence is %s, want %s; findings %+v", c.name, examples, c.examples, report.Findings)
 		}
 	}
 }
@@ -227,8 +243,9 @@ func TestCarriedDataIsLinear(t *testing.T) {
 	}
 }
 
-// Many referenced schemas entries, each its own copy, cost work in proportion
-// to their number.
+// Many referenced schemas entries, each its own copy, allocate memory in
+// proportion to their number. The schema library's compile takes time that
+// grows faster: it scans its queue for each schema it adds.
 func TestManyReferencedSchemasAreLinear(t *testing.T) {
 	build := func(n int) *Interface {
 		var lib, refs []string
@@ -258,17 +275,8 @@ func TestAnUnreachableReferenceStaysWithItsOperation(t *testing.T) {
 	document := `{"openbindings":"0.2.0",
 		"schemas":{"M":{"type":"string"},
 		           "S":{"x-note":{"properties":{"p":{"type":"string"}}}}},
-		"operations":{"a":{"input":{"$ref":"#/schemas/S/x-note"},"examples":{"e":{"input":"a"}}},
-		              "b":{"input":{"$ref":"#/schemas/M"},"examples":{"e":{"input":5}}}}}`
-	evidence := map[string]RuleEvidenceStatus{}
-	for _, f := range validateBytes(t, document).Findings {
-		if f.Rule == "OBI-D-10" {
-			evidence[strings.Split(f.Path, "/")[2]] = f.Status
-		}
-	}
-	if evidence["a"] != EvidenceInconclusive || evidence["b"] != EvidenceViolated {
-		t.Errorf("OBI-D-10 evidence %v", evidence)
-	}
+		"operations":{"a":{"input":{"$ref":"#/schemas/S/x-note"}},
+		              "b":{"input":{"$ref":"#/schemas/M"}}}}`
 	iface := mustDecodeInterface(t, document)
 	if got := outcome(ValidateOperationInput(json.Number("5"), iface, "b")); got != "mismatch" {
 		t.Errorf("b: %s", got)
@@ -300,18 +308,22 @@ func TestSchemasTheBundleCarriesAsWritten(t *testing.T) {
 	}
 }
 
-// One operation's evidence depends only on its own graph: another operation,
-// and the order of operations, change nothing for it; and ValidateDocument
-// and CompileOperationSchema agree on every operation.
+// One operation's outcome depends only on its own graph: another operation,
+// and the order of operations, change nothing for it, in the document's
+// findings or in value validation.
 func TestSchemaGraphIsolation(t *testing.T) {
 	operations := map[string]string{
-		"ok":        `{"input":{"$ref":"#/schemas/Pet"},"examples":{"e":{"input":{"name":5}}}}`,
-		"external":  `{"input":{"$ref":"https://outside.example/x"},"examples":{"e":{"input":1}}}`,
-		"broken":    `{"input":{"$ref":"#/schemas/Big"},"examples":{"e":{"input":1}}}`,
-		"cycle":     `{"input":{"$ref":"#/schemas/Loop"},"examples":{"e":{"input":1}}}`,
-		"resource":  `{"input":{"$ref":"https://ex.test/r"},"examples":{"e":{"input":"s"}}}`,
-		"ill-typed": `{"input":{"$ref":"#/schemas/Bad"},"examples":{"e":{"input":1}}}`,
+		"ok":        `{"input":{"$ref":"#/schemas/Pet"}}`,
+		"external":  `{"input":{"$ref":"https://outside.example/x"}}`,
+		"broken":    `{"input":{"$ref":"#/schemas/Big"}}`,
+		"cycle":     `{"input":{"$ref":"#/schemas/Loop"}}`,
+		"resource":  `{"input":{"$ref":"https://ex.test/r"}}`,
+		"ill-typed": `{"input":{"$ref":"#/schemas/Bad"}}`,
 	}
+	values := map[string]any{"ok": map[string]any{"name": json.Number("5")}, "external": json.Number("1"), "broken": json.Number("1"),
+		"cycle": json.Number("1"), "resource": "s", "ill-typed": json.Number("1")}
+	want := map[string]string{"ok": "mismatch", "external": "unavailable", "broken": "unavailable",
+		"cycle": "unavailable", "resource": "mismatch", "ill-typed": "unavailable"}
 	schemas := `"Pet":{"type":"object","properties":{"name":{"type":"string"}}},
 		"Big":{"maximum":1e10001},"Loop":{"allOf":[{"$ref":"#/schemas/Loop"}]},
 		"R":{"$id":"https://ex.test/r","type":"integer"},"Bad":{"type":42}`
@@ -323,7 +335,7 @@ func TestSchemaGraphIsolation(t *testing.T) {
 		return `{"openbindings":"0.2.0","schemas":{` + schemas + `},"operations":{` + strings.Join(entries, ",") + `}}`
 	}
 	all := []string{"ok", "external", "broken", "cycle", "resource", "ill-typed"}
-	evidenceFor := func(report ValidationReport, key string) []string {
+	findingsFor := func(report ValidationReport, key string) []string {
 		var out []string
 		for _, f := range report.Findings {
 			if strings.HasPrefix(f.Path, "/operations/"+key+"/") {
@@ -335,34 +347,13 @@ func TestSchemaGraphIsolation(t *testing.T) {
 	together := validateBytes(t, build(all...))
 	iface := mustDecodeInterface(t, build(all...))
 	for _, key := range all {
-		alone := validateBytes(t, build(key))
-		if got, want := evidenceFor(together, key), evidenceFor(alone, key); !reflect.DeepEqual(got, want) {
-			t.Errorf("%s: with the others %v, alone %v", key, got, want)
+		if got, alone := findingsFor(together, key), findingsFor(validateBytes(t, build(key)), key); !reflect.DeepEqual(got, alone) {
+			t.Errorf("%s: with the others %v, alone %v", key, got, alone)
 		}
-		var example any
-		var op map[string]any
-		_ = json.Unmarshal([]byte(operations[key]), &op)
-		example = op["examples"].(map[string]any)["e"].(map[string]any)["input"]
-		direct := outcome(ValidateOperationInput(example, iface, key))
-		var d11 []string
-		for _, f := range together.Findings {
-			if f.Rule == "OBI-D-10" && strings.HasPrefix(f.Path, "/operations/"+key+"/") {
-				d11 = append(d11, string(f.Status))
-			}
-		}
-		var want string
-		switch {
-		case len(d11) == 0 && key == "external":
-			want = "unavailable" // outside OBI-D-10; the graph is not available
-		case len(d11) == 0:
-			want = "valid"
-		case d11[0] == string(EvidenceViolated):
-			want = "mismatch"
-		default:
-			want = "unavailable"
-		}
-		if direct != want {
-			t.Errorf("%s: ValidateOperationInput %s, ValidateDocument's evidence %v", key, direct, d11)
+		withOthers := outcome(ValidateOperationInput(values[key], iface, key))
+		alone := outcome(ValidateOperationInput(values[key], mustDecodeInterface(t, build(key)), key))
+		if withOthers != want[key] || alone != want[key] {
+			t.Errorf("%s: with the others %s, alone %s, want %s", key, withOthers, alone, want[key])
 		}
 	}
 }

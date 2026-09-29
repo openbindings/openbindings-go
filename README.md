@@ -12,48 +12,72 @@ through bindings and named dependencies whose implementations are supplied by
 its environment, independently of protocol. See the
 [spec](https://github.com/openbindings/spec) for details.
 
-**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-11 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
+**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-09 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
 
 > **Draft status:** this branch implements the unreleased 0.2 working draft.
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
-This implementation was checked against the Core draft at spec revision
-`ccfe0b6` (including its kind, schema reachability, and rule-number changes).
+This implementation targets the Core 0.2 working draft as
+[openbindings/spec#129](https://github.com/openbindings/spec/pull/129) leaves
+it on the spec's `release/0.2` branch, whose conformance corpus it passes.
 
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
 [§10.4](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#104-conformance-conclusions):
-evidence for every document rule, located findings, OBI-T-02 diagnostics, a
+evidence for every document rule, located findings, a
 conclusion of conformant, non-conformant, or conformance-undetermined, and the
 specification version its rule identifiers belong to.
 No document rule requires an implementation or publication for a source's
 kind. Core carries source and binding `content` without interpreting it.
 `Interface.Validate(options)` does the same for a document already in
-memory, where OBI-D-01 is inconclusive because a host object no longer
-carries the exact input bytes. The rules judge the JSON a document is, never
+memory, judging its serialization, which is what a claim about a value in
+memory is about (§10); to judge a file, pass its bytes to `ValidateDocument`.
+The rules judge the JSON a document is, never
 its typed decoding, so a document the typed model cannot carry is still judged
 in full, with two exceptions the SDK cannot read in full: a document holding a
 string that escapes a lone UTF-16 surrogate, and input nested deeper than
-encoding/json reads (10000 levels). For both, OBI-D-01 is decided; for deep
-input, OBI-D-11 is also decided from the declared version. The other rules
-are inconclusive. Both return a `*ValidationError` beside the
+encoding/json reads (10000 levels). For both, OBI-D-01 is decided, and so
+is OBI-D-09, from the declared version. The other rules are inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
-OBI-D-02, OBI-D-10, and
-OBI-D-13 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
+OBI-D-02 and OBI-D-10, and validation of values against operation contracts
+(OBI-T-08), use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
-embedded at build time. To exercise the core conformance corpus, check out the
+embedded at build time. No document rule evaluates a value against the
+document's schemas: an example is an author claim, which
+`ValidateOperationInput` and `ValidateOperationOutput` can check.
+Patterns are ECMA-262 regular expressions with Unicode semantics: a strict
+grammar check refuses what the `u` flag refuses, and
+[`dlclark/regexp2`](https://github.com/dlclark/regexp2) evaluates the rest,
+with `.`, `\b`, `\B`, and escaped surrogate pairs rewritten to ECMA-262's
+meaning. The whole draft2020-12 JSON Schema Test Suite runs against the
+SDK's path from a document to a verdict (see
+`testdata/json-schema-test-suite/README.md`). To exercise the core
+conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
 point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
 
 **Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
 than the JSON decoder's 10,000-level limit prevents full document inspection.
-OBI-D-13 leaves subschemas beyond 256 levels inconclusive. Contract
+OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Contract
 validation reports schema graph unavailability for schemas the evaluator
-cannot safely evaluate, including unsupported regular expressions, relevant
-numbers beyond its limits, and non-advancing reference cycles. An
+cannot safely evaluate, including patterns that are not ECMA-262 regular
+expressions with Unicode semantics, Unicode property escapes, backreferences to
+a group inside a quantified atom, patterns nesting groups deeper than 256
+levels, pattern matches that exceed `schemacompiler.PatternMatchTimeout`,
+relevant numbers beyond its limits, counts beyond `math.MaxInt`, references
+that are not URI-references, non-advancing reference cycles (including one a
+`$dynamicRef` closes at run time), a `$dynamicRef` when the document resource
+declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle does not
+reproduce, and a reference into a JSON Schema meta-schema's interior, or to a
+whole one when the document declares a `$dynamicAnchor` named `meta`. Before
+evaluating a value, validation counts the schema applications the graph can
+make on it, which the schema library does not bound: past 4,194,304 (2^22)
+it reaches no verdict, so a small graph that applies a schema twice at each
+of many levels cannot run for hours. The schema library's own compile takes
+time that grows faster than the number of schemas a graph uses. An
 inconclusive rule or unavailable graph is never reported as success or
 unqualified conformance. The Core corpus does not exercise every behavior in
 OBI-T-01: the exact kind comparison has direct Go tests, while Core has no
@@ -106,9 +130,9 @@ go get github.com/openbindings/openbindings-go
   any-of list. `DependencyEntry.AllowsKind` compares complete strings exactly,
   without inferring support, compatibility, or version order
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
-- **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names) and as an OBI-T-02 diagnostic, and a violation gate for acting on documents
+- **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names), and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
-- **Operation-contract validation** of values against an operation's input or output schema, resolved against the whole document (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values
+- **Optional operation-contract validation** of values against an operation's input or output schema under JSON Schema semantics (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values. The eager compiler can return an unavailable result when it cannot establish a verdict; this is an SDK implementation limit, not a document rule or a requirement for other tools
 
 ## Quick start
 
@@ -140,7 +164,7 @@ for name, op := range iface.Operations {
 }
 ```
 
-A dependency names the local operation it consumes by exact key (OBI-D-14);
+A dependency names the local operation it consumes by exact key (OBI-D-11);
 dependency keys and their operation references do not use alias resolution:
 
 ```go
@@ -157,7 +181,8 @@ fmt.Println(dependency.Operation, dependency.Kinds, openbindings.Value(operation
 ```go
 // A nil error means the value validates. A *SchemaValidationError is an
 // established mismatch; a *SchemaGraphUnavailableError means the schema's
-// graph could not be fully resolved, so no verdict was reached.
+// evaluator could not establish a verdict, often because compilation needed
+// a schema resource the SDK does not have.
 if err := openbindings.ValidateOperationInput(value, iface, "listItems"); err != nil {
     log.Fatal(err)
 }

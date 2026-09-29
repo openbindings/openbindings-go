@@ -1,6 +1,9 @@
 package openbindings
 
 import (
+	"encoding/json"
+	"errors"
+	"math"
 	"math/big"
 	"reflect"
 	"slices"
@@ -81,15 +84,15 @@ func TestValidateDocument_WellFormednessWithNumbersBeyondTheLimits(t *testing.T)
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+schema+`}}`)
 		var got []Finding
 		for _, finding := range report.Findings {
-			if finding.Rule == "OBI-D-13" {
+			if finding.Rule == "OBI-D-10" {
 				if finding.Status != EvidenceViolated {
-					t.Errorf("%s: OBI-D-13 %s at %s: %s", schema, finding.Status, finding.Path, finding.Message)
+					t.Errorf("%s: OBI-D-10 %s at %s: %s", schema, finding.Status, finding.Path, finding.Message)
 				}
 				got = append(got, finding)
 			}
 		}
 		if len(got) != len(want) {
-			t.Errorf("%s: OBI-D-13 findings %+v", schema, got)
+			t.Errorf("%s: OBI-D-10 findings %+v", schema, got)
 			continue
 		}
 		for i := range want {
@@ -103,7 +106,7 @@ func TestValidateDocument_WellFormednessWithNumbersBeyondTheLimits(t *testing.T)
 // A value holding a number beyond the numeric limits is validated as a
 // stand-in where what the library compiles compares no number by order or
 // divisibility, holds none in const or enum, and reaches no meta-schema;
-// otherwise no verdict is reached. The same holds of an example (OBI-D-10).
+// otherwise no verdict is reached.
 func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 	for _, tc := range []struct {
 		input, value, want string
@@ -119,7 +122,7 @@ func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 		{`{"$ref":"#/schemas/N"}`, `1e99999`, "unavailable"},
 		{`{"enum":["x",1]}`, `1e99999`, "unavailable"},
 	} {
-		document := `{"openbindings":"0.2.0","schemas":{"N":{"maximum":5}},"operations":{"op":{"input":` + tc.input + `,"examples":{"e":{"input":` + tc.value + `}}}}}`
+		document := `{"openbindings":"0.2.0","schemas":{"N":{"maximum":5}},"operations":{"op":{"input":` + tc.input + `}}}`
 		err := ValidateOperationInput(decodeValue(t, []byte(tc.value)), mustDecodeInterface(t, document), "op")
 		if got := outcome(err); got != tc.want {
 			t.Errorf("%s against %s: %s, want %s (%v)", tc.value, tc.input, got, tc.want, err)
@@ -127,10 +130,45 @@ func TestValidateOperationInput_NumbersBeyondTheLimits(t *testing.T) {
 		if tc.want == "unavailable" && !strings.Contains(err.Error(), "compares numbers with") {
 			t.Errorf("%s against %s: %v", tc.value, tc.input, err)
 		}
-		example := map[string]RuleEvidenceStatus{"valid": EvidenceSatisfied, "mismatch": EvidenceViolated, "unavailable": EvidenceInconclusive}[tc.want]
-		if got := mustValidateDocument(t, document).Evidence["OBI-D-10"]; got != example {
-			t.Errorf("%s against %s: OBI-D-10 %s, want %s", tc.value, tc.input, got, example)
+	}
+}
+
+// The stand-in for a number beyond the limits equals another number of the
+// value exactly when that number does, whatever Go type holds it.
+func TestValidateOperationInput_StandInsAvoidGoNumbers(t *testing.T) {
+	document := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"uniqueItems":true}}}}`)
+	for _, tc := range []struct {
+		value []any
+		want  string
+	}{
+		{[]any{json.Number("1e99999"), 1}, "valid"},
+		{[]any{json.Number("1e99999"), uint8(1), 2.0, float32(3)}, "valid"},
+		{[]any{json.Number("1e99999"), json.Number("1e99999"), 1}, "mismatch"},
+		{[]any{json.Number("1.5e99999"), 1.5}, "valid"},
+	} {
+		if got := outcome(ValidateOperationInput(tc.value, document, "op")); got != tc.want {
+			t.Errorf("%v: %s, want %s", tc.value, got, tc.want)
 		}
+	}
+}
+
+// A count the schema library would convert to an int past math.MaxInt
+// reaches no verdict, since the keyword would bound a different count.
+func TestValidateOperationInput_CountsBeyondMaxInt(t *testing.T) {
+	for _, input := range []string{
+		`{"minLength":9223372036854775808}`,
+		`{"maxLength":18446744073709551617}`,
+		`{"properties":{"a":{"minItems":1e19}}}`,
+	} {
+		document := `{"openbindings":"0.2.0","operations":{"op":{"input":` + input + `}}}`
+		err := ValidateOperationInput(decodeValue(t, []byte(`{"a":[]}`)), mustDecodeInterface(t, document), "op")
+		if got := outcome(err); got != "unavailable" || !strings.Contains(err.Error(), "the largest the schema library reads") {
+			t.Errorf("%s: %s (%v)", input, got, err)
+		}
+	}
+	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"maxLength":9223372036854775807}}}}`
+	if got := outcome(ValidateOperationInput("x", mustDecodeInterface(t, document), "op")); got != "valid" {
+		t.Errorf("maxLength math.MaxInt: %s", got)
 	}
 }
 
@@ -150,14 +188,41 @@ func TestValidateOperationInput_CarriedNumbersAreNeverRead(t *testing.T) {
 		`{"$ref":"#/schemas/S"}`,
 	} {
 		document := `{"openbindings":"0.2.0","schemas":{"S":{"type":"string","default":` + unreadable + `}},
-			"operations":{"op":{"input":` + input + `,"examples":{"e":{"input":5}}}}}`
+			"operations":{"op":{"input":` + input + `}}}`
 		report := mustValidateDocument(t, document)
-		if report.Evidence["OBI-D-13"] != EvidenceSatisfied || report.Evidence["OBI-D-10"] == EvidenceInconclusive {
-			t.Errorf("%s: OBI-D-13 %s, OBI-D-10 %s; findings %+v", input, report.Evidence["OBI-D-13"], report.Evidence["OBI-D-10"], report.Findings)
+		if report.Evidence["OBI-D-10"] != EvidenceSatisfied {
+			t.Errorf("%s: OBI-D-10 %s; findings %+v", input, report.Evidence["OBI-D-10"], report.Findings)
+		}
+		if got := outcome(ValidateOperationInput(json.Number("5"), mustDecodeInterface(t, document), "op")); got == "unavailable" {
+			t.Errorf("%s: 5 reached no verdict", input)
 		}
 		iface := mustDecodeInterface(t, document)
 		if got := outcome(ValidateOperationInput(decodeValue(t, []byte(`"s"`)), iface, "op")); got != "valid" {
 			t.Errorf("%s: \"s\" gave %s", input, got)
+		}
+	}
+}
+
+// A Go value with no JSON reading is refused before validation: it is neither
+// valid nor a mismatch.
+func TestValidateOperationInput_ValuesThatAreNotJSON(t *testing.T) {
+	document := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"maxLength":1,"pattern":"^.$"}}}}`)
+	cyclicMap := map[string]any{}
+	cyclicMap["self"] = cyclicMap
+	cyclicSlice := []any{nil}
+	cyclicSlice[0] = cyclicSlice
+	for _, value := range []any{
+		cyclicMap,
+		cyclicSlice,
+		"\xff",
+		map[string]any{"\xff": "x"},
+		[]any{"a", "b\xc3"},
+		math.NaN(),
+		struct{}{},
+	} {
+		err := ValidateOperationInput(value, document, "op")
+		if err == nil || errors.As(err, new(*SchemaValidationError)) || !strings.Contains(err.Error(), "not a JSON value") {
+			t.Errorf("%.40v: %v", value, err)
 		}
 	}
 }

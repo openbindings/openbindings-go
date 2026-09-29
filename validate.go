@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -21,12 +20,16 @@ type ValidateOptions struct{}
 
 // Validate checks a document already in memory against every document rule
 // this SDK can decide. It reports the per-rule evidence, the located findings,
-// OBI-T-02 diagnostics, and the §10.4 conformance conclusion.
+// and the §10.4 conformance conclusion.
 //
 // The rules judge the document the host object encodes, exactly as
-// ValidateDocument judges bytes. OBI-D-01 is always inconclusive here,
-// because it is decided on the exact input bytes, which a host object no
-// longer carries; ValidateDocument decides it.
+// ValidateDocument judges bytes: a claim about a value in memory is a claim
+// about its serialization as UTF-8 JSON text with no byte-order mark, each
+// number written at its exact value (§10). That text is the encoding Validate
+// judges, which the model writes only when it decodes back unchanged, so
+// OBI-D-01 holds whenever there is a report. The report is about the value,
+// not about any bytes it was decoded from: to judge a file, pass its bytes to
+// ValidateDocument.
 //
 // The error is a *ValidationError listing every established violation, so
 // `if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil`
@@ -35,7 +38,7 @@ type ValidateOptions struct{}
 // not violated, and the report's Conclusion says whether the document is
 // conformant or conformance undetermined. No rule takes binding-specification
 // knowledge: a source's and a binding's content are the binding
-// specification's, and no core rule judges them. OBI-D-13 is inconclusive
+// specification's, and no core rule judges them. OBI-D-10 is inconclusive
 // for the subschemas a schema nests deeper than 256 levels, where the
 // meta-schema check meets a resource limit (§10.4).
 //
@@ -52,8 +55,7 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 	if err != nil {
 		return ValidationReport{}, err
 	}
-	c := ruleChecks{version: reportVersion(i.OpenBindings)}
-	c.inconclusive("OBI-D-01", "", "decided on the exact input bytes, which a host object no longer carries; ValidateDocument decides it")
+	c := ruleChecks{version: appliedRelease}
 	checkDocument(&c, view, options)
 	return c.conclude()
 }
@@ -69,38 +71,38 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // reported as that rule's
 // violation, with every other rule inconclusive, since which of its values
 // the document holds is not established. A document holding a string that
-// escapes a lone UTF-16 surrogate has OBI-D-01 decided and every other rule
-// inconclusive; one nesting deeper than encoding/json reads (10000 levels)
-// has OBI-D-11 decided as well, on the version it declares.
+// escapes a lone UTF-16 surrogate, or nesting deeper than encoding/json reads
+// (10000 levels), has OBI-D-01 and OBI-D-09 decided, OBI-D-09 on the version
+// it declares, and every other rule inconclusive.
 //
 // A document declaring a well-formed version outside the supported set is not
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
 // (OBI-T-04). The version is read first, from any input that is one JSON
 // value, however deeply it nests.
-// options gives the capabilities validation does not carry itself, as for
-// Interface.Validate.
+// options configures validation, as for Interface.Validate.
 func ValidateDocument(data []byte, options ValidateOptions) (*Interface, ValidationReport, error) {
-	var c ruleChecks
+	c := ruleChecks{version: appliedRelease}
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
 		if refusal := inputVersionRefusal(data); refusal != nil {
 			return nil, ValidationReport{}, refusal
 		}
-		declared, _ := declaredVersion(data)
-		c.version = reportVersion(declared)
 		var lone *loneSurrogateError
 		switch {
 		case errors.Is(err, errNestingLimit):
 			// OBI-D-01 is decided on the input, which the exact scan reads at
-			// any depth, and so is OBI-D-11, on the member the scan reads the
+			// any depth, and so is OBI-D-09, on the member the scan reads the
 			// version from. The other rules read the decoded document, which
 			// meets a resource limit and is no evidence either way (§10.4).
-			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-D-01", "OBI-D-11")
+			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-D-01", "OBI-D-09")
 			checkDeclaredVersion(&c, versionView(data))
 		case errors.As(err, &lone):
 			// OBI-D-01 is decided: the input is UTF-8 JSON with no repeated
-			// name. The other rules read values this SDK cannot carry.
-			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01")
+			// name. So is OBI-D-09, on the member the exact scan reads the
+			// version from. The other rules read values this SDK cannot
+			// carry.
+			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01", "OBI-D-09")
+			checkDeclaredVersion(&c, versionView(data))
 		default:
 			c.findings = append(c.findings, d01Violation(err))
 			c.inconclusiveExcept("OBI-D-01 refuses the input, so this rule was not checked", "OBI-D-01")
@@ -111,8 +113,6 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 	if refusal := declaredVersionRefusal(view); refusal != nil {
 		return nil, ValidationReport{}, refusal
 	}
-	declared, _ := view.(map[string]any)["openbindings"].(string)
-	c.version = reportVersion(declared)
 	checkDocument(&c, view, options)
 	report, verr := c.conclude()
 	var iface Interface
@@ -145,7 +145,7 @@ func documentView(i Interface) (any, error) {
 	return view, nil
 }
 
-// versionView returns what OBI-D-11 judges of input of any depth, read by the
+// versionView returns what OBI-D-09 judges of input of any depth, read by the
 // exact scan: an object holding the root object's openbindings member when
 // it has one, a value other than a string standing as an empty value of its
 // JSON type.
@@ -171,7 +171,7 @@ func versionView(data []byte) any {
 	return map[string]any{"openbindings": version}
 }
 
-// checkDeclaredVersion decides OBI-D-11 from a document's generic view, which
+// checkDeclaredVersion decides OBI-D-09 from a document's generic view, which
 // holds even when the value is not a string.
 func checkDeclaredVersion(c *ruleChecks, view any) {
 	object, _ := view.(map[string]any)
@@ -179,11 +179,11 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 	version, isString := value.(string)
 	switch {
 	case !present:
-		c.violated("OBI-D-11", "", "missing the required openbindings member")
+		c.violated("OBI-D-09", "", "missing the required openbindings member")
 	case !isString:
-		c.violated("OBI-D-11", "/openbindings", fmt.Sprintf("must be a SemVer 2.0.0 string; got %s", jsonTypeName(value)))
+		c.violated("OBI-D-09", "/openbindings", fmt.Sprintf("must be a SemVer 2.0.0 string; got %s", jsonTypeName(value)))
 	case !IsValidSemver(version):
-		c.violated("OBI-D-11", "/openbindings", fmt.Sprintf("%q is not a valid SemVer 2.0.0 string", version))
+		c.violated("OBI-D-09", "/openbindings", fmt.Sprintf("%q is not a valid SemVer 2.0.0 string", version))
 	}
 }
 
@@ -202,7 +202,7 @@ func inputVersionRefusal(data []byte) *VersionRefusalError {
 // declaredVersionRefusal applies OBI-T-04 to the version a document's generic
 // view declares. The decision precedes interpretation under this version's
 // semantics, the embedded document schema included. A missing or malformed
-// version is OBI-D-11's concern, decided with the other rules, so it is not a
+// version is OBI-D-09's concern, decided with the other rules, so it is not a
 // refusal.
 func declaredVersionRefusal(view any) *VersionRefusalError {
 	object, _ := view.(map[string]any)
@@ -214,7 +214,7 @@ func declaredVersionRefusal(view any) *VersionRefusalError {
 }
 
 // versionRefusalOf applies OBI-T-04 to a declared version. It returns nil for
-// an accepted version and for a malformed one, which is OBI-D-11's concern
+// an accepted version and for a malformed one, which is OBI-D-09's concern
 // rather than a refusal.
 func versionRefusalOf(version string) *VersionRefusalError {
 	if !IsValidSemver(version) {
@@ -227,18 +227,7 @@ func versionRefusalOf(version string) *VersionRefusalError {
 	return &VersionRefusalError{Version: version, Reason: msg}
 }
 
-// Known members of each OBI-defined object, for OBI-T-02's diagnostics, are
-// the typed members of the document model.
-var (
-	rootMembersKnown       = membersOf(reflect.TypeFor[Interface]()).typed
-	operationMembersKnown  = membersOf(reflect.TypeFor[Operation]()).typed
-	exampleMembersKnown    = membersOf(reflect.TypeFor[OperationExample]()).typed
-	dependencyMembersKnown = membersOf(reflect.TypeFor[DependencyEntry]()).typed
-	sourceMembersKnown     = membersOf(reflect.TypeFor[Source]()).typed
-	bindingMembersKnown    = membersOf(reflect.TypeFor[BindingEntry]()).typed
-)
-
-// checkDocument records evidence for OBI-D-02 through OBI-D-14 on the generic
+// checkDocument records evidence for OBI-D-02 through OBI-D-13 on the generic
 // view of a document whose version has already been accepted.
 //
 // Each rule is judged literally on the values the document holds. A rule
@@ -246,7 +235,9 @@ var (
 // outside the rule's domain, gives it nothing to judge there. A member whose
 // type contradicts what the rule requires of it violates the rule: an
 // operation reference that is a number names no operation key. Where the
-// document schema requires a member or a type, OBI-D-02 also reports it.
+// document schema requires a member or a type, OBI-D-02 also reports it. No
+// rule evaluates a value against the document's schemas: an example is an
+// author claim, which no document rule checks (OBI-T-10).
 func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 	checkDeclaredVersion(c, view)
 	validateAgainstOBISchema(c, view)
@@ -263,27 +254,21 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 
 	operations, _ := root["operations"].(map[string]any)
 	d.checkOperations(operations)
-	d.checkDuplicateIDs()
+	d.checkUniqueness()
 
 	dependencies, _ := root["dependencies"].(map[string]any)
 	for _, key := range sortedKeys(dependencies) {
 		path := jsonpointer.Format("dependencies", key)
 		validateIdent(c, path, key)
 		if dependency, ok := dependencies[key].(map[string]any); ok {
-			d.checkReference(dependency, path, "operation", "OBI-D-14", operations, "operation key")
-			diagnoseUnknownFields(c, path, dependency, dependencyMembersKnown)
+			d.checkReference(dependency, path, "operation", "OBI-D-11", operations, "operation key")
 		}
 	}
 
 	sources, _ := root["sources"].(map[string]any)
 	for _, key := range sortedKeys(sources) {
-		path := jsonpointer.Format("sources", key)
-		validateIdent(c, path, key)
-		source, ok := sources[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		diagnoseUnknownFields(c, path, source, sourceMembersKnown)
+		validateIdent(c, jsonpointer.Format("sources", key), key)
+		// Source content belongs to the source's kind.
 	}
 
 	bindings, _ := root["bindings"].(map[string]any)
@@ -294,18 +279,9 @@ func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
 		if !ok {
 			continue
 		}
-		d.checkReference(binding, path, "operation", "OBI-D-08", operations, "operation key")
-		d.checkReference(binding, path, "source", "OBI-D-09", sources, "source")
-		diagnoseUnknownFields(c, path, binding, bindingMembersKnown)
+		d.checkReference(binding, path, "operation", "OBI-D-07", operations, "operation key")
+		d.checkReference(binding, path, "source", "OBI-D-08", sources, "source")
 	}
-
-	if root != nil {
-		diagnoseUnknownFields(c, "", root, rootMembersKnown)
-	}
-
-	// OBI-D-10: every provided example validates against its operation's
-	// schema, where that schema's graph resolves entirely within the document.
-	checkExamples(c, view, operations, d.schemas)
 }
 
 // documentCheck carries one document's view through its rule checks.
@@ -321,7 +297,7 @@ type documentCheck struct {
 	wellFormed map[string]bool
 }
 
-// checkReference decides a referential rule (OBI-D-08, OBI-D-09, OBI-D-14)
+// checkReference decides a referential rule (OBI-D-07, OBI-D-08, OBI-D-11)
 // for the member name of an entry: its value is a key of targets, the entries
 // of a map the document may lack.
 func (d *documentCheck) checkReference(entry map[string]any, entryPath, name, rule string, targets map[string]any, noun string) {
@@ -389,11 +365,7 @@ func (d *documentCheck) checkOperations(operations map[string]any) {
 		for _, exampleKey := range sortedKeys(examples) {
 			examplePath := jsonpointer.Format("operations", key, "examples", exampleKey)
 			validateIdent(d.c, examplePath, exampleKey)
-			if example, ok := examples[exampleKey].(map[string]any); ok {
-				diagnoseUnknownFields(d.c, examplePath, example, exampleMembersKnown)
-			}
 		}
-		diagnoseUnknownFields(d.c, path, operation, operationMembersKnown)
 	}
 }
 
@@ -402,34 +374,12 @@ func hasKey(object map[string]any, key string) bool {
 	return ok
 }
 
-// checkSchema records evidence for one schema position: well-formedness
-// (OBI-D-13), and the reference, dialect, and vocabulary rules its walk
-// applies (OBI-D-05, OBI-D-06, OBI-D-07, OBI-D-12).
+// checkSchema records evidence for one schema at an OBI position:
+// meta-schema validity (OBI-D-10) and the dialect and reference-form rules its
+// walk applies (OBI-D-05, OBI-D-06, OBI-D-12).
 func (d *documentCheck) checkSchema(path string, schema any) {
 	validateSchemaWellFormedness(d.c, path, schema, d.wellFormed)
-	d.walkSchema(&schemaPath{start: path}, schema, false, false)
-}
-
-// literalFragmentProblem states why ref is not a same-document fragment in
-// JSON Pointer form and literal form (§7), or returns "" when it is one.
-func literalFragmentProblem(ref string) string {
-	if !strings.HasPrefix(ref, "#") {
-		return fmt.Sprintf("%q must be a same-document fragment", ref)
-	}
-	if wellFormed, _ := uriReference(ref); !wellFormed {
-		return fmt.Sprintf("%q is not a well-formed URI reference (RFC 3986 §4.1)", ref)
-	}
-	pointer := ref[1:]
-	switch {
-	case strings.Contains(pointer, "%"):
-		return fmt.Sprintf("%q is not in literal form; a same-document fragment is written with the pointer's characters unencoded (percent-encoding is not a conformant OBI reference)", ref)
-	case pointer != "" && !strings.HasPrefix(pointer, "/"):
-		return fmt.Sprintf("%q is a plain-name fragment; a same-document reference is a JSON Pointer fragment (bare # or #/...)", ref)
-	}
-	if _, ok := jsonpointer.Parse(pointer); !ok {
-		return fmt.Sprintf("%q is not a JSON Pointer fragment: ~ must be followed by 0 or 1 (RFC 6901)", ref)
-	}
-	return ""
+	d.walkSchema(&schemaPath{start: path}, schema, false)
 }
 
 // sortedKeys returns an object's keys in order, so evidence is reported
@@ -441,27 +391,6 @@ func sortedKeys(object map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// diagnoseUnknownFields surfaces OBI-T-02's advice for the unknown non-`x-`
-// members of an OBI-defined object: processing ignores them. The document
-// schema also refuses them (OBI-D-02, §12), since unprefixed names are
-// reserved for the specification.
-func diagnoseUnknownFields(c *ruleChecks, path string, object map[string]any, known map[string]bool) {
-	var unknown []string
-	for _, name := range sortedKeys(object) {
-		if !known[name] && !strings.HasPrefix(name, "x-") {
-			unknown = append(unknown, name)
-		}
-	}
-	if len(unknown) == 0 {
-		return
-	}
-	noun := "fields"
-	if len(unknown) == 1 {
-		noun = "field"
-	}
-	c.diagnose("OBI-T-02", path, fmt.Sprintf("unknown %s ignored: %s; extensions use the x- prefix", noun, strings.Join(unknown, ", ")))
 }
 
 // identPattern enforces OBI-D-03: every map key and every operation alias must
@@ -479,95 +408,78 @@ func validateIdent(c *ruleChecks, prefix, id string) {
 
 const draft202012URI = "https://json-schema.org/draft/2020-12/schema"
 
-// walkSchema walks a schema and every subschema of it, applying:
-//   - OBI-D-06: $schema, where present, equals the 2020-12 dialect URI.
-//   - OBI-D-07: $vocabulary does not appear.
-//   - OBI-D-05 at OBI positions: every $ref is a well-formed URI reference
-//     (RFC 3986 §4.1) that is a same-document JSON Pointer fragment in
-//     literal form or an absolute URI; an $id is an absolute, well-formed
-//     URI; and $dynamicRef and $dynamicAnchor do not appear.
-//   - OBI-D-12 at OBI positions: a same-document fragment resolves from the
-//     document root, and an absolute reference to a resource the document
-//     embeds resolves within that resource.
+// walkSchema walks a schema and every subschema of it the 2020-12 meta-schema
+// validates as one, the legacy definitions and the schema values of the
+// legacy dependencies included, applying:
+//   - OBI-D-06: every $schema names the 2020-12 dialect, with or without an
+//     empty fragment. Its placement is JSON Schema's to report, not a document
+//     rule.
+//   - OBI-D-05 at OBI positions, in the document resource: every $ref and
+//     $dynamicRef is a well-formed URI-reference (RFC 3986 §4.1) that is an
+//     absolute URI or a same-document reference (empty, or a fragment
+//     alone), and every $id is a well-formed absolute URI.
+//   - OBI-D-12 at OBI positions, in the document resource: a same-document
+//     $ref or $dynamicRef identifies a schema at an OBI position.
 //
-// A schema that declares its own $id is a schema resource whose references,
-// nested $ids, anchors, and dynamic pair are its internal business, resolved
-// per JSON Schema 2020-12 exactly as for an externally fetched schema (§7), so
-// OBI-D-05 and OBI-D-12 stop at its boundary: they judge its own $id and
-// nothing inside it. They also stop at definitions and dependencies, whose
-// entries 2020-12 does not evaluate as subschemas: described marks a schema
-// below one. OBI-D-06 and OBI-D-07 govern every schema the meta-schema
-// describes, inside resources and those two keywords too.
-func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource, described bool) {
+// A schema that declares $id is itself at an OBI position, so OBI-D-05 judges
+// its $id, but everything else in the resource it declares, its own keywords
+// included, is the resource's business, resolved per JSON Schema 2020-12
+// (§7.2): OBI-D-05 and OBI-D-12 stop at its boundary. OBI-D-06 governs every
+// schema the document contains, inside resources too.
+func (d *documentCheck) walkSchema(path *schemaPath, schema any, inResource bool) {
 	s, ok := schema.(map[string]any)
 	if !ok {
-		// Boolean schemas carry no keywords; any other value is OBI-D-13's.
+		// Boolean schemas carry no keywords; any other value is OBI-D-10's.
 		return
 	}
 
-	// §5.2's dialect constraints are also part of well-formedness
-	// (OBI-D-13), so a schema breaking one violates both rules. A $schema
-	// that is not a string is already refused by the meta-schemas.
-	if value, present := s["$schema"]; present && value != draft202012URI {
-		d.c.violated("OBI-D-06", path.at("$schema"), fmt.Sprintf("must equal %q; got %s", draft202012URI, describeJSON(value)))
-		if _, isString := value.(string); isString {
-			d.c.violated("OBI-D-13", path.at("$schema"), "not well-formed: §5.2 requires the 2020-12 dialect")
-		}
-	}
-	if _, present := s["$vocabulary"]; present {
-		d.c.violated("OBI-D-07", path.at(), "$vocabulary keyword is forbidden in OBI documents")
-		d.c.violated("OBI-D-13", path.at(), "not well-formed: §5.2 forbids $vocabulary")
+	// A $schema that is not a string is already refused by the meta-schemas.
+	if value, present := s["$schema"]; present && value != draft202012URI && value != draft202012URI+"#" {
+		d.c.violated("OBI-D-06", path.at("$schema"), fmt.Sprintf("must name the 2020-12 dialect, %q, with or without an empty fragment; got %s", draft202012URI, describeJSON(value)))
 	}
 
-	if !inResource && !described {
+	if !inResource {
 		if value, present := s["$id"]; present {
-			// This schema's own $id is at an OBI position; everything inside
-			// the resource it declares is the resource's business.
-			idPath := path.at("$id")
 			id, isString := value.(string)
 			if !isString {
-				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("an $id is an absolute URI string; got %s", jsonTypeName(value)))
+				d.c.violated("OBI-D-05", path.at("$id"), fmt.Sprintf("an $id is an absolute URI string; got %s", jsonTypeName(value)))
 			} else if wellFormed, hasScheme := uriReference(id); !wellFormed {
-				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("%q is not a well-formed URI reference (RFC 3986 §4.1)", id))
+				d.c.violated("OBI-D-05", path.at("$id"), fmt.Sprintf("%q is not a well-formed URI-reference (RFC 3986 §4.1)", id))
 			} else if !hasScheme {
-				d.c.violated("OBI-D-05", idPath, fmt.Sprintf("%q must be an absolute URI", id))
+				d.c.violated("OBI-D-05", path.at("$id"), fmt.Sprintf("%q must be an absolute URI", id))
 			}
-			// An $id empty once its fragment is removed declares no resource.
-			_, inResource = declaredID(s)
+			// A schema with an $id member is a boundary, whatever the
+			// member's value (§7).
+			inResource = true
 		}
 	}
 
-	if !inResource && !described {
-		// The dynamic pair does not appear at OBI positions: dynamic
-		// resolution follows the runtime dynamic scope rather than the
-		// document (§7 item 2).
-		if _, present := s["$dynamicRef"]; present {
-			d.c.violated("OBI-D-05", path.at(), "$dynamicRef does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
-		}
-		if _, present := s["$dynamicAnchor"]; present {
-			d.c.violated("OBI-D-05", path.at(), "$dynamicAnchor does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document")
-		}
-		if value, present := s["$ref"]; present {
-			refPath := path.at("$ref")
+	if !inResource {
+		for _, keyword := range []string{"$ref", "$dynamicRef"} {
+			value, present := s[keyword]
+			if !present {
+				continue
+			}
 			if ref, ok := value.(string); ok {
-				d.checkDocumentReference(refPath, path.at(), ref)
+				d.checkDocumentReference(path, keyword, ref)
 			} else {
-				d.c.violated("OBI-D-05", refPath, fmt.Sprintf("a $ref is a URI reference string; got %s", jsonTypeName(value)))
+				d.c.violated("OBI-D-05", path.at(keyword), fmt.Sprintf("a %s is a URI-reference string; got %s", keyword, jsonTypeName(value)))
 			}
 		}
 	}
 
 	forEachDescribedSubschema(s, func(child any, tokens ...string) {
 		path.below = append(path.below, tokens...)
-		d.walkSchema(path, child, inResource, described || describedMapKeywords[tokens[0]])
+		d.walkSchema(path, child, inResource)
 		path.below = path.below[:len(path.below)-len(tokens)]
 	})
 }
 
 // schemaPath is where a walk of a schema is: the location of the schema it
 // began at, and the reference tokens from there to the schema it is at. A
-// location is formatted only when a finding needs one, so the walk itself
-// does no work per node that grows with depth; each finding costs its path.
+// location is formatted only when a finding needs one, so the walk itself,
+// references included, does no work per node that grows with depth; each
+// finding costs its path.
 type schemaPath struct {
 	start string
 	below []string
@@ -579,93 +491,96 @@ func (p *schemaPath) at(tokens ...string) string {
 	return p.start + jsonpointer.Format(slices.Concat(p.below, tokens)...)
 }
 
-// checkDocumentReference applies OBI-D-05 and OBI-D-12 to a schema $ref at an
-// OBI position, held by the schema at holder.
-func (d *documentCheck) checkDocumentReference(path, holder, ref string) {
+// checkDocumentReference applies OBI-D-05 and OBI-D-12 to the $ref or
+// $dynamicRef keyword names, held by the schema a walk of the document
+// resource is at.
+func (d *documentCheck) checkDocumentReference(path *schemaPath, keyword, ref string) {
 	wellFormed, hasScheme := uriReference(ref)
+	sameDocument := ref == "" || strings.HasPrefix(ref, "#")
 	switch {
 	case !wellFormed:
-		d.c.violated("OBI-D-05", path, fmt.Sprintf("%q is not a well-formed URI reference (RFC 3986 §4.1)", ref))
-		if !strings.HasPrefix(ref, "#") {
-			return
-		}
-	case !strings.HasPrefix(ref, "#"):
-		if !hasScheme {
-			d.c.violated("OBI-D-05", path, fmt.Sprintf("%q must be a same-document fragment or an absolute URI, not a relative reference", ref))
-			return
-		}
-		d.checkEmbeddedReference(path, holder, ref)
+		d.c.violated("OBI-D-05", path.at(keyword), fmt.Sprintf("%q is not a well-formed URI-reference (RFC 3986 §4.1)", ref))
+		return
+	case sameDocument:
+	case hasScheme:
+		// An absolute URI is outside OBI-D-12; JSON Schema resolves it.
 		return
 	default:
-		if problem := literalFragmentProblem(ref); problem != "" {
-			d.c.violated("OBI-D-05", path, problem)
-		}
+		d.c.violated("OBI-D-05", path.at(keyword), fmt.Sprintf("%q must be an absolute URI or a same-document reference, not a relative reference", ref))
+		return
 	}
-	// OBI-D-12 judges the fragment whatever its spelling: URI semantics
-	// decode it before it is read as a JSON Pointer (RFC 6901 §6), and one
-	// that is not a pointer resolves to no location from the document root.
-	switch r := d.schemas.resolve(ref, holder, d.view); {
+	switch r := d.schemas.resolveFrom(ref, nil, d.view); {
 	case r.exists == missing:
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q does not resolve within the document", ref))
+		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("the %s %q %s", keyword, ref, r.why))
 	case r.origin == inDocument:
-		d.checkFragmentTarget(path, ref, r.location)
-	}
-}
-
-// checkEmbeddedReference applies OBI-D-12 to an absolute $ref: one that
-// matches the $id of a schema the document embeds is in the rule's scope and
-// resolves within that resource; any other is external and outside it.
-func (d *documentCheck) checkEmbeddedReference(path, holder, ref string) {
-	r := d.schemas.resolve(ref, holder, d.view)
-	switch {
-	case r.origin == ambiguous && r.uri != "":
-		// The reference names no one schema, but when its fragment resolves
-		// within none of the schemas declaring the URI, it resolves nowhere.
-		why := d.schemas.ambiguous[r.uri]
-		if r.exists == missing {
-			d.c.violated("OBI-D-12", path, fmt.Sprintf("%q does not resolve within any of the schemas that declare %s: %s", ref, r.uri, why))
-		} else {
-			d.c.inconclusive("OBI-D-12", path, fmt.Sprintf("%q names no one embedded schema: %s", ref, why))
-		}
-	case r.within == nil:
-		// External, or a meta-schema: outside the rule.
-	case r.exists == missing:
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q does not resolve within %s", ref, describeBase(r.within)))
-	case r.origin == ambiguous:
-		d.c.inconclusive("OBI-D-12", path, fmt.Sprintf("%q names an anchor more than one schema in %s declares", ref, resourceName(r.within)))
-	case r.origin == inDocument:
-		d.checkEmbeddedTarget(path, ref, r.within, r.location)
+		d.checkFragmentTarget(path, keyword, ref, r.location)
 	}
 }
 
 // checkFragmentTarget applies OBI-D-12's target clause to a same-document
-// fragment $ref at an OBI position: it resolves to a schema at an OBI
-// position, never to the document or anything else that is not a schema
-// (JSON Schema 2020-12 §9.4.2 leaves such a target undefined), and never into
-// a schema resource that declares its own $id, whose contents a reference
-// reaches through that $id (§9.2.1). A schemas entry declaring $id is itself
-// at an OBI position.
-func (d *documentCheck) checkFragmentTarget(path, ref, target string) {
-	var enclosing *schemaResource
-	if end := strings.LastIndexByte(target, '/'); end >= 0 {
-		enclosing = d.schemas.resourceAt(target[:end])
-	}
+// reference in the document resource: it identifies a schema at an OBI
+// position, never the OBI document or a value that is not a schema. The
+// resolver has already refused a location inside a schema with an $id member;
+// a schemas entry declaring $id is itself at an OBI position.
+func (d *documentCheck) checkFragmentTarget(path *schemaPath, keyword, ref, target string) {
+	value, _ := jsonpointer.Resolve(d.view, target)
+	_, isObject := value.(map[string]any)
+	_, isBoolean := value.(bool)
 	switch {
-	case enclosing != nil:
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q resolves into the schema resource declared at %s, whose contents a reference reaches through its $id", ref, enclosing.location))
-	case !atSchemaPosition(target):
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q resolves to %s, which is not a schema position", ref, describeLocation(target)))
+	case target == "":
+		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("%q names the OBI document itself, which is not a schema", ref))
+	case !isOBIPosition(d.view, target) || !isObject && !isBoolean:
+		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("%q resolves to %s, which is not a schema at an OBI position", ref, target))
 	}
 }
 
-// checkEmbeddedTarget applies OBI-D-12's target clause to an absolute $ref
-// that matches an embedded schema's $id: it resolves to that schema or to a
-// subschema JSON Schema 2020-12 defines below it.
-func (d *documentCheck) checkEmbeddedTarget(path, ref string, within *schemaResource, target string) {
-	tokens, _ := jsonpointer.Parse(strings.TrimPrefix(target, within.location))
-	if !covers(within.location, target) || !keywordPath(tokens, false) {
-		d.c.violated("OBI-D-12", path, fmt.Sprintf("%q resolves to %s, which is not a schema within the resource declared at %s", ref, describeLocation(target), within.location))
+// isOBIPosition reports whether a location in a document's generic view is an
+// OBI position (§7): an operation's input or output, an entry of schemas, or
+// reached from one through the keywords the 2020-12 meta-schema validates as
+// schemas, the legacy definitions and dependencies included. Each step is
+// read in what the view holds, so a keyword holding a map or an array of
+// schemas leads to an entry only when its value is an object or an array:
+// allOf holding an object has no entries.
+func isOBIPosition(view any, location string) bool {
+	tokens, _ := jsonpointer.Parse(location)
+	root, _ := view.(map[string]any)
+	var node any
+	present := false
+	switch {
+	case len(tokens) >= 2 && tokens[0] == "schemas":
+		schemas, _ := root["schemas"].(map[string]any)
+		node, present = schemas[tokens[1]]
+		tokens = tokens[2:]
+	case len(tokens) >= 3 && tokens[0] == "operations" && (tokens[2] == "input" || tokens[2] == "output"):
+		operations, _ := root["operations"].(map[string]any)
+		operation, _ := operations[tokens[1]].(map[string]any)
+		node, present = operation[tokens[2]]
+		tokens = tokens[3:]
 	}
+	for present && len(tokens) > 0 {
+		schema, _ := node.(map[string]any)
+		value, has := schema[tokens[0]]
+		switch keyword := tokens[0]; {
+		case !has:
+			return false
+		case singleSchemaKeywords[keyword]:
+			node, tokens = value, tokens[1:]
+			continue
+		case len(tokens) < 2:
+			return false
+		case schemaMapKeywords[keyword], describedMapKeywords[keyword]:
+			entries, _ := value.(map[string]any)
+			node, present = entries[tokens[1]]
+		case arraySchemaKeywords[keyword]:
+			_, isArray := value.([]any)
+			node, present = jsonpointer.Resolve(value, jsonpointer.Format(tokens[1]))
+			present = present && isArray
+		default:
+			return false
+		}
+		tokens = tokens[2:]
+	}
+	return present
 }
 
 // describeLocation names a document location for a message.
@@ -676,14 +591,28 @@ func describeLocation(location string) string {
 	return location
 }
 
-// checkDuplicateIDs applies OBI-D-05's identity clause: no two schema
-// resources the document embeds declare the same $id once each is resolved,
-// since a URI identifies only one schema (JSON Schema 2020-12 §9.1.2). Each
-// declaration is a finding.
-func (d *documentCheck) checkDuplicateIDs() {
-	for _, id := range slices.Sorted(maps.Keys(d.schemas.ambiguous)) {
-		for _, resource := range d.schemas.claimants[id] {
-			d.c.violated("OBI-D-05", resource.location+jsonpointer.Format("$id"), fmt.Sprintf("declares %s, which more than one schema declares: %s", id, d.schemas.ambiguous[id]))
+// checkUniqueness applies OBI-D-13: no plain name is declared more than once
+// in the document resource, each $anchor and each $dynamicAnchor declaring it
+// counting once, and no two schemas the document contains declare the same
+// $id as OBI-D-13 compares identifiers (comparableID). Each declaration is a
+// finding.
+func (d *documentCheck) checkUniqueness() {
+	for _, name := range slices.Sorted(maps.Keys(d.schemas.anchors)) {
+		declarations := d.schemas.anchors[name]
+		if len(declarations) < 2 {
+			continue
+		}
+		for _, declaration := range declarations {
+			d.c.violated("OBI-D-13", declaration.at.from(nil)+jsonpointer.Format(declaration.keyword), fmt.Sprintf("declares the plain name %q, which the document resource declares %d times", name, len(declarations)))
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(d.schemas.identifiers)) {
+		declarations := d.schemas.identifiers[id]
+		if len(declarations) < 2 {
+			continue
+		}
+		for _, at := range declarations {
+			d.c.violated("OBI-D-13", at.from(nil)+jsonpointer.Format("$id"), fmt.Sprintf("declares %s, which %d schemas the document contains declare", id, len(declarations)))
 		}
 	}
 }

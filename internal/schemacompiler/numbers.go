@@ -160,10 +160,15 @@ func Substitute(v any) Substitution {
 	return s
 }
 
+// forEachNumber calls fn with each number in v, of every numeric type
+// ValueProblem accepts, spelled as the schema library reads it: a Go number by
+// fmt.Sprint, whose spelling of a finite float is a JSON number.
 func forEachNumber(v any, fn func(json.Number)) {
 	switch v := v.(type) {
 	case json.Number:
 		fn(v)
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		fn(json.Number(fmt.Sprint(v)))
 	case []any:
 		for _, item := range v {
 			forEachNumber(item, fn)

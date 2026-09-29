@@ -19,10 +19,39 @@ support. Go accepts unknown kinds while validating a document and gives
 source and binding content no Core interpretation. The former
 `bindingSpec`/`bindingSpecs` names are unknown fields, not aliases.
 
+The core alignment with the spec draft of openbindings/spec#129 (2026-09-29) is established in
+Go first; TypeScript alignment is pending for each of these:
+
+- **Model.** `idempotent` is a binding member; a dependency carries an
+  optional `description`.
+- **Rule numbering.** OBI-D-01 through OBI-D-13 as the draft numbers them; no
+  `$vocabulary` rule and no example validity (examples are author claims).
+- **References.** OBI-D-05 admits plain names and the dynamic pair in the
+  document resource; OBI-D-12 decodes a fragment once, then reads a pointer or
+  a plain name the document resource declares, and leaves absolute references
+  to JSON Schema; the legacy `definitions` and `dependencies` hold OBI
+  positions.
+- **Uniqueness.** OBI-D-13 counts each `$anchor` and `$dynamicAnchor`
+  declaration and compares `$id`s after strict RFC 3986 §5.2 resolution.
+- **Resource boundaries.** A schema with an `$id` member is a boundary
+  whatever the member's value; a pointer from the document resource reaches
+  nothing inside one, for OBI-D-12 and value validation alike.
+- **Host objects.** Validating a document in memory decides OBI-D-01 on its
+  serialization (§10), so it can conclude conformant.
+- **Version decision.** A text beginning with a byte-order mark declares no
+  version (OBI-T-04). A report names the release whose text it applies
+  (OBI-T-09).
+- **JSON Schema Test Suite.** Go runs the whole draft2020-12 suite through
+  OBI documents, with two stated exclusions and three stated reasons for no
+  verdict (`testdata/json-schema-test-suite/README.md`).
+- **Value validation.** Patterns are ECMA-262 with the `u` flag (native in
+  TypeScript); a match that reaches no answer, and an absent schema, give no
+  verdict (OBI-T-08), as do a resource declaring one name twice, an `$id` of
+  `""` or `#`, and a cycle a `$dynamicRef` closes at run time.
+
 Document validation reports the core's §10.4 conformance conclusion in Go:
 `Interface.Validate(options)` and `ValidateDocument(data, options)` return a
-`ValidationReport` with per-rule evidence, findings, and OBI-T-02
-diagnostics. TypeScript applies OBI-T-09 to caller evidence through
+`ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-09 to caller evidence through
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
@@ -37,15 +66,13 @@ each of these observable behaviors:
 - **Rules over the document's JSON.** Every document rule is judged on the
   document's JSON, never its typed decoding, and literally on the values
   present; a resource limit is inconclusive, never a violation.
-- **Operation-contract validation.** The OBI root is not a schema; success
-  needs the complete statically reachable graph, available and well-formed,
-  whatever branches an evaluator would skip. An unreferenced `$defs` entry is
-  not part of that graph, while document well-formedness still checks it;
-  `format` never asserts, in any
-  dialect; a built-in meta-schema is available; an `$id` that names no one
-  embedded schema leaves only the graphs that reach it unavailable; a
-  version outside the supported set is refused; an alias names its
-  operation; a reference cycle that never advances is unavailable.
+- **Operation-contract validation.** The OBI root is the resolution context,
+  not a schema. A claimed value result follows the applicable JSON Schema
+  dialect; a missing capability or resource yields no verdict. Go currently
+  uses an eager compiler, so it can return no verdict for a graph containing
+  an unavailable branch even when a particular value does not enter that
+  branch. That limitation is Go behavior, not a Core or parity requirement.
+  Both SDKs must distinguish an established mismatch from no verdict.
 
 | Concept | Go | TypeScript |
 |---|---|---|
@@ -55,9 +82,9 @@ each of these observable behaviors:
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |
 
-Core parity means the same document fields and validation outcomes, exact
-kind comparisons, version refusals, operation resolution, schema graph
-outcomes, and conformance conclusions. Kind-specific support and invocation
+Core parity means the same document fields and established validation outcomes,
+exact kind comparisons, version refusals, operation resolution, and sound
+conformance conclusions. Kind-specific support and invocation
 behavior belong to later modules and are not established by this record.
 Parity does not require identical type casing, incidental error prose, or
 internal caches.

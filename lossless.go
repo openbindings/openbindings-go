@@ -43,7 +43,7 @@ import (
 
 // LosslessFields is embedded in every OBI-defined object type to carry the
 // members its typed fields do not: Extensions holds `x-` members (§12) and
-// Unknown every other one (OBI-T-02). Decoding fills both; encoding writes
+// Unknown every other one. Decoding fills both; encoding writes
 // them back beside the typed members.
 //
 // An entry whose name is a typed member's name is never encoded: the typed
@@ -341,9 +341,9 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 func verifyStrings(typed any, lossless LosslessFields) error {
 	value := reflect.ValueOf(typed)
 	for _, field := range membersOf(value.Type()).fields {
-		if below, invalid := invalidUTF8(value.Field(field.index)); invalid {
+		if below, problem := invalidUTF8(value.Field(field.index), map[heldValue]bool{}); problem != "" {
 			slices.Reverse(below)
-			return fmt.Errorf("%s: invalid UTF-8, which would not encode as held", strings.Join(append([]string{field.name}, below...), "/"))
+			return fmt.Errorf("%s: %s", strings.Join(append([]string{field.name}, below...), "/"), problem)
 		}
 	}
 	for _, carried := range []map[string]json.RawMessage{lossless.Extensions, lossless.Unknown} {
@@ -362,26 +362,37 @@ func verifyStrings(typed any, lossless LosslessFields) error {
 }
 
 // invalidUTF8 reports where, below a value, a string or map key holds invalid
-// UTF-8, as the reference tokens from the value, last first: the path is
-// spelled out only when one is found. It does not descend into a value that
-// encodes itself (an OBI-defined object, or raw JSON, which encodeObject
-// verifies as written).
-func invalidUTF8(v reflect.Value) ([]string, bool) {
+// UTF-8, or a container holds itself, as the reference tokens from the value,
+// last first, and what is wrong: the path is spelled out only when one is
+// found. It does not descend into a value that encodes itself (an OBI-defined
+// object, or raw JSON, which encodeObject verifies as written). open holds
+// the containers being walked, a cycle among which would never end.
+func invalidUTF8(v reflect.Value, open map[heldValue]bool) ([]string, string) {
+	const invalid = "invalid UTF-8, which would not encode as held"
 	if !v.IsValid() || (v.Kind() != reflect.Interface && v.Type().Implements(marshalerType)) {
-		return nil, false
+		return nil, ""
+	}
+	if held, isContainer := heldBy(v); isContainer {
+		if open[held] {
+			return nil, "holds itself, which JSON cannot write"
+		}
+		open[held] = true
+		defer delete(open, held)
 	}
 	switch v.Kind() {
 	case reflect.String:
-		return nil, !utf8.ValidString(v.String())
+		if !utf8.ValidString(v.String()) {
+			return nil, invalid
+		}
 	case reflect.Pointer, reflect.Interface:
 		if v.IsNil() {
-			return nil, false
+			return nil, ""
 		}
-		return invalidUTF8(v.Elem())
+		return invalidUTF8(v.Elem(), open)
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {
-			if below, invalid := invalidUTF8(v.Index(i)); invalid {
-				return append(below, strconv.Itoa(i)), true
+			if below, problem := invalidUTF8(v.Index(i), open); problem != "" {
+				return append(below, strconv.Itoa(i)), problem
 			}
 		}
 	case reflect.Map:
@@ -389,14 +400,37 @@ func invalidUTF8(v reflect.Value) ([]string, bool) {
 		for iter.Next() {
 			key := iter.Key()
 			if key.Kind() == reflect.String && !utf8.ValidString(key.String()) {
-				return []string{strconv.Quote(key.String())}, true
+				return []string{strconv.Quote(key.String())}, invalid
 			}
-			if below, invalid := invalidUTF8(iter.Value()); invalid {
-				return append(below, key.String()), true
+			if below, problem := invalidUTF8(iter.Value(), open); problem != "" {
+				return append(below, key.String()), problem
 			}
 		}
 	}
-	return nil, false
+	return nil, ""
+}
+
+// heldValue identifies what a pointer, a map, or a non-empty slice refers to.
+type heldValue struct {
+	at     uintptr
+	length int
+	typ    reflect.Type
+}
+
+// heldBy returns what a pointer, a map, or a non-empty slice refers to, which
+// a cycle passes through.
+func heldBy(v reflect.Value) (heldValue, bool) {
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map:
+		if !v.IsNil() {
+			return heldValue{at: v.Pointer(), length: -1, typ: v.Type()}, true
+		}
+	case reflect.Slice:
+		if v.Len() > 0 {
+			return heldValue{at: v.Pointer(), length: v.Len(), typ: v.Type()}, true
+		}
+	}
+	return heldValue{}, false
 }
 
 // verifyRawMembers refuses a member an OBI-defined object carries as raw JSON,

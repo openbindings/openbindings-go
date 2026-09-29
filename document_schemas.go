@@ -12,12 +12,15 @@ import (
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
 
-// documentSchemas is what an OBI document holds as schema resources (§5.2,
-// §7): every schema at a schema position that declares its own $id. A schema
-// position is an OBI schema position (an operation's input or output, or an
-// entry of schemas) or a subschema of one, as JSON Schema 2020-12 evaluates
-// subschemas (forEachSubschema). The rest of the document is not a schema,
-// whatever its members are named, and declares no resource.
+// documentSchemas is what an OBI document holds as schemas (§5.2, §7): the
+// schema resources schemas declare with their own $id, the plain names the
+// document resource declares, and the identifiers OBI-D-13 compares. Every
+// schema the document contains is walked: the schemas at OBI positions (an
+// operation's input or output, an entry of schemas, and every subschema the
+// 2020-12 meta-schema validates as one, the legacy definitions and the schema
+// values of the legacy dependencies included) and the subschemas of the
+// resources they declare. The rest of the document is not a schema, whatever
+// its members are named, and declares nothing.
 type documentSchemas struct {
 	// at maps the location of every resource to it.
 	at map[string]*schemaResource
@@ -25,78 +28,132 @@ type documentSchemas struct {
 	// declares, without fragment, to it.
 	resources map[string]*schemaResource
 	// ambiguous maps an absolute URI that more than one schema declares as its
-	// $id to why it names no one resource, and claimants to those schemas.
+	// $id to why it names no one resource.
 	ambiguous map[string]string
-	claimants map[string][]*schemaResource
-	// documentDynamicAnchor is true when a schema outside every resource
-	// declares $dynamicAnchor, which OBI-D-05 excludes.
+	// anchors maps each plain name the document resource declares to every
+	// declaration of it, in document order: one per $anchor and one per
+	// $dynamicAnchor, as OBI-D-13 counts them (JSON Schema Core §8.2.2).
+	anchors map[string][]anchorDeclaration
+	// identifiers maps each identifier OBI-D-13 compares to where every
+	// schema declaring it sits, in document order.
+	identifiers map[string][]*pathNode
+	// dynamicAnchors maps each name a $dynamicAnchor declares, in any
+	// resource, to where every schema declaring it sits, in document order: a
+	// $dynamicRef naming it may land on any of them at run time.
+	dynamicAnchors map[string][]string
+	// documentDynamicAnchor is true when the document resource declares a
+	// $dynamicAnchor, which the dynamic scope of an evaluation beginning there
+	// holds (§7.2).
 	documentDynamicAnchor bool
 }
 
+// anchorDeclaration is one declaration of a plain name: the schema declaring
+// it and the keyword that does.
+type anchorDeclaration struct {
+	at      *pathNode
+	keyword string
+}
+
+// schemaResource is a schema that has an $id member, and what it encloses: a
+// boundary (§7) whatever the member's value.
 type schemaResource struct {
 	location string
 	schema   map[string]any
 	// uri is the absolute URI the resource's $id resolves to, without
 	// fragment; nil when it resolves to none, as a relative $id at an OBI
-	// position does. Such a resource is still a boundary: what lies within it
-	// is its own business (§7), and it can be addressed only from within.
+	// position or an $id that is not a string does. Such a resource is still a
+	// boundary: what lies within it is its own business (§7), and it can be
+	// addressed only from within. An $id empty once its fragment is removed
+	// ("" or "#") resolves to its base, a URI the schema enclosing it already
+	// has.
 	uri *url.URL
-	// anchors maps each plain-name anchor the resource declares, by $anchor or
-	// $dynamicAnchor, to where every schema declaring it sits, in document
-	// order, spelled out only when used. A nested resource's anchors are its
+	// anchors maps each plain-name anchor the resource declares to where the
+	// schema declaring it sits, once per declaration, by $anchor or
+	// $dynamicAnchor, in document order, spelled out only when used: JSON
+	// Schema leaves a name declared more than once in a resource undefined,
+	// even by one schema (Core §8.2.2). A nested resource's anchors are its
 	// own.
 	anchors map[string][]*pathNode
 }
 
-// collectDocumentSchemas walks the schema positions of a document's generic
-// view.
+// collectDocumentSchemas walks the schemas a document's generic view contains.
 func collectDocumentSchemas(view any) documentSchemas {
-	d := documentSchemas{at: map[string]*schemaResource{}, resources: map[string]*schemaResource{}}
+	d := documentSchemas{
+		at:             map[string]*schemaResource{},
+		resources:      map[string]*schemaResource{},
+		anchors:        map[string][]anchorDeclaration{},
+		identifiers:    map[string][]*pathNode{},
+		dynamicAnchors: map[string][]string{},
+	}
 	claimants := map[string][]*schemaResource{}
-	var walk func(node any, at *pathNode, resource *schemaResource)
-	walk = func(node any, at *pathNode, resource *schemaResource) {
+	// identifier is the identifier OBI-D-13 compares for the nearest
+	// enclosing schema that declares $id, or "" when there is none or it is
+	// not compared.
+	var walk func(node any, at *pathNode, resource *schemaResource, identifier string)
+	walk = func(node any, at *pathNode, resource *schemaResource, identifier string) {
 		object, ok := node.(map[string]any)
 		if !ok {
 			return
 		}
-		if raw, declares := declaredID(object); declares {
+		if value, present := object["$id"]; present {
+			// An $id that is not a string is not compared, and neither is a
+			// relative $id within it.
+			raw, isString := value.(string)
+			enclosing := identifier
+			if identifier = ""; isString {
+				identifier = comparableID(raw, enclosing)
+			}
+			if identifier != "" {
+				d.identifiers[identifier] = append(d.identifiers[identifier], at)
+			}
 			var base *url.URL
 			if resource != nil {
 				base = resource.uri
 			}
 			location := at.from(nil)
-			resource = &schemaResource{location: location, schema: object, uri: resolveID(raw, base), anchors: map[string][]*pathNode{}}
+			resource = &schemaResource{location: location, schema: object, anchors: map[string][]*pathNode{}}
+			if isString {
+				resource.uri = resolveID(raw, base)
+			}
 			d.at[location] = resource
 			if resource.uri != nil {
 				key := resource.uri.String()
 				claimants[key] = append(claimants[key], resource)
 			}
 		}
-		names := anchorNames(object)
-		switch {
-		case resource != nil:
-			for _, name := range names {
-				resource.anchors[name] = append(resource.anchors[name], at)
+		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+			name, isString := object[keyword].(string)
+			if !isString {
+				continue
 			}
-		case object["$dynamicAnchor"] != nil:
+			if resource != nil {
+				resource.anchors[name] = append(resource.anchors[name], at)
+			} else {
+				d.anchors[name] = append(d.anchors[name], anchorDeclaration{at: at, keyword: keyword})
+			}
+			if keyword == "$dynamicAnchor" {
+				d.dynamicAnchors[name] = append(d.dynamicAnchors[name], at.from(nil))
+			}
+		}
+		if _, present := object["$dynamicAnchor"]; present && resource == nil {
 			d.documentDynamicAnchor = true
 		}
-		forEachSubschema(object, func(child any, tokens ...string) {
-			walk(child, at.child(tokens...), resource)
+		forEachDescribedSubschema(object, func(child any, tokens ...string) {
+			walk(child, at.child(tokens...), resource, identifier)
 		})
 	}
 
 	root, _ := view.(map[string]any)
 	schemas, _ := root["schemas"].(map[string]any)
 	for _, key := range sortedKeys(schemas) {
-		walk(schemas[key], (*pathNode)(nil).child("schemas", key), nil)
+		walk(schemas[key], (*pathNode)(nil).child("schemas", key), nil, "")
 	}
 	operations, _ := root["operations"].(map[string]any)
 	for _, key := range sortedKeys(operations) {
 		operation, _ := operations[key].(map[string]any)
 		for _, position := range []string{"input", "output"} {
 			if schema, present := operation[position]; present {
-				walk(schema, (*pathNode)(nil).child("operations", key, position), nil)
+				walk(schema, (*pathNode)(nil).child("operations", key, position), nil, "")
 			}
 		}
 	}
@@ -111,12 +168,40 @@ func collectDocumentSchemas(view any) documentSchemas {
 		}
 		sort.Strings(locations)
 		if d.ambiguous == nil {
-			d.ambiguous, d.claimants = map[string]string{}, map[string][]*schemaResource{}
+			d.ambiguous = map[string]string{}
 		}
-		d.ambiguous[id] = fmt.Sprintf("the schemas at %s all declare it", strings.Join(locations, ", "))
-		d.claimants[id] = resources
+		// The message names a few declarations, so a message per reference
+		// does not grow with how many schemas declare the URI.
+		named := strings.Join(locations[:min(len(locations), 3)], ", ")
+		if more := len(locations) - 3; more > 0 {
+			named += fmt.Sprintf(", and %d more", more)
+		}
+		d.ambiguous[id] = fmt.Sprintf("the schemas at %s all declare it", named)
 	}
 	return d
+}
+
+// comparableID returns the identifier OBI-D-13 compares for an $id, or ""
+// when it compares none: a well-formed URI-reference that is an absolute URI,
+// or that resolves against the identifier of the nearest enclosing schema that
+// declares one, itself compared (enclosing), resolved by RFC 3986 §5.2, which
+// removes dot segments, with any empty fragment removed. Nothing else is
+// normalized, so spellings a URI library would merge stay distinct.
+func comparableID(raw, enclosing string) string {
+	wellFormed, absolute := uriReference(raw)
+	if !wellFormed || !absolute && enclosing == "" {
+		return ""
+	}
+	var resolved uriParts
+	if absolute {
+		resolved = resolveURIReference(uriParts{}, splitURI(raw))
+	} else {
+		resolved = resolveURIReference(splitURI(enclosing), splitURI(raw))
+	}
+	if resolved.hasFragment && resolved.fragment == "" {
+		resolved.hasFragment = false
+	}
+	return resolved.String()
 }
 
 // resourceAt returns the innermost resource holding a location, or nil for the
@@ -163,28 +248,6 @@ func (n *pathNode) from(base *pathNode) string {
 	return jsonpointer.Format(tokens...)
 }
 
-// anchorNames returns the plain-name anchors a schema object declares, by
-// $anchor or $dynamicAnchor, each once: one schema declaring a name both ways
-// declares it at one location.
-func anchorNames(object map[string]any) []string {
-	var names []string
-	for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
-		if name, ok := object[keyword].(string); ok && !slices.Contains(names, name) {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-// declaredID returns the $id a schema object declares a resource by, its
-// fragment removed: an $id that is empty once its fragment is removed ("" or
-// "#") declares nothing, as JSON Schema libraries read it.
-func declaredID(object map[string]any) (string, bool) {
-	raw, _ := object["$id"].(string)
-	id, _, _ := strings.Cut(raw, "#")
-	return id, id != ""
-}
-
 // resolveID returns the absolute URI, without fragment, that a declared $id
 // resolves to against base, or nil when it resolves to none.
 func resolveID(raw string, base *url.URL) *url.URL {
@@ -192,66 +255,35 @@ func resolveID(raw string, base *url.URL) *url.URL {
 	if err != nil {
 		return nil
 	}
-	parsed = resolveURI(base, parsed)
-	if !parsed.IsAbs() {
+	parsed, resolved := resolveURI(base, parsed)
+	if !resolved || !parsed.IsAbs() {
 		return nil
 	}
 	parsed.Fragment, parsed.RawFragment = "", ""
 	return parsed
 }
 
-// resolveURI resolves ref against base by RFC 3986 §5.2. base may be nil when
-// ref is absolute. net/url follows the RFC except against a base whose path is
-// rootless (urn:x:y), where it would give urn:///b for b; the RFC merges the
-// paths, giving urn:b.
-func resolveURI(base, ref *url.URL) *url.URL {
-	if base == nil {
-		base = &url.URL{}
+// resolveURI resolves ref against base, which may be nil when ref is
+// absolute, strictly by RFC 3986 §5.2 (resolveURIReference), in time
+// proportional to their length. It reports false when the target does not
+// parse as a URL. net/url's own resolution differs from the RFC against a
+// base whose path is rootless (urn:x:y), and repeats work for each ".."
+// segment.
+func resolveURI(base, ref *url.URL) (*url.URL, bool) {
+	var from uriParts
+	if base != nil {
+		from = splitURI(base.String())
 	}
-	if base.Opaque == "" || ref.Scheme != "" || ref.Host != "" || ref.User != nil || ref.Path == "" || strings.HasPrefix(ref.Path, "/") {
-		return base.ResolveReference(ref)
-	}
-	directory := base.Opaque[:strings.LastIndexByte(base.Opaque, '/')+1]
-	return &url.URL{
-		Scheme:      base.Scheme,
-		Opaque:      removeDotSegments(directory + ref.Path),
-		RawQuery:    ref.RawQuery,
-		Fragment:    ref.Fragment,
-		RawFragment: ref.RawFragment,
-	}
-}
-
-// removeDotSegments removes the "." and ".." segments of a path (RFC 3986
-// §5.2.4).
-func removeDotSegments(path string) string {
-	var out []string
-	segments := strings.Split(path, "/")
-	for i, segment := range segments {
-		last := i == len(segments)-1
-		switch segment {
-		case ".":
-			if last {
-				out = append(out, "")
-			}
-		case "..":
-			if len(out) > 0 {
-				out = out[:len(out)-1]
-			}
-			if last {
-				out = append(out, "")
-			}
-		default:
-			out = append(out, segment)
-		}
-	}
-	return strings.Join(out, "/")
+	target, err := url.Parse(resolveURIReference(from, splitURI(ref.String())).String())
+	return target, err == nil
 }
 
 // Keyword tables. Most entries name schema-bearing positions under JSON
 // Schema 2020-12. Evaluation is narrower: contentSchema is annotation only,
 // and then/else need a sibling if. The pre-2019 spellings definitions and
-// dependencies have shapes checked by the meta-schema, but 2020-12 neither
-// evaluates them nor finds resources or anchors in them.
+// dependencies hold schemas the 2020-12 meta-schema validates, so their
+// schemas are at OBI positions (§7), though strict 2020-12 evaluates neither
+// and the bundle leaves dependencies out.
 
 // schemaMapKeywords hold { name -> schema } maps.
 var schemaMapKeywords = map[string]bool{

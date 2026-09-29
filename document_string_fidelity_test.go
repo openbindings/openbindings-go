@@ -34,8 +34,24 @@ func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 	if err != nil || decoded != nil {
 		t.Fatalf("no violation is established and no document decoded: %v", err)
 	}
-	if report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-10"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("OBI-D-01 %q, OBI-D-10 %q, conclusion %q", report.Evidence["OBI-D-01"], report.Evidence["OBI-D-10"], report.Conclusion)
+	if report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+		t.Fatalf("OBI-D-01 %q, OBI-D-02 %q, conclusion %q", report.Evidence["OBI-D-01"], report.Evidence["OBI-D-02"], report.Conclusion)
+	}
+}
+
+// OBI-D-09 is decided on the member the exact scan reads the version from,
+// so a lone surrogate elsewhere leaves an established violation of it
+// established, and a satisfied one satisfied.
+func TestDocumentStrings_LoneSurrogatesLeaveTheVersionDecided(t *testing.T) {
+	for document, want := range map[string]RuleEvidenceStatus{
+		`{"operations":{},"description":"\ud800"}`:                        EvidenceViolated,
+		`{"openbindings":"0.2.0\ud800","operations":{}}`:                  EvidenceViolated,
+		`{"openbindings":"0.2.0","operations":{},"description":"\ud800"}`: EvidenceSatisfied,
+	} {
+		_, report, _ := ValidateDocument([]byte(document), ValidateOptions{})
+		if report.Evidence["OBI-D-09"] != want || report.Evidence["OBI-D-02"] != EvidenceInconclusive {
+			t.Errorf("%s: OBI-D-09 %q, want %q; OBI-D-02 %q", document, report.Evidence["OBI-D-09"], want, report.Evidence["OBI-D-02"])
+		}
 	}
 }
 

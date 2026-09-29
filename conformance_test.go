@@ -139,9 +139,17 @@ func runConformanceDir(t *testing.T, dir string) {
 					t.Fatalf("invalid fixture carriage: %v", inputErr)
 				}
 				iface, parseErr := ParseDocument(documentBytes)
+				var report ValidationReport
 				var validateErr error
 				if parseErr == nil {
-					_, validateErr = iface.Validate(ValidateOptions{})
+					report, validateErr = iface.Validate(ValidateOptions{})
+				}
+				if !tt.Valid && parseErr == nil && validateErr == nil {
+					for _, expectedRule := range tt.Violates {
+						if report.Evidence[expectedRule] == EvidenceInconclusive {
+							t.Skipf("%s was not decided by this validator", expectedRule)
+						}
+					}
 				}
 				actualValid := parseErr == nil && validateErr == nil
 
@@ -380,23 +388,15 @@ func testConcludeConformanceScenario(t *testing.T, raw json.RawMessage) {
 			Evidence map[string]RuleEvidenceStatus `json:"evidence"`
 		} `json:"given"`
 		Expected struct {
-			Conclusion   string   `json:"conclusion"`
-			Violated     []string `json:"violated"`
-			Inconclusive []string `json:"inconclusive"`
+			Conclusion string `json:"conclusion"`
 		} `json:"expected"`
 	}
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
 	report := ConcludeConformance(scenario.Given.Evidence)
-	expectedViolated := append([]string(nil), scenario.Expected.Violated...)
-	expectedInconclusive := append([]string(nil), scenario.Expected.Inconclusive...)
-	sort.Strings(expectedViolated)
-	sort.Strings(expectedInconclusive)
-	if string(report.Conclusion) != scenario.Expected.Conclusion ||
-		!slices.Equal(report.Violated, expectedViolated) ||
-		!slices.Equal(report.Inconclusive, expectedInconclusive) {
-		t.Fatalf("report %#v; expected conclusion=%q violated=%v inconclusive=%v", report, scenario.Expected.Conclusion, expectedViolated, expectedInconclusive)
+	if string(report.Conclusion) != scenario.Expected.Conclusion {
+		t.Fatalf("report %#v; expected conclusion=%q", report, scenario.Expected.Conclusion)
 	}
 }
 

@@ -39,19 +39,19 @@ func TestPublicDocumentReadersRetainNumbers(t *testing.T) {
 	}
 }
 
-func TestPublicDocumentValidationDistinguishesAdjacentExactBounds(t *testing.T) {
+func TestPublicValueValidationDistinguishesAdjacentExactBounds(t *testing.T) {
 	for _, tc := range []struct {
 		bound, input string
-		conforms     bool
+		verdict      string
 	}{
-		{"9007199254740993", "9007199254740992", false},
-		{"9007199254740993", "9007199254740993", true},
-		{"0.10000000000000000002", "0.10000000000000000001", false},
-		{"0.10000000000000000002", "0.10000000000000000002", true},
+		{"9007199254740993", "9007199254740992", "mismatch"},
+		{"9007199254740993", "9007199254740993", "valid"},
+		{"0.10000000000000000002", "0.10000000000000000001", "mismatch"},
+		{"0.10000000000000000002", "0.10000000000000000002", "valid"},
 	} {
-		raw := []byte(fmt.Sprintf(`{"openbindings":"0.2.0","operations":{"test":{"input":{"minimum":%s},"examples":{"test":{"input":%s}}}}}`, tc.bound, tc.input))
-		if _, _, err := ValidateDocument(raw, ValidateOptions{}); (err == nil) != tc.conforms {
-			t.Fatalf("bound=%s input=%s expectConforms=%v err=%v", tc.bound, tc.input, tc.conforms, err)
+		document := fmt.Sprintf(`{"openbindings":"0.2.0","operations":{"test":{"input":{"minimum":%s}}}}`, tc.bound)
+		if got := inputVerdict(t, document, "test", json.Number(tc.input)); got != tc.verdict {
+			t.Fatalf("bound=%s input=%s: %s, want %s", tc.bound, tc.input, got, tc.verdict)
 		}
 	}
 }

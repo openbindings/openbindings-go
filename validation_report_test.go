@@ -38,7 +38,7 @@ func TestConcludeConformance(t *testing.T) {
 			name: "complete success",
 			evidence: map[string]RuleEvidenceStatus{
 				"OBI-D-02": EvidenceSatisfied,
-				"OBI-D-14": EvidenceNotApplicable,
+				"OBI-D-11": EvidenceNotApplicable,
 			},
 			want: ValidationReport{Conclusion: ConclusionConformant},
 		},
@@ -56,14 +56,14 @@ func TestConcludeConformance(t *testing.T) {
 		{
 			name: "violation is decisive and incompleteness is retained",
 			evidence: map[string]RuleEvidenceStatus{
-				"OBI-D-13": EvidenceInconclusive,
+				"OBI-D-10": EvidenceInconclusive,
 				"OBI-D-03": EvidenceViolated,
 				"OBI-D-02": EvidenceViolated,
 			},
 			want: ValidationReport{
 				Conclusion:   ConclusionNonConformant,
 				Violated:     []string{"OBI-D-02", "OBI-D-03"},
-				Inconclusive: []string{"OBI-D-13"},
+				Inconclusive: []string{"OBI-D-10"},
 			},
 		},
 		{
@@ -88,17 +88,17 @@ func TestConcludeConformance(t *testing.T) {
 	}
 }
 
-// A report names the specification version its rule identifiers belong to:
-// the version the document declares when this SDK supports it, and otherwise
-// AuthoringVersion, whose rules judge a document declaring no version it can
-// interpret. A report concluded from evidence alone names none.
-func TestValidationReport_NamesTheVersionItsRulesBelongTo(t *testing.T) {
+// A report names the release whose text it applies, to which its rule
+// identifiers belong (OBI-T-09): the one this SDK applies, whatever release of
+// the line the document declares. A report concluded from evidence alone
+// names none.
+func TestValidationReport_NamesTheReleaseItApplies(t *testing.T) {
 	cases := map[string]string{
 		`{"openbindings":"0.2.0","operations":{}}`:         "0.2.0",
-		`{"openbindings":"0.2.7+build.1","operations":{}}`: "0.2.7+build.1",
-		`{"openbindings":"two","operations":{}}`:           AuthoringVersion,
-		`{"operations":{}}`:                                AuthoringVersion,
-		`not json`:                                         AuthoringVersion,
+		`{"openbindings":"0.2.7+build.1","operations":{}}`: "0.2.0",
+		`{"openbindings":"two","operations":{}}`:           "0.2.0",
+		`{"operations":{}}`:                                "0.2.0",
+		`not json`:                                         "0.2.0",
 	}
 	for document, want := range cases {
 		_, report, _ := ValidateDocument([]byte(document), ValidateOptions{})

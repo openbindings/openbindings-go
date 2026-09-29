@@ -1,7 +1,9 @@
 package openbindings
 
 import (
+	"bytes"
 	"net/netip"
+	"regexp"
 	"strings"
 )
 
@@ -88,8 +90,8 @@ func ipLiteral(s string) bool {
 		if dot < 2 || dot == len(s)-1 {
 			return false
 		}
-		for _, c := range s[1:dot] {
-			if !isHex(byte(c)) {
+		for i := 1; i < dot; i++ {
+			if !isHex(s[i]) {
 				return false
 			}
 		}
@@ -138,3 +140,134 @@ func isHex(c byte) bool {
 func isAlpha(c byte) bool { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// uriParts is a URI-reference split into its five components (RFC 3986
+// Appendix B), each with whether it is defined, since an empty component and
+// an undefined one differ.
+type uriParts struct {
+	scheme, authority, path, query, fragment       string
+	hasScheme, hasAuthority, hasQuery, hasFragment bool
+}
+
+// uriSplit is the regular expression of RFC 3986 Appendix B.
+var uriSplit = regexp.MustCompile(`^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?$`)
+
+// splitURI splits a URI-reference into its components (RFC 3986 Appendix B).
+func splitURI(s string) uriParts {
+	m := uriSplit.FindStringSubmatchIndex(s)
+	part := func(group int) (string, bool) {
+		if m[2*group] < 0 {
+			return "", false
+		}
+		return s[m[2*group]:m[2*group+1]], true
+	}
+	var p uriParts
+	p.scheme, p.hasScheme = part(2)
+	p.authority, p.hasAuthority = part(4)
+	p.path, _ = part(5)
+	p.query, p.hasQuery = part(7)
+	p.fragment, p.hasFragment = part(9)
+	return p
+}
+
+// String recomposes a URI-reference from its components (RFC 3986 §5.3).
+func (p uriParts) String() string {
+	var b strings.Builder
+	if p.hasScheme {
+		b.WriteString(p.scheme + ":")
+	}
+	if p.hasAuthority {
+		b.WriteString("//" + p.authority)
+	}
+	b.WriteString(p.path)
+	if p.hasQuery {
+		b.WriteString("?" + p.query)
+	}
+	if p.hasFragment {
+		b.WriteString("#" + p.fragment)
+	}
+	return b.String()
+}
+
+// resolveURIReference transforms a reference into its target URI against a
+// base, strictly as RFC 3986 §5.2.2 does, without normalizing anything but
+// dot segments.
+func resolveURIReference(base, ref uriParts) uriParts {
+	var t uriParts
+	switch {
+	case ref.hasScheme:
+		t = ref
+		t.path = removeDotSegmentsStrict(ref.path)
+	case ref.hasAuthority:
+		t = ref
+		t.path = removeDotSegmentsStrict(ref.path)
+		t.scheme, t.hasScheme = base.scheme, base.hasScheme
+	default:
+		switch {
+		case ref.path == "":
+			t.path = base.path
+			t.query, t.hasQuery = base.query, base.hasQuery
+			if ref.hasQuery {
+				t.query, t.hasQuery = ref.query, true
+			}
+		case strings.HasPrefix(ref.path, "/"):
+			t.path = removeDotSegmentsStrict(ref.path)
+			t.query, t.hasQuery = ref.query, ref.hasQuery
+		default:
+			t.path = removeDotSegmentsStrict(mergePaths(base, ref.path))
+			t.query, t.hasQuery = ref.query, ref.hasQuery
+		}
+		t.authority, t.hasAuthority = base.authority, base.hasAuthority
+		t.scheme, t.hasScheme = base.scheme, base.hasScheme
+	}
+	t.fragment, t.hasFragment = ref.fragment, ref.hasFragment
+	return t
+}
+
+// mergePaths merges a relative-path reference with a base's path (RFC 3986
+// §5.2.3).
+func mergePaths(base uriParts, path string) string {
+	if base.hasAuthority && base.path == "" {
+		return "/" + path
+	}
+	return base.path[:strings.LastIndexByte(base.path, '/')+1] + path
+}
+
+// removeDotSegmentsStrict removes the "." and ".." segments of a path by the
+// algorithm of RFC 3986 §5.2.4, in time proportional to the path's length:
+// removing the last segment of the output shortens it in place, scanning back
+// only over the segment removed.
+func removeDotSegmentsStrict(input string) string {
+	output := make([]byte, 0, len(input))
+	for input != "" {
+		switch {
+		case strings.HasPrefix(input, "../"):
+			input = input[3:]
+		case strings.HasPrefix(input, "./"):
+			input = input[2:]
+		case strings.HasPrefix(input, "/./"):
+			input = input[2:]
+		case input == "/.":
+			input = "/"
+		case strings.HasPrefix(input, "/../") || input == "/..":
+			if input == "/.." {
+				input = "/"
+			} else {
+				input = input[3:]
+			}
+			output = output[:max(bytes.LastIndexByte(output, '/'), 0)]
+		case input == "." || input == "..":
+			input = ""
+		default:
+			end := strings.IndexByte(input[1:], '/')
+			if end < 0 {
+				end = len(input)
+			} else {
+				end++
+			}
+			output = append(output, input[:end]...)
+			input = input[end:]
+		}
+	}
+	return string(output)
+}

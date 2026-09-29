@@ -31,7 +31,7 @@ const (
 var documentRules = []string{
 	"OBI-D-01", "OBI-D-02", "OBI-D-03", "OBI-D-04", "OBI-D-05", "OBI-D-06",
 	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-10", "OBI-D-11", "OBI-D-12",
-	"OBI-D-13", "OBI-D-14",
+	"OBI-D-13",
 }
 
 // DocumentRules returns the identifiers of every document rule the core
@@ -46,7 +46,7 @@ func DocumentRules() []string {
 // Finding is one located piece of rule evidence: a violation established at a
 // document position, or a check this validator could not decide there.
 type Finding struct {
-	// Rule is the stable rule identifier, such as "OBI-D-08".
+	// Rule is the stable rule identifier, such as "OBI-D-07".
 	Rule string
 	// Status is EvidenceViolated or EvidenceInconclusive.
 	Status RuleEvidenceStatus
@@ -59,18 +59,6 @@ type Finding struct {
 	Message string
 }
 
-// Diagnostic is advice a rule asks tools to surface without failing the
-// document, such as OBI-T-02's notice of an unknown field. A diagnostic never
-// affects a ValidationReport's evidence or conclusion.
-type Diagnostic struct {
-	// Rule is the rule that asks for the diagnostic, such as "OBI-T-02".
-	Rule string
-	// Path locates the diagnostic as an RFC 6901 JSON Pointer, as
-	// Finding.Path does.
-	Path    string
-	Message string
-}
-
 // ValidationReport is a validator's account of one document under the core
 // specification's §10.4 vocabulary.
 //
@@ -80,12 +68,12 @@ type Diagnostic struct {
 // violation is therefore not conformance: a caller reporting a result must use
 // Conclusion, and must not present an undetermined result as conformant.
 type ValidationReport struct {
-	// Version is the specification version whose rules the report applies,
-	// and to which its rule identifiers belong (§10): the version the
-	// document declares when this SDK supports it, and otherwise
-	// AuthoringVersion, under whose rules a document declaring no version
-	// this SDK can interpret is judged (§8.1). A report ConcludeConformance
-	// builds from evidence alone carries no Version.
+	// Version is the release of the specification whose text the report
+	// applies, and to which its rule identifiers belong (§10, OBI-T-09):
+	// 0.2.0, as its working draft until that version is released, whatever
+	// release of the 0.2 line the document declares, since the patch number
+	// a document declares carries no meaning (§8.1). A report
+	// ConcludeConformance builds from evidence alone carries no Version.
 	Version    string
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per rule considered. Reports from
@@ -95,7 +83,7 @@ type ValidationReport struct {
 	// report, whose Evidence is nil.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
-	// Version, in identifier order, as OBI-T-09 requires.
+	// Version, in identifier order. These lists are SDK report fields.
 	Violated     []string
 	Inconclusive []string
 	// Findings locate every established violation and every undecided check,
@@ -104,8 +92,6 @@ type ValidationReport struct {
 	// deep, so a deeply nested document with a finding at every level makes a
 	// report that grows with the square of its depth. Findings are not capped.
 	Findings []Finding
-	// Diagnostics are advisory and never affect Conclusion.
-	Diagnostics []Diagnostic
 }
 
 // Violations returns the findings that established a violation.
@@ -188,9 +174,8 @@ func (e *VersionRefusalError) Error() string {
 // ruleChecks collects located evidence while a validator runs. Rules that
 // record no finding are satisfied.
 type ruleChecks struct {
-	version     string
-	findings    []Finding
-	diagnostics []Diagnostic
+	version  string
+	findings []Finding
 }
 
 func (c *ruleChecks) violated(rule, path, message string) {
@@ -199,10 +184,6 @@ func (c *ruleChecks) violated(rule, path, message string) {
 
 func (c *ruleChecks) inconclusive(rule, path, message string) {
 	c.findings = append(c.findings, Finding{Rule: rule, Status: EvidenceInconclusive, Path: path, Message: message})
-}
-
-func (c *ruleChecks) diagnose(rule, path, message string) {
-	c.diagnostics = append(c.diagnostics, Diagnostic{Rule: rule, Path: path, Message: message})
 }
 
 // inconclusiveExcept leaves every document rule but the decided ones
@@ -240,13 +221,12 @@ func (c *ruleChecks) report() ValidationReport {
 	report := ConcludeConformance(evidence)
 	report.Version = c.version
 	report.Findings = append([]Finding(nil), c.findings...)
-	report.Diagnostics = append([]Diagnostic(nil), c.diagnostics...)
 	return report
 }
 
 // conclude returns the report together with the error validation returns: a
 // *ValidationError listing every established violation, or nil when none was
-// established. Inconclusive checks and diagnostics are not violations and do
+// established. Inconclusive checks are not violations and do
 // not appear in the error.
 func (c *ruleChecks) conclude() (ValidationReport, error) {
 	return c.report(), c.violationError()
@@ -270,15 +250,4 @@ func formatFinding(path, message, rule string) string {
 		return fmt.Sprintf("%s (%s)", message, rule)
 	}
 	return fmt.Sprintf("%s: %s (%s)", path, message, rule)
-}
-
-// reportVersion is the specification version whose rules judge a document
-// declaring declared: that version when this SDK supports it, and otherwise
-// AuthoringVersion (§8.1). A declared version the SDK refuses is never
-// judged, so it never reaches here.
-func reportVersion(declared string) string {
-	if supported, _ := IsSupportedVersion(declared); supported {
-		return declared
-	}
-	return AuthoringVersion
 }
