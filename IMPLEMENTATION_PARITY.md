@@ -41,6 +41,9 @@ Go first; TypeScript alignment is pending for each of these:
 - **Version decision.** A text beginning with a byte-order mark declares no
   version (OBI-T-04). A report names the release whose text it applies
   (OBI-T-09).
+- **JSON Schema Test Suite.** Go runs the whole draft2020-12 suite through
+  OBI documents, with two stated exclusions and three stated reasons for no
+  verdict (`testdata/json-schema-test-suite/README.md`).
 - **Value validation.** Patterns are ECMA-262 with the `u` flag (native in
   TypeScript); a match that reaches no answer, and an absent schema, give no
   verdict (OBI-T-08), as do a resource declaring one name twice, an `$id` of

@@ -80,8 +80,12 @@
     pattern groups take work in proportion to their size; patterns nest
     groups at most 256 levels. `$id` and reference resolution use the SDK's
     strict RFC 3986 resolver throughout.
-  - The JSON Schema Test Suite check requires the suite's verdict, or no
-    verdict, for every case.
+  - The whole draft2020-12 JSON Schema Test Suite runs, optional tests
+    included, but for the format-assertion and dependencies-compatibility
+    files, which test what OBI-T-08 rules out. Every case must reach the
+    suite's verdict, or no verdict for a stated reason: a remote schema the
+    document does not embed, a Unicode property escape, or a reference to a
+    value no keyword holds as a schema.
   - The duplicate OBI-T-02 unknown-field advisory and its
     `ValidationReport.Diagnostics` field are removed; unknown unprefixed
     fields remain OBI-D-02 violations.

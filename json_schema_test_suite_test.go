@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,25 +12,46 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// Cases of the JSON Schema Test Suite (testdata/json-schema-test-suite), each
-// schema embedded as an operation's input and each value validated against
-// it. A suite schema's fragments mean its own locations, so one without an
-// $id is embedded with the URI the library is given it under alone: in an OBI
-// document, a fragment outside every resource would mean a location in the
-// document instead (§7).
+// Cases of the JSON Schema Test Suite's draft2020-12 tests
+// (testdata/json-schema-test-suite), each schema embedded as an operation's
+// input and each value validated against it. A suite schema's fragments mean
+// its own locations, so one without an $id is embedded with the URI the
+// library is given it under alone: in an OBI document, a fragment outside
+// every resource would mean a location in the document instead (§7).
 //
 // Each verdict is the suite's: neither the bundle the SDK gives the schema
 // library nor the library itself may change an answer. A failure names what
 // the library answers given the schema alone, to tell the two apart. A case
-// gets no verdict only when its schema references one of the suite's remote
-// schemas, which no document here embeds.
+// gets no verdict only for a reason suiteNoVerdict names, and every file
+// runs but those suiteExcluded names.
 func TestJSONSchemaTestSuite(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("testdata", "json-schema-test-suite", "*.json"))
+	root := filepath.Join("testdata", "json-schema-test-suite", "draft2020-12")
+	var files []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, _ := filepath.Rel(root, path)
+		relative = filepath.ToSlash(relative)
+		if _, excluded := suiteExcluded[relative]; excluded {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".json") {
+			files = append(files, path)
+		}
+		return nil
+	})
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no suite files: %v", err)
 	}
-	var cases, agreed, refused int
+	var cases, agreed int
+	refused := map[string]int{}
 	for _, file := range files {
+		relative, _ := filepath.Rel(root, file)
+		relative = filepath.ToSlash(relative)
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -51,7 +73,7 @@ func TestJSONSchemaTestSuite(t *testing.T) {
 			standalone := compileStandalone(t, group.Schema)
 			for _, test := range group.Tests {
 				cases++
-				name := filepath.Base(file) + ": " + group.Description + ": " + test.Description
+				name := relative + ": " + group.Description + ": " + test.Description
 				value := decodeValue(t, test.Data)
 				ours := outcome(ValidateOperationInput(value, iface, "op"))
 				want := map[bool]string{true: "valid", false: "mismatch"}[test.Valid]
@@ -61,10 +83,11 @@ func TestJSONSchemaTestSuite(t *testing.T) {
 				}
 				switch {
 				case ours == "unavailable":
-					refused++
-					if !strings.Contains(string(group.Schema), "localhost:1234") && !strings.Contains(string(group.Schema), `"$id":"http://localhost:1234`) {
-						t.Errorf("%s: no verdict, though the schema references no remote schema", name)
+					reason := suiteNoVerdict(relative, string(group.Schema))
+					if reason == "" {
+						t.Errorf("%s: no verdict, for no reason the suite test allows", name)
 					}
+					refused[reason]++
 				case ours == want:
 					agreed++
 				default:
@@ -73,7 +96,32 @@ func TestJSONSchemaTestSuite(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d cases: %d as the suite says, %d without a verdict", cases, agreed, refused)
+	t.Logf("%d cases in %d files: %d as the suite says, and without a verdict %v", cases, len(files), agreed, refused)
+}
+
+// suiteExcluded names the suite files and folders that test what OBI-T-08
+// rules out, and why.
+var suiteExcluded = map[string]string{
+	"optional/format":                          "these assert format, which OBI-T-08 makes an annotation; format.json tests that it is one",
+	"optional/dependencies-compatibility.json": "these evaluate dependencies, which strict 2020-12 does not define, so it constrains nothing",
+}
+
+// suiteNoVerdict returns why a suite case may reach no verdict, or "" when it
+// may not: its schema references one of the suite's remote schemas, which no
+// document here embeds; holds a Unicode property escape, which this SDK does
+// not evaluate; or references a value under a keyword that holds no schema,
+// which evaluation does not reach (the maintainer's open question on
+// identity keywords in unknown members).
+func suiteNoVerdict(file, schema string) string {
+	switch {
+	case strings.Contains(schema, "localhost:1234"):
+		return "remote schema"
+	case strings.Contains(schema, `\\p{`) || strings.Contains(schema, `\\P{`):
+		return "Unicode property escape"
+	case file == "optional/refOfUnknownKeyword.json":
+		return "reference to no schema position"
+	}
+	return ""
 }
 
 // compileStandalone compiles a suite schema as the only resource of an SDK

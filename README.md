@@ -52,7 +52,10 @@ Patterns are ECMA-262 regular expressions with Unicode semantics: a strict
 grammar check refuses what the `u` flag refuses, and
 [`dlclark/regexp2`](https://github.com/dlclark/regexp2) evaluates the rest,
 with `.`, `\b`, `\B`, and escaped surrogate pairs rewritten to ECMA-262's
-meaning. To exercise the core conformance corpus, check out the
+meaning. The whole draft2020-12 JSON Schema Test Suite runs against the
+SDK's path from a document to a verdict (see
+`testdata/json-schema-test-suite/README.md`). To exercise the core
+conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
 point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
 
