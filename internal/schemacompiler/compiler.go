@@ -7,8 +7,10 @@ package schemacompiler
 
 import (
 	"fmt"
-	"regexp"
+	"sync/atomic"
+	"time"
 
+	"github.com/dlclark/regexp2/v2"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -22,15 +24,18 @@ import (
 // decline external resources (§7), and a graph that cannot be fully resolved
 // validates nothing (OBI-T-08), so every external reference, file: and
 // http(s) alike, is unavailable. The JSON Schema meta-schemas are built into
-// the library and resolve without a loader. Patterns use Go's regexp, the
-// library's own engine, through compilePattern.
+// the library and resolve without a loader.
 //
-// format never rejects a value: §5.2 makes it an annotation at an operation
-// boundary whatever dialect a subschema declares, and the library otherwise
-// asserts it under the drafts before 2019-09 (which a reference to their
-// meta-schemas reaches) with no option to stop. Every format the library
-// checks is registered to accept every value; "regex" goes through
-// compilePattern, which never refuses a pattern.
+// Patterns are ECMA-262 regular expressions with Unicode semantics, as
+// OBI-T-08 reads a value's schemas and OBI-D-02 and OBI-D-10 read the
+// schemas they apply (JSON Schema Core §6.4), through compilePattern.
+//
+// format never rejects a value: OBI-T-08 makes it an annotation where the
+// dialect leaves its assertion optional, and the library otherwise asserts it
+// under the drafts before 2019-09 (which a reference to their meta-schemas
+// reaches) with no option to stop. Every format the library checks is
+// registered to accept every value; "regex" goes through compilePattern,
+// which never refuses a pattern.
 func New() *jsonschema.Compiler {
 	c := jsonschema.NewCompiler()
 	c.UseLoader(externalResourceRefusal{})
@@ -49,22 +54,74 @@ var libraryFormats = []string{
 	"uri", "iri", "uri-reference", "iri-reference", "uri-template", "semver",
 }
 
-// compilePattern compiles a pattern with Go's regexp. A pattern Go's regexp
-// does not support, such as an ECMAScript lookahead, compiles to an
+// PatternMatchTimeout bounds one match of a pattern against one string. A
+// match that meets it, or the engine's backtracking limit, is a resource limit
+// met (§10.4): it establishes no match and no mismatch.
+const PatternMatchTimeout = 100 * time.Millisecond
+
+// matchFailures counts the matches that reached no answer. A validation that
+// sees it change reaches no verdict (MatchFailures).
+var matchFailures atomic.Uint64
+
+// MatchFailures returns how many pattern matches have reached no answer, for
+// a caller to compare before and after a validation: the library asks a
+// pattern only whether it matches, so a match that reached no answer would
+// otherwise read as a mismatch. The count is process-wide, so a validation
+// running beside another whose match fails also reaches no verdict, which is
+// conservative, never wrong.
+func MatchFailures() uint64 { return matchFailures.Load() }
+
+// CompilePattern compiles a pattern as an ECMA-262 regular expression with
+// Unicode semantics (the u flag). It returns an error for a pattern that is
+// not one, which has no meaning to evaluate, and for one this SDK does not
+// evaluate: a Unicode property escape, or a pattern the engine does not
+// compile.
+func CompilePattern(expression string) (*regexp2.Regexp, error) {
+	if err := checkUnicodePattern(expression); err != nil {
+		return nil, err
+	}
+	re, err := regexp2.Compile(forEngine(expression), regexp2.ECMAScript|regexp2.Unicode)
+	if err != nil {
+		return nil, err
+	}
+	re.MatchTimeout = PatternMatchTimeout
+	return re, nil
+}
+
+// compilePattern is the library's pattern engine. A pattern that is not an
+// ECMA-262 regular expression with Unicode semantics compiles to an
 // UncompiledPattern rather than failing: the library checks format "regex"
 // with this engine, and a format never rejects a value. A caller refuses a
 // schema holding such a pattern before the library evaluates it.
 func compilePattern(expression string) (jsonschema.Regexp, error) {
-	re, err := regexp.Compile(expression)
+	re, err := CompilePattern(expression)
 	if err != nil {
 		return UncompiledPattern{Source: expression, Cause: err}, nil
 	}
-	return re, nil
+	return ecmaPattern{re: re, source: expression}, nil
 }
 
-// UncompiledPattern is a pattern Go's regexp could not compile. A schema
-// holding one cannot be evaluated, and its caller refuses it before
-// validating, so MatchString is never consulted for a verdict.
+// ecmaPattern is a compiled pattern as the library consults it.
+type ecmaPattern struct {
+	re     *regexp2.Regexp
+	source string
+}
+
+func (p ecmaPattern) String() string { return p.source }
+
+func (p ecmaPattern) MatchString(s string) bool {
+	matched, err := p.re.MatchString(s)
+	if err != nil {
+		matchFailures.Add(1)
+		return false
+	}
+	return matched
+}
+
+// UncompiledPattern is a pattern that is not an ECMA-262 regular expression
+// with Unicode semantics. A schema holding one cannot be evaluated, and its
+// caller refuses it before validating, so MatchString is never consulted for
+// a verdict.
 type UncompiledPattern struct {
 	Source string
 	Cause  error

@@ -72,7 +72,7 @@
 // the document holds is not established; a document holding a lone
 // surrogate, where it decides OBI-D-01 and leaves the other rules
 // inconclusive; and input nested deeper than encoding/json reads (10000
-// levels), where it decides OBI-D-01, and OBI-D-11 on the version it reads
+// levels), where it decides OBI-D-01, and OBI-D-09 on the version it reads
 // from the bytes, and leaves the other rules inconclusive.
 //
 // Encoding refuses the same inexact bytes in the members the model carries as

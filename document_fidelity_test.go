@@ -28,10 +28,10 @@ func decodedJSON(t *testing.T, data []byte) any {
 func TestDocumentModel_RoundTripsEveryMember(t *testing.T) {
 	documents := map[string]string{
 		"present empty and false members": `{"openbindings":"0.2.0","name":"","version":"","description":"",
-			"schemas":{},"dependencies":{},
-			"operations":{"a":{"description":"","deprecated":false,"tags":[],"aliases":[],"idempotent":false,"examples":{}}},
+			"schemas":{},"dependencies":{"d":{"operation":"a","kinds":[],"description":""}},
+			"operations":{"a":{"description":"","deprecated":false,"tags":[],"aliases":[],"examples":{}}},
 			"sources":{"s":{"kind":"x@1","content":"","description":""}},
-			"bindings":{"b":{"operation":"a","source":"s","content":"","description":"","deprecated":false,"preference":0}}}`,
+			"bindings":{"b":{"operation":"a","source":"s","content":"","idempotent":false,"description":"","deprecated":false,"preference":0}}}`,
 		"absent optional members": `{"openbindings":"0.2.0","operations":{"a":{}},"sources":{"s":{"kind":"x@1"}},
 			"bindings":{"b":{"operation":"a","source":"s"}}}`,
 		"operations absent": `{"openbindings":"0.2.0"}`,
@@ -75,21 +75,22 @@ func TestDocumentModel_RoundTripsEveryMember(t *testing.T) {
 // altered.
 func TestDocumentModel_RefusesWhatItCannotCarry(t *testing.T) {
 	documents := map[string]string{
-		"null optional string":      `{"openbindings":"0.2.0","description":null,"operations":{}}`,
-		"null required string":      `{"openbindings":null,"operations":{}}`,
-		"missing required version":  `{"operations":{}}`,
-		"null operations":           `{"openbindings":"0.2.0","operations":null}`,
-		"null operation":            `{"openbindings":"0.2.0","operations":{"a":null}}`,
-		"null operation schema":     `{"openbindings":"0.2.0","operations":{"a":{"input":null}}}`,
-		"null tag":                  `{"openbindings":"0.2.0","operations":{"a":{"tags":[null]}}}`,
-		"null example":              `{"openbindings":"0.2.0","operations":{"a":{"examples":{"e":null}}}}`,
-		"null idempotent":           `{"openbindings":"0.2.0","operations":{"a":{"idempotent":null}}}`,
-		"missing kind":              `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"content":"https://example.com/x"}}}`,
-		"missing binding source":    `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a"}}}`,
-		"fractional preference":     `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":9007199254740990.5}}}`,
-		"out-of-range preference":   `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":9007199254740993}}}`,
-		"null dependency spec":      `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","kinds":[null]}}}`,
-		"missing dependency target": `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{}}}`,
+		"null optional string":        `{"openbindings":"0.2.0","description":null,"operations":{}}`,
+		"null required string":        `{"openbindings":null,"operations":{}}`,
+		"missing required version":    `{"operations":{}}`,
+		"null operations":             `{"openbindings":"0.2.0","operations":null}`,
+		"null operation":              `{"openbindings":"0.2.0","operations":{"a":null}}`,
+		"null operation schema":       `{"openbindings":"0.2.0","operations":{"a":{"input":null}}}`,
+		"null tag":                    `{"openbindings":"0.2.0","operations":{"a":{"tags":[null]}}}`,
+		"null example":                `{"openbindings":"0.2.0","operations":{"a":{"examples":{"e":null}}}}`,
+		"null idempotent":             `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","idempotent":null}}}`,
+		"null dependency description": `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","description":null}}}`,
+		"missing kind":                `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"content":"https://example.com/x"}}}`,
+		"missing binding source":      `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a"}}}`,
+		"fractional preference":       `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":9007199254740990.5}}}`,
+		"out-of-range preference":     `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":9007199254740993}}}`,
+		"null dependency spec":        `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","kinds":[null]}}}`,
+		"missing dependency target":   `{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{}}}`,
 	}
 	for name, document := range documents {
 		t.Run(name, func(t *testing.T) {
@@ -290,7 +291,7 @@ func TestDocumentModel_RefusesDuplicatesAndQuotedPreferences(t *testing.T) {
 // Decode errors name the first offending member in declaration order, so the
 // same input always fails the same way.
 func TestDocumentModel_DecodeErrorsAreDeterministic(t *testing.T) {
-	document := []byte(`{"description":null,"deprecated":null,"tags":null,"idempotent":null,"examples":null}`)
+	document := []byte(`{"description":null,"deprecated":null,"tags":null,"aliases":null,"examples":null}`)
 	var first string
 	for range 50 {
 		var operation Operation

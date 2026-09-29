@@ -27,8 +27,8 @@ var compiledOBISchema *jsonschema.Schema
 
 // compiledMetaSchema is the JSON Schema 2020-12 meta-schema, compiled once at
 // init from the validator library's locally embedded copy (never fetched from
-// the network, per OBI-D-13's validation note), for OBI-D-13 (every schema in
-// the document is well-formed).
+// the network), for OBI-D-10 (every operation schema and schemas entry is
+// valid against the 2020-12 meta-schemas).
 var compiledMetaSchema *jsonschema.Schema
 
 func init() {
@@ -53,13 +53,14 @@ func init() {
 	compiledMetaSchema = meta
 }
 
-// validateSchemaWellFormedness records OBI-D-13 violations at one schema
+// validateSchemaWellFormedness records OBI-D-10 violations at one OBI schema
 // position: the value must be a JSON Schema 2020-12 schema in object or
 // boolean form, and the object form must validate against the 2020-12
-// meta-schemas (which cover subschemas recursively). The check is
-// deliberately narrow, mirroring §5.2: unknown keywords, unparseable
-// `pattern` values, and unresolvable `$ref` targets all pass — they surface
-// when the schema is used, not here. knownValid remembers schemas already
+// meta-schemas (which cover subschemas recursively), with format an
+// annotation and the meta-schemas' patterns read as ECMA-262. The check is
+// deliberately narrow, mirroring §5.2: unknown keywords, patterns an engine
+// cannot compile, and unresolvable references all pass; they surface when the
+// schema is used, not here. knownValid remembers schemas already
 // found well-formed, by their encoding.
 //
 // The meta-schema validator's work grows faster than linearly with a
@@ -79,20 +80,20 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 		checked, cut := cutSchema(v, schemaDepthLimit)
 		problems, err := checkAgainstMetaSchema(checked)
 		if err != nil {
-			c.inconclusive("OBI-D-13", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+			c.inconclusive("OBI-D-10", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
 			return
 		}
 		for _, problem := range problems {
-			c.violated("OBI-D-13", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
+			c.violated("OBI-D-10", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
 		}
 		switch {
 		case cut != "":
-			c.inconclusive("OBI-D-13", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
+			c.inconclusive("OBI-D-10", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
 		case len(problems) == 0 && key != "":
 			knownValid[key] = true
 		}
 	default:
-		c.violated("OBI-D-13", prefix, fmt.Sprintf("a schema is a JSON Schema 2020-12 object or boolean; got %s", jsonTypeName(v)))
+		c.violated("OBI-D-10", prefix, fmt.Sprintf("a schema is a JSON Schema 2020-12 object or boolean; got %s", jsonTypeName(v)))
 	}
 }
 
@@ -267,88 +268,6 @@ func metaSchemaCacheKey(schema map[string]any) string {
 	return string(data)
 }
 
-// checkExamples records OBI-D-10 evidence: every provided example value
-// (including an explicit JSON null) must validate against its operation's
-// corresponding schema, where that schema is specified and the example's
-// outcome can be determined from resources embedded in the document.
-//
-// This validator uses an eager compiler. When a graph reaches an external
-// resource, it does not try to prove whether a particular example's outcome
-// is independent of that resource. It leaves OBI-D-10 inconclusive rather
-// than claiming conformance without deciding an applicable example. A graph
-// that cannot be evaluated (an
-// unresolvable reference, an ill-formed schema, or a failure to compile or
-// evaluate it) leaves the rule inconclusive there: none of that is evidence
-// that the examples conform. Operations and examples that are not objects
-// hold no example values.
-func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas documentSchemas) {
-	o := newOperationSchemas(view, schemas)
-	type position struct {
-		path, name string
-		examples   map[string]any
-		provided   []string
-	}
-	var candidates []position
-	var paths []string
-	for _, opKey := range sortedKeys(operations) {
-		operation, _ := operations[opKey].(map[string]any)
-		examples, _ := operation["examples"].(map[string]any)
-		for _, name := range []string{"input", "output"} {
-			if _, specified := operation[name]; !specified {
-				continue
-			}
-			var provided []string
-			for _, exampleKey := range sortedKeys(examples) {
-				if example, ok := examples[exampleKey].(map[string]any); ok && hasKey(example, name) {
-					provided = append(provided, exampleKey)
-				}
-			}
-			if len(provided) == 0 {
-				continue
-			}
-			path := jsonpointer.Format("operations", opKey, name)
-			candidates = append(candidates, position{path: path, name: name, examples: examples, provided: provided})
-			paths = append(paths, path)
-		}
-	}
-	o.analyze(paths)
-	var checked []position
-	var starts []string
-	for _, p := range candidates {
-		if f := o.facts(p.path); f.outside != "" || f.metaSchema != "" {
-			c.inconclusive("OBI-D-10", p.path, "this validator did not determine whether the examples' results are independent of a schema resource outside the document")
-			continue
-		}
-		if problem := o.graphProblem(p.path); problem != "" {
-			c.inconclusive("OBI-D-10", p.path, "the schema graph could not be evaluated, so its examples were not checked: "+problem)
-			continue
-		}
-		checked = append(checked, p)
-		starts = append(starts, p.path)
-	}
-	results := o.compile(starts)
-	for _, p := range checked {
-		result := results[p.path]
-		if result.err != nil {
-			c.inconclusive("OBI-D-10", p.path, fmt.Sprintf("the schema graph could not be evaluated, so its examples were not checked: %v", result.err))
-			continue
-		}
-		for _, exampleKey := range p.provided {
-			examplePath := p.path[:strings.LastIndexByte(p.path, '/')] + jsonpointer.Format("examples", exampleKey, p.name)
-			var mismatch *SchemaValidationError
-			switch err := result.schema.Validate(p.examples[exampleKey].(map[string]any)[p.name]); {
-			case err == nil:
-			case errors.As(err, &mismatch):
-				for _, problem := range mismatch.Problems {
-					c.violated("OBI-D-10", examplePath+problem.Path, "does not validate against the operation's "+p.name+" schema: "+problem.Message)
-				}
-			default:
-				c.inconclusive("OBI-D-10", examplePath, fmt.Sprintf("this example could not be checked: %v", err))
-			}
-		}
-	}
-}
-
 // CompileOperationSchema compiles an operation's input or output schema, for
 // validating values against the operation's contract (OBI-T-08). The
 // operation is named by any of its identifiers, its key or an alias
@@ -366,16 +285,18 @@ func checkExamples(c *ruleChecks, view any, operations map[string]any, schemas d
 // It cannot be evaluated here when it meets one of this SDK's limits (§10.4):
 // a schema nesting subschemas deeper than 256 levels, a number beyond the
 // numeric limits of schema evaluation where the schema library reads one (a
-// comparison or count keyword's value, or const or enum), a pattern Go's
-// regexp cannot compile, or a cycle of references that never advances into
-// the value. The schema library is given the schemas the
+// comparison or count keyword's value, or const or enum), a pattern that is
+// not an ECMA-262 regular expression with Unicode semantics or holds a Unicode
+// property escape, a cycle of references that never advances into the value,
+// or a $dynamicRef when the document resource declares a $dynamicAnchor,
+// whose dynamic scope the bundle does not reproduce. The schema library is given the schemas the
 // graph uses as a JSON Schema 2020-12 bundle, never the OBI document itself,
 // and evaluates strictly as 2020-12: dependencies, $recursiveRef, and
 // $recursiveAnchor constrain nothing. A JSON Schema meta-schema is outside the
 // document but available: the schema library carries it. A document is
 // interpreted only under a supported version: one declaring a well-formed
 // version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
-// no valid version returns an error (OBI-D-11). Any other error means nothing
+// no valid version returns an error (OBI-D-09). Any other error means nothing
 // was compiled: there is no interface, the position is neither "input" nor
 // "output", the name resolves to no one operation (wrapping
 // ErrOperationNotFound), the operation specifies no schema at that position,
@@ -388,7 +309,7 @@ func CompileOperationSchema(i *Interface, operation, position string) (*Compiled
 		return nil, refusal
 	}
 	if !IsValidSemver(i.OpenBindings) {
-		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-11), so it is not interpreted", i.OpenBindings)
+		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", i.OpenBindings)
 	}
 	key, target, ok := ResolveOperation(i, operation)
 	if !ok {

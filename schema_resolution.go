@@ -4,15 +4,16 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
 // reference is what a schema reference ($ref, or $dynamicRef's static
-// target) names, resolved as §7 and JSON Schema 2020-12 resolve it. One
-// resolution serves the reference rule (OBI-D-12), the reach of an operation's
-// schema (OBI-D-10, OBI-T-08), and the bundle the schema library is given, so
-// they cannot disagree.
+// target) names, resolved as §7 and JSON Schema 2020-12 resolve it (OBI-T-06).
+// One resolution serves the reference rule (OBI-D-12), the reach of an
+// operation's schema (OBI-T-08), and the bundle the schema library is given,
+// so they cannot disagree.
 type reference struct {
 	origin origin
 	// location is where in the document the reference points, when origin is
@@ -55,17 +56,23 @@ const (
 // document view.
 //
 // The base is the resource holding the reference. In the document resource,
-// which has no URI, a same-document fragment is a JSON Pointer from the
-// document root, and it may point anywhere in the document; a relative
-// reference has no base (§7). Inside a resource, a fragment resolves within
+// which has no URI anything can name, a same-document reference is looked up
+// as OBI-D-12 looks it up (§7.2): the empty reference and an empty fragment
+// name the OBI document itself; any other fragment is percent-decoded once,
+// and then one beginning with / is a JSON Pointer from the document root and
+// any other a plain name the document resource declares. A relative
+// reference there has no base. Inside a resource, a fragment resolves within
 // it, and any other reference against its URI; an absolute URI names the
 // embedded resource declaring it, a carried meta-schema, or a resource
 // outside the document.
 func (d documentSchemas) resolve(ref, holder string, view any) reference {
 	resource := d.resourceAt(holder)
+	if ref == "" {
+		return d.resolveFragment(resource, "", view)
+	}
 	parsed, err := url.Parse(ref)
 	if strings.HasPrefix(ref, "#") {
-		// A fragment is read after URI decoding (RFC 6901 §6); one that does
+		// A fragment is read after percent-decoding it once; one that does
 		// not decode is read as written.
 		fragment := ref[1:]
 		if err == nil {
@@ -107,10 +114,11 @@ func (d documentSchemas) resolve(ref, holder string, view any) reference {
 	return reference{origin: outside, uri: id, exists: undecided}
 }
 
-// resolveFragment resolves a fragment within a resource, or within the
-// document resource when resource is nil: the resource itself, a JSON Pointer
-// from it, or a plain-name anchor it declares. The document resource declares
-// no anchors (§7).
+// resolveFragment resolves a decoded fragment within a resource, or within the
+// document resource when resource is nil: the resource itself (the OBI
+// document, for the document resource), a JSON Pointer from it, or a plain
+// name it declares. A fragment that is not valid UTF-8 names nothing
+// (OBI-D-12).
 func (d documentSchemas) resolveFragment(resource *schemaResource, fragment string, view any) reference {
 	root := ""
 	if resource != nil {
@@ -128,7 +136,16 @@ func (d documentSchemas) resolveFragment(resource *schemaResource, fragment stri
 		return reference{origin: inDocument, location: location, exists: exists, within: resource}
 	}
 	if resource == nil {
-		return reference{origin: unresolved, exists: missing, why: "is a plain-name fragment, which §7 does not resolve from the document root"}
+		switch found := d.anchors[fragment]; {
+		case !utf8.ValidString(fragment):
+			return reference{origin: unresolved, exists: missing, why: "does not decode to valid UTF-8, so it names nothing"}
+		case len(found) == 0:
+			return reference{origin: unresolved, exists: missing, why: "names a plain name no schema in the document resource declares"}
+		case len(found) == 1:
+			return reference{origin: inDocument, location: found[0].at.from(nil), exists: exists}
+		default:
+			return reference{origin: ambiguous, exists: undecided, why: "names a plain name the document resource declares more than once"}
+		}
 	}
 	switch found := resource.anchors[fragment]; len(found) {
 	case 0:

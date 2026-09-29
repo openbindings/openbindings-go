@@ -38,7 +38,7 @@ func TestConcludeConformance(t *testing.T) {
 			name: "complete success",
 			evidence: map[string]RuleEvidenceStatus{
 				"OBI-D-02": EvidenceSatisfied,
-				"OBI-D-14": EvidenceNotApplicable,
+				"OBI-D-11": EvidenceNotApplicable,
 			},
 			want: ValidationReport{Conclusion: ConclusionConformant},
 		},
@@ -56,14 +56,14 @@ func TestConcludeConformance(t *testing.T) {
 		{
 			name: "violation is decisive and incompleteness is retained",
 			evidence: map[string]RuleEvidenceStatus{
-				"OBI-D-13": EvidenceInconclusive,
+				"OBI-D-10": EvidenceInconclusive,
 				"OBI-D-03": EvidenceViolated,
 				"OBI-D-02": EvidenceViolated,
 			},
 			want: ValidationReport{
 				Conclusion:   ConclusionNonConformant,
 				Violated:     []string{"OBI-D-02", "OBI-D-03"},
-				Inconclusive: []string{"OBI-D-13"},
+				Inconclusive: []string{"OBI-D-10"},
 			},
 		},
 		{

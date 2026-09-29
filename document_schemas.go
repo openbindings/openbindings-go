@@ -12,12 +12,15 @@ import (
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 )
 
-// documentSchemas is what an OBI document holds as schema resources (§5.2,
-// §7): every schema at a schema position that declares its own $id. A schema
-// position is an OBI schema position (an operation's input or output, or an
-// entry of schemas) or a subschema of one, as JSON Schema 2020-12 evaluates
-// subschemas (forEachSubschema). The rest of the document is not a schema,
-// whatever its members are named, and declares no resource.
+// documentSchemas is what an OBI document holds as schemas (§5.2, §7): the
+// schema resources schemas declare with their own $id, the plain names the
+// document resource declares, and the identifiers OBI-D-13 compares. Every
+// schema the document contains is walked: the schemas at OBI positions (an
+// operation's input or output, an entry of schemas, and every subschema the
+// 2020-12 meta-schema validates as one, the legacy definitions and the schema
+// values of the legacy dependencies included) and the subschemas of the
+// resources they declare. The rest of the document is not a schema, whatever
+// its members are named, and declares nothing.
 type documentSchemas struct {
 	// at maps the location of every resource to it.
 	at map[string]*schemaResource
@@ -28,9 +31,24 @@ type documentSchemas struct {
 	// $id to why it names no one resource, and claimants to those schemas.
 	ambiguous map[string]string
 	claimants map[string][]*schemaResource
-	// documentDynamicAnchor is true when a schema outside every resource
-	// declares $dynamicAnchor, which OBI-D-05 excludes.
+	// anchors maps each plain name the document resource declares to every
+	// declaration of it, in document order: one per $anchor and one per
+	// $dynamicAnchor, as OBI-D-13 counts them (JSON Schema Core §8.2.2).
+	anchors map[string][]anchorDeclaration
+	// identifiers maps each identifier OBI-D-13 compares to where every
+	// schema declaring it sits, in document order.
+	identifiers map[string][]*pathNode
+	// documentDynamicAnchor is true when the document resource declares a
+	// $dynamicAnchor, which the dynamic scope of an evaluation beginning there
+	// holds (§7.2).
 	documentDynamicAnchor bool
+}
+
+// anchorDeclaration is one declaration of a plain name: the schema declaring
+// it and the keyword that does.
+type anchorDeclaration struct {
+	at      *pathNode
+	keyword string
 }
 
 type schemaResource struct {
@@ -48,16 +66,29 @@ type schemaResource struct {
 	anchors map[string][]*pathNode
 }
 
-// collectDocumentSchemas walks the schema positions of a document's generic
-// view.
+// collectDocumentSchemas walks the schemas a document's generic view contains.
 func collectDocumentSchemas(view any) documentSchemas {
-	d := documentSchemas{at: map[string]*schemaResource{}, resources: map[string]*schemaResource{}}
+	d := documentSchemas{
+		at:          map[string]*schemaResource{},
+		resources:   map[string]*schemaResource{},
+		anchors:     map[string][]anchorDeclaration{},
+		identifiers: map[string][]*pathNode{},
+	}
 	claimants := map[string][]*schemaResource{}
-	var walk func(node any, at *pathNode, resource *schemaResource)
-	walk = func(node any, at *pathNode, resource *schemaResource) {
+	// identifier is the identifier OBI-D-13 compares for the nearest
+	// enclosing schema that declares $id, or "" when there is none or it is
+	// not compared.
+	var walk func(node any, at *pathNode, resource *schemaResource, identifier string)
+	walk = func(node any, at *pathNode, resource *schemaResource, identifier string) {
 		object, ok := node.(map[string]any)
 		if !ok {
 			return
+		}
+		if raw, isString := object["$id"].(string); isString {
+			identifier = comparableID(raw, identifier)
+			if identifier != "" {
+				d.identifiers[identifier] = append(d.identifiers[identifier], at)
+			}
 		}
 		if raw, declares := declaredID(object); declares {
 			var base *url.URL
@@ -72,31 +103,36 @@ func collectDocumentSchemas(view any) documentSchemas {
 				claimants[key] = append(claimants[key], resource)
 			}
 		}
-		names := anchorNames(object)
-		switch {
-		case resource != nil:
-			for _, name := range names {
+		if resource != nil {
+			for _, name := range anchorNames(object) {
 				resource.anchors[name] = append(resource.anchors[name], at)
 			}
-		case object["$dynamicAnchor"] != nil:
-			d.documentDynamicAnchor = true
+		} else {
+			for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+				if name, isString := object[keyword].(string); isString {
+					d.anchors[name] = append(d.anchors[name], anchorDeclaration{at: at, keyword: keyword})
+				}
+			}
+			if _, present := object["$dynamicAnchor"]; present {
+				d.documentDynamicAnchor = true
+			}
 		}
-		forEachSubschema(object, func(child any, tokens ...string) {
-			walk(child, at.child(tokens...), resource)
+		forEachDescribedSubschema(object, func(child any, tokens ...string) {
+			walk(child, at.child(tokens...), resource, identifier)
 		})
 	}
 
 	root, _ := view.(map[string]any)
 	schemas, _ := root["schemas"].(map[string]any)
 	for _, key := range sortedKeys(schemas) {
-		walk(schemas[key], (*pathNode)(nil).child("schemas", key), nil)
+		walk(schemas[key], (*pathNode)(nil).child("schemas", key), nil, "")
 	}
 	operations, _ := root["operations"].(map[string]any)
 	for _, key := range sortedKeys(operations) {
 		operation, _ := operations[key].(map[string]any)
 		for _, position := range []string{"input", "output"} {
 			if schema, present := operation[position]; present {
-				walk(schema, (*pathNode)(nil).child("operations", key, position), nil)
+				walk(schema, (*pathNode)(nil).child("operations", key, position), nil, "")
 			}
 		}
 	}
@@ -117,6 +153,29 @@ func collectDocumentSchemas(view any) documentSchemas {
 		d.claimants[id] = resources
 	}
 	return d
+}
+
+// comparableID returns the identifier OBI-D-13 compares for an $id, or ""
+// when it compares none: a well-formed URI-reference that is an absolute URI,
+// or that resolves against the identifier of the nearest enclosing schema that
+// declares one, itself compared (enclosing), resolved by RFC 3986 §5.2, which
+// removes dot segments, with any empty fragment removed. Nothing else is
+// normalized, so spellings a URI library would merge stay distinct.
+func comparableID(raw, enclosing string) string {
+	wellFormed, absolute := uriReference(raw)
+	if !wellFormed || !absolute && enclosing == "" {
+		return ""
+	}
+	var resolved uriParts
+	if absolute {
+		resolved = resolveURIReference(uriParts{}, splitURI(raw))
+	} else {
+		resolved = resolveURIReference(splitURI(enclosing), splitURI(raw))
+	}
+	if resolved.hasFragment && resolved.fragment == "" {
+		resolved.hasFragment = false
+	}
+	return resolved.String()
 }
 
 // resourceAt returns the innermost resource holding a location, or nil for the
@@ -250,8 +309,9 @@ func removeDotSegments(path string) string {
 // Keyword tables. Most entries name schema-bearing positions under JSON
 // Schema 2020-12. Evaluation is narrower: contentSchema is annotation only,
 // and then/else need a sibling if. The pre-2019 spellings definitions and
-// dependencies have shapes checked by the meta-schema, but 2020-12 neither
-// evaluates them nor finds resources or anchors in them.
+// dependencies hold schemas the 2020-12 meta-schema validates, so their
+// schemas are at OBI positions (§7), though strict 2020-12 evaluates neither
+// and the bundle leaves dependencies out.
 
 // schemaMapKeywords hold { name -> schema } maps.
 var schemaMapKeywords = map[string]bool{

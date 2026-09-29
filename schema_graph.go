@@ -49,7 +49,7 @@ func newOperationSchemas(view any, schemas documentSchemas) *operationSchemas {
 type graphFacts struct {
 	// outside is a resource outside the document the graph reaches, and
 	// metaSchema a JSON Schema meta-schema the library carries. This eager
-	// analysis cannot decide whether those resources affect an example.
+	// analysis cannot decide whether those resources affect a value.
 	outside, metaSchema string
 	// problem states why the graph cannot be evaluated.
 	problem string
@@ -237,7 +237,11 @@ func (o *operationSchemas) analyze(starts []string) {
 func (o *operationSchemas) facts(start string) graphFacts {
 	f := o.graph.reached[o.graph.id[compiledAt{start, rootOf(start)}]]
 	if f.dynamicRef && o.schemas.documentDynamicAnchor {
-		f.problem = firstOf(f.problem, "the graph holds a $dynamicRef, and a schema outside every resource declares $dynamicAnchor, which OBI-D-05 excludes")
+		// An evaluation beginning in the document resource holds its
+		// $dynamicAnchors in the dynamic scope (§7.2), which the bundle the
+		// schema library is given does not reproduce; OBI-T-08 then allows no
+		// verdict.
+		f.problem = firstOf(f.problem, "the graph holds a $dynamicRef, and the document resource declares a $dynamicAnchor, which the dynamic scope of an evaluation beginning there holds and this SDK's bundle does not reproduce")
 	}
 	return f
 }

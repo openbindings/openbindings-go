@@ -31,7 +31,7 @@ const (
 var documentRules = []string{
 	"OBI-D-01", "OBI-D-02", "OBI-D-03", "OBI-D-04", "OBI-D-05", "OBI-D-06",
 	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-10", "OBI-D-11", "OBI-D-12",
-	"OBI-D-13", "OBI-D-14",
+	"OBI-D-13",
 }
 
 // DocumentRules returns the identifiers of every document rule the core
@@ -46,7 +46,7 @@ func DocumentRules() []string {
 // Finding is one located piece of rule evidence: a violation established at a
 // document position, or a check this validator could not decide there.
 type Finding struct {
-	// Rule is the stable rule identifier, such as "OBI-D-08".
+	// Rule is the stable rule identifier, such as "OBI-D-07".
 	Rule string
 	// Status is EvidenceViolated or EvidenceInconclusive.
 	Status RuleEvidenceStatus

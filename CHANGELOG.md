@@ -6,14 +6,39 @@
 
 ### Changed
 
-- **Validation follows the pruned Core boundary.** Same-document JSON Pointer
-  fragments are percent-decoded before resolution. Example checks the SDK
-  cannot establish from embedded schemas leave OBI-D-10 inconclusive, so they
-  cannot produce an overall conformance claim. The duplicate OBI-T-02
-  unknown-field advisory and its `ValidationReport.Diagnostics` field are
-  removed; unknown unprefixed fields remain OBI-D-02 violations. Optional
-  value validation retains this SDK's eager compiler and reports its
-  limitations as no verdict, not as a document defect.
+- **Aligned with the 0.2 Core draft at spec `0e2a8d5` (breaking, pre-1.0).**
+  - Rule identifiers follow the draft: OBI-D-07 and OBI-D-08 are binding
+    operation and source keys, OBI-D-09 the declared version, OBI-D-10
+    meta-schema validity, OBI-D-11 dependency operation keys, and OBI-D-13
+    plain-name and `$id` uniqueness. The `$vocabulary` rule and example
+    validity are gone: an example is an author claim no document rule checks
+    (OBI-T-10, OBI-T-11), which `ValidateOperationInput` and
+    `ValidateOperationOutput` can check.
+  - `Operation.Idempotent` moves to `BindingEntry.Idempotent`, and
+    `DependencyEntry` gains `Description`.
+  - OBI-D-05 admits plain-name fragments, `$dynamicRef`, and `$dynamicAnchor`
+    in the document resource. OBI-D-12 decodes a same-document fragment once,
+    then reads a JSON Pointer or a plain name the document resource declares;
+    the empty reference and `#` name the document and never qualify, and an
+    absolute reference is JSON Schema's. The legacy `definitions` and the
+    schema values of `dependencies` hold OBI positions.
+  - OBI-D-13 counts each `$anchor` and `$dynamicAnchor` declaration of a
+    plain name, and compares `$id`s after strict RFC 3986 §5.2 resolution and
+    empty-fragment removal, with no other normalization.
+  - OBI-D-06 accepts the 2020-12 dialect URI with an empty fragment.
+  - A text beginning with a byte-order mark declares no version, so it is
+    never refused (OBI-T-04).
+  - Value validation reads patterns as ECMA-262 regular expressions with
+    Unicode semantics (OBI-T-08): a strict grammar check refuses what the `u`
+    flag refuses, and `dlclark/regexp2` evaluates the rest, with `.`, `\b`,
+    and `\B` rewritten to ECMA-262's meaning. A pattern the check refuses, a
+    Unicode property escape, or a match that exceeds
+    `schemacompiler.PatternMatchTimeout` gives no verdict, as does a graph
+    holding a `$dynamicRef` when the document resource declares a
+    `$dynamicAnchor`. `format` stays an annotation.
+  - The duplicate OBI-T-02 unknown-field advisory and its
+    `ValidationReport.Diagnostics` field are removed; unknown unprefixed
+    fields remain OBI-D-02 violations.
 - **Core now uses kinds (breaking, pre-1.0).** `Source.BindingSpec` and its
   `bindingSpec` JSON member become `Source.Kind` and `kind`;
   `DependencyEntry.BindingSpecs` and `bindingSpecs` become `Kinds` and `kinds`.

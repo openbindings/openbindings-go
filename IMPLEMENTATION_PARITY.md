@@ -19,6 +19,26 @@ support. Go accepts unknown kinds while validating a document and gives
 source and binding content no Core interpretation. The former
 `bindingSpec`/`bindingSpecs` names are unknown fields, not aliases.
 
+The core alignment with spec draft `0e2a8d5` (2026-09-29) is established in
+Go first; TypeScript alignment is pending for each of these:
+
+- **Model.** `idempotent` is a binding member; a dependency carries an
+  optional `description`.
+- **Rule numbering.** OBI-D-01 through OBI-D-13 as the draft numbers them; no
+  `$vocabulary` rule and no example validity (examples are author claims).
+- **References.** OBI-D-05 admits plain names and the dynamic pair in the
+  document resource; OBI-D-12 decodes a fragment once, then reads a pointer or
+  a plain name the document resource declares, and leaves absolute references
+  to JSON Schema; the legacy `definitions` and `dependencies` hold OBI
+  positions.
+- **Uniqueness.** OBI-D-13 counts each `$anchor` and `$dynamicAnchor`
+  declaration and compares `$id`s after strict RFC 3986 §5.2 resolution.
+- **Version decision.** A text beginning with a byte-order mark declares no
+  version (OBI-T-04).
+- **Value validation.** Patterns are ECMA-262 with the `u` flag (native in
+  TypeScript); a match that reaches no answer, and an absent schema, give no
+  verdict (OBI-T-08).
+
 Document validation reports the core's §10.4 conformance conclusion in Go:
 `Interface.Validate(options)` and `ValidateDocument(data, options)` return a
 `ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-09 to caller evidence through

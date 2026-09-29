@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -59,4 +60,22 @@ func exampleValue(v any) json.RawMessage {
 		panic(err)
 	}
 	return data
+}
+
+// inputVerdict validates value against the input schema of an operation in a
+// document and names the outcome OBI-T-08 distinguishes: "valid", "mismatch",
+// or "no verdict".
+func inputVerdict(t *testing.T, document, operation string, value any) string {
+	t.Helper()
+	err := ValidateOperationInput(value, mustDecodeInterface(t, document), operation)
+	switch {
+	case err == nil:
+		return "valid"
+	case errors.As(err, new(*SchemaValidationError)):
+		return "mismatch"
+	case errors.As(err, new(*SchemaGraphUnavailableError)):
+		return "no verdict"
+	}
+	t.Fatalf("validating against %s: %v", operation, err)
+	return ""
 }

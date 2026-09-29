@@ -63,13 +63,20 @@ func TestValidateOperationInput_FormatIsAnnotationOnly(t *testing.T) {
 	}
 }
 
-// Patterns use the schema library's engine, Go's regexp. A pattern it cannot
-// compile, such as an ECMAScript lookahead, leaves no verdict rather than a
-// wrong one.
+// Patterns are ECMA-262 regular expressions with Unicode semantics (OBI-T-08):
+// a lookahead is evaluated, and a pattern the grammar refuses leaves no
+// verdict rather than a wrong one.
 func TestValidateOperationInput_PatternDialect(t *testing.T) {
 	lookahead := map[string]any{"type": "string", "pattern": "^(?=.*[A-Z]).*$"}
-	if err := ValidateOperationInput("Password1", documentWithInput(lookahead, nil), "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
-		t.Fatalf("a lookahead pattern must leave the graph unavailable, got %v", err)
+	if err := ValidateOperationInput("Password1", documentWithInput(lookahead, nil), "op"); err != nil {
+		t.Fatalf("a lookahead pattern is ECMA-262, got %v", err)
+	}
+	if err := ValidateOperationInput("password1", documentWithInput(lookahead, nil), "op"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Fatalf("want a mismatch, got %v", err)
+	}
+	invalid := map[string]any{"type": "string", "pattern": `[\w-.]`}
+	if err := ValidateOperationInput("x", documentWithInput(invalid, nil), "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("a pattern the u flag refuses must leave the graph unavailable, got %v", err)
 	}
 	digits := map[string]any{"type": "string", "pattern": "^[0-9]+$"}
 	if err := ValidateOperationInput("123", documentWithInput(digits, nil), "op"); err != nil {
@@ -334,11 +341,10 @@ func TestValidateOperationInput_ConditionalReachability(t *testing.T) {
 			t.Errorf("%s: want valid, got %v", name, err)
 		}
 	}
-	// An external reference in an orphan then does not exempt a mismatched
-	// example from OBI-D-10.
-	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"$ref":"https://ext.example/x.json"}},"examples":{"e":{"input":5}}}}}`), ValidateOptions{})
-	if report.Evidence["OBI-D-10"] != EvidenceViolated {
-		t.Fatalf("OBI-D-10 %q", report.Evidence["OBI-D-10"])
+	// An external reference in an orphan then does not stop a mismatch.
+	orphan := mustDecode(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"string","then":{"$ref":"https://ext.example/x.json"}}}}}`)
+	if err := ValidateOperationInput(json.Number("5"), orphan, "op"); !errors.As(err, new(*SchemaValidationError)) {
+		t.Fatalf("want a mismatch, got %v", err)
 	}
 }
 
@@ -366,7 +372,6 @@ func TestValidateOperationInput_IllFormedGraphsAreUnavailable(t *testing.T) {
 	var unavailable *SchemaGraphUnavailableError
 	for name, input := range map[string]string{
 		"draft-07 dialect": `{"$schema":"http://json-schema.org/draft-07/schema#","type":"string"}`,
-		"vocabulary":       `{"$vocabulary":{},"type":"string"}`,
 		"non-string title": `{"$ref":"#/x-lib/T"}`,
 	} {
 		iface := mustDecode(t, `{"openbindings":"0.2.0","x-lib":{"T":{"type":"string","title":5}},"operations":{"op":{"input":`+input+`}}}`)
@@ -546,5 +551,32 @@ func TestValidateOperationInput_MalformedVersionsAreNotInterpreted(t *testing.T)
 		if err == nil || errors.As(err, new(*SchemaValidationError)) || errors.As(err, new(*SchemaGraphUnavailableError)) {
 			t.Errorf("%q: want a plain refusal to interpret, got %v", version, err)
 		}
+	}
+}
+
+// A pattern match that reaches no answer within the SDK's limits, as a
+// catastrophically backtracking one does, gives no verdict rather than the
+// mismatch the schema library would read it as (§10.4, OBI-T-08).
+func TestValidateOperationInput_UnansweredPatternMatchesGiveNoVerdict(t *testing.T) {
+	schema := map[string]any{"type": "string", "pattern": "^(a|aa)+$"}
+	value := strings.Repeat("a", 60) + "b"
+	if err := ValidateOperationInput(value, documentWithInput(schema, nil), "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("want no verdict, got %v", err)
+	}
+	if err := ValidateOperationInput("aaaa", documentWithInput(schema, nil), "op"); err != nil {
+		t.Fatalf("a match that answers: %v", err)
+	}
+}
+
+// When the document resource declares a $dynamicAnchor, an evaluation that
+// begins there holds it in the dynamic scope (§7.2), which this SDK's bundle
+// does not reproduce, so a graph holding a $dynamicRef reaches no verdict.
+func TestValidateOperationInput_DocumentDynamicAnchorsGiveNoVerdict(t *testing.T) {
+	iface := mustDecode(t, `{"openbindings":"0.2.0","schemas":{
+		"Node":{"$dynamicAnchor":"node","type":"string"},
+		"Tree":{"$id":"https://ex.com/tree","$dynamicAnchor":"node","type":"array","items":{"$dynamicRef":"#node"}}},
+		"operations":{"op":{"output":{"$ref":"https://ex.com/tree"}}}}`)
+	if err := ValidateOperationOutput([]any{[]any{}}, iface, "op"); !errors.As(err, new(*SchemaGraphUnavailableError)) {
+		t.Fatalf("want no verdict, got %v", err)
 	}
 }

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openbindings.com/schema/openbindings-0.2.0.json",
+  "$id": "https://openbindings.com/schema/openbindings-0.2.json",
   "title": "OpenBindings Interface Document (v0.2.0)",
-  "description": "Derived JSON Schema for the OpenBindings interface document. Expresses the structural portion of the specification; OBI-D-02 applies it as published, and a conflict with the prose is an erratum corrected in this schema (see openbindings.md §10).",
+  "description": "Derived JSON Schema for the OpenBindings interface document. It expresses the structural portion of the specification, and OBI-D-02 applies it as published. A conflict with the prose is an erratum; this schema decides OBI-D-02 until a patch release corrects it (see openbindings.md OBI-D-02).",
   "type": "object",
   "required": ["openbindings", "operations"],
   "properties": {
@@ -26,7 +26,7 @@
     },
     "schemas": {
       "type": "object",
-      "description": "Named JSON Schemas referenced by operations.",
+      "description": "Named JSON Schemas, reusable through same-document references.",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
       },
@@ -36,7 +36,7 @@
     },
     "operations": {
       "type": "object",
-      "description": "Protocol-independent operation contract registry keyed by operation name. Presence alone does not assert that a realization is available.",
+      "description": "Protocol-independent operation contracts, keyed by operation name. Presence alone does not assert that a realization is available.",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
       },
@@ -79,15 +79,17 @@
   "additionalProperties": false,
   "$defs": {
     "JSONSchema": {
-      "description": "JSON Schema 2020-12 schema: object or boolean form. Top-level constraints from §5.2 are enforced on the object form here ($schema value pinned, $vocabulary forbidden); recursive enforcement (OBI-D-06/07) and meta-schema well-formedness (OBI-D-13) are prose rules beyond this schema.",
+      "description": "JSON Schema 2020-12 schema: object or boolean form. Where $schema appears on the object form, its value is checked here (OBI-D-06), not its placement: in an OBI, JSON Schema permits $schema only at a resource root, a schema that declares $id (openbindings.md §5.2). OBI-D-06 at nested positions and meta-schema validity (OBI-D-10) are prose rules beyond this schema.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "$schema": {
-              "const": "https://json-schema.org/draft/2020-12/schema"
-            },
-            "$vocabulary": false
+              "enum": [
+                "https://json-schema.org/draft/2020-12/schema",
+                "https://json-schema.org/draft/2020-12/schema#"
+              ]
+            }
           },
           "additionalProperties": true
         },
@@ -101,7 +103,7 @@
       "properties": {
         "description": {
           "type": "string",
-          "description": "Human-readable description of the operation."
+          "description": "Human-readable description of the operation's capability, which its bindings claim to carry out (§5.3)."
         },
         "deprecated": {
           "type": "boolean",
@@ -116,16 +118,12 @@
         },
         "aliases": {
           "type": "array",
-          "description": "Additional names for this operation, equal in standing to its key. The key plus aliases form one flat, document-unique namespace; every name resolves to this operation. A shared contract's qualified name here claims correspondence with that contract's operation.",
+          "description": "Additional names for this operation, equal in standing to its key. The key plus aliases form one flat, document-unique namespace; every name resolves to this operation. Carrying a shared contract's operation name here claims correspondence with that operation.",
           "uniqueItems": true,
           "items": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
           }
-        },
-        "idempotent": {
-          "type": "boolean",
-          "description": "Author-attested effect claim: true asserts repetition with equivalent input under the same relevant context adds no intended operation-level effects; false asserts some repetition can; absent claims nothing. Not a retry-safety or cacheability authorization (§5.1)."
         },
         "input": {
           "$ref": "#/$defs/JSONSchema",
@@ -133,7 +131,7 @@
         },
         "output": {
           "$ref": "#/$defs/JSONSchema",
-          "description": "Contract on each successful caller-facing output value. Omit to leave unspecified; literal null is not valid at this position."
+          "description": "Contract on each caller-facing output value. Omit to leave unspecified; literal null is not valid at this position."
         },
         "examples": {
           "type": "object",
@@ -151,7 +149,7 @@
     },
     "OperationExample": {
       "type": "object",
-      "description": "An example input/output pair for an operation. Positive contract claims: provided values must validate against the corresponding specified schemas where the governing schema graph is document-internal (OBI-D-10). Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
+      "description": "An operation example: each of its input and output members is one caller-facing value. Positive contract claims: the author asserts that provided values validate against the corresponding specified schemas (§5.1); the claim's truth is not a document rule. Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
       "properties": {
         "description": {
           "type": "string",
@@ -185,6 +183,10 @@
             "minLength": 1
           },
           "description": "Optional unordered any-of constraint over exact, opaque kinds acceptable at this consumption point. Omission declares no kind constraint."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of this dependency."
         }
       },
       "patternProperties": { "^x-": true },
@@ -217,7 +219,7 @@
         "operation": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
-          "description": "Operation key referenced by this binding."
+          "description": "Operation key referenced by this binding. Aliases are not valid here."
         },
         "source": {
           "type": "string",
@@ -226,6 +228,10 @@
         },
         "content": {
           "description": "Optional binding content, as any JSON value, read under its source's kind. It might identify a target or describe value adaptation; the core assigns no meaning to its presence, absence, type, or members. Member presence is distinct from value: content carrying JSON null is a present member."
+        },
+        "idempotent": {
+          "type": "boolean",
+          "description": "Author claim about repeating the operation through this binding: true asserts repetition with the same input, in context differing at most in ways the effects do not depend on, adds no intended operation-level effects after the first; false asserts some valid repetition through it can; absent claims nothing. Not a retry-safety or cacheability authorization (§5.3)."
         },
         "preference": {
           "type": "integer",

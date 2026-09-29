@@ -12,14 +12,15 @@ through bindings and named dependencies whose implementations are supplied by
 its environment, independently of protocol. See the
 [spec](https://github.com/openbindings/spec) for details.
 
-**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-11 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
+**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-09 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
 
 > **Draft status:** this branch implements the unreleased 0.2 working draft.
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
 This implementation targets the pruned Core 0.2 draft on
-`codex/prune-core-tool-policy`.
+`codex/prune-core-tool-policy` at `0e2a8d5`, whose conformance corpus it
+passes.
 
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
@@ -36,24 +37,34 @@ its typed decoding, so a document the typed model cannot carry is still judged
 in full, with two exceptions the SDK cannot read in full: a document holding a
 string that escapes a lone UTF-16 surrogate, and input nested deeper than
 encoding/json reads (10000 levels). For both, OBI-D-01 is decided; for deep
-input, OBI-D-11 is also decided from the declared version. The other rules
+input, OBI-D-09 is also decided from the declared version. The other rules
 are inconclusive. Both return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
-OBI-D-02, OBI-D-10, and
-OBI-D-13 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
+OBI-D-02 and OBI-D-10, and validation of values against operation contracts
+(OBI-T-08), use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
-embedded at build time. To exercise the core conformance corpus, check out the
+embedded at build time. No document rule evaluates a value against the
+document's schemas: an example is an author claim, which
+`ValidateOperationInput` and `ValidateOperationOutput` can check.
+Patterns are ECMA-262 regular expressions with Unicode semantics: a strict
+grammar check refuses what the `u` flag refuses, and
+[`dlclark/regexp2`](https://github.com/dlclark/regexp2) evaluates the rest,
+with `.`, `\b`, and `\B` rewritten to ECMA-262's meaning. To exercise the core conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
 point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
 
 **Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
 than the JSON decoder's 10,000-level limit prevents full document inspection.
-OBI-D-13 leaves subschemas beyond 256 levels inconclusive. Contract
+OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Contract
 validation reports schema graph unavailability for schemas the evaluator
-cannot safely evaluate, including unsupported regular expressions, relevant
-numbers beyond its limits, and non-advancing reference cycles. An
+cannot safely evaluate, including patterns that are not ECMA-262 regular
+expressions with Unicode semantics, Unicode property escapes, pattern matches
+that exceed `schemacompiler.PatternMatchTimeout`, relevant numbers beyond its
+limits, non-advancing reference cycles, and a `$dynamicRef` when the document
+resource declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle
+does not reproduce. An
 inconclusive rule or unavailable graph is never reported as success or
 unqualified conformance. The Core corpus does not exercise every behavior in
 OBI-T-01: the exact kind comparison has direct Go tests, while Core has no
@@ -140,7 +151,7 @@ for name, op := range iface.Operations {
 }
 ```
 
-A dependency names the local operation it consumes by exact key (OBI-D-14);
+A dependency names the local operation it consumes by exact key (OBI-D-11);
 dependency keys and their operation references do not use alias resolution:
 
 ```go

@@ -17,7 +17,7 @@ import (
 // As an operation's Input or Output, a nil JSONSchema means the schema is
 // unspecified (the member is absent). As an entry of Interface.Schemas, where
 // the entry itself says the member is present, nil is a JSON null, which is
-// not a schema: OBI-D-13 reports it. Well-formedness of a present value is a
+// not a schema: OBI-D-10 reports it. Well-formedness of a present value is a
 // document rule enforced by Validate rather than by this type.
 type JSONSchema any
 
@@ -61,10 +61,12 @@ func Value[T any](member *T) T {
 }
 
 // OperationExample is a named, author-supplied sample of an operation's
-// caller-facing values (§5.1). Input and Output are the example values as
+// caller-facing values (§5.1). Each is an author claim that the value
+// validates against the operation's corresponding schema; no document rule
+// checks it (OBI-T-10, OBI-T-11). Input and Output are the example values as
 // JSON: nil when the member is absent, and the bytes `null` when the example
-// supplies the JSON value null, which OBI-D-10 validates like any other. An
-// empty, non-nil json.RawMessage holds no value and encodes as absent.
+// supplies the JSON value null, a value like any other. An empty, non-nil
+// json.RawMessage holds no value and encodes as absent.
 type OperationExample struct {
 	Description *string         `json:"description,omitempty"`
 	Input       json.RawMessage `json:"input,omitempty"`
@@ -97,9 +99,8 @@ type Operation struct {
 	// name resolves to this operation (see ResolveOperation / OBI-T-07).
 	Aliases []string `json:"aliases,omitzero"`
 
-	Idempotent *bool      `json:"idempotent,omitempty"`
-	Input      JSONSchema `json:"input,omitempty"`
-	Output     JSONSchema `json:"output,omitempty"`
+	Input  JSONSchema `json:"input,omitempty"`
+	Output JSONSchema `json:"output,omitempty"`
 
 	// Examples contains named example input/output pairs.
 	Examples map[string]OperationExample `json:"examples,omitzero"`
@@ -161,6 +162,13 @@ type BindingEntry struct {
 	// json.RawMessage holds no value and encodes as absent. Core gives
 	// binding content no meaning.
 	Content json.RawMessage `json:"content,omitempty"`
+	// Idempotent is the binding author's claim about repeating the operation
+	// through this binding (§5.3): true claims repetition with the same input,
+	// in context differing at most in ways the effects do not depend on, adds
+	// no intended operation-level effects after the first; false claims some
+	// valid repetition can; nil claims neither. No document rule checks it
+	// (OBI-T-10), and it alone never makes a retry safe.
+	Idempotent *bool `json:"idempotent,omitempty"`
 	// Preference is the author's signed integer preference among bindings of
 	// the same operation, nil when absent (no preference, not zero).
 	Preference  *int64  `json:"preference,omitempty"`
@@ -192,8 +200,9 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 // the dependency unconstrained by kind. Operation is
 // the canonical key of an operation in the same document.
 type DependencyEntry struct {
-	Operation string   `json:"operation"`
-	Kinds     []string `json:"kinds,omitzero"`
+	Operation   string   `json:"operation"`
+	Kinds       []string `json:"kinds,omitzero"`
+	Description *string  `json:"description,omitempty"`
 
 	LosslessFields
 }
