@@ -1,6 +1,7 @@
 package schemaeval
 
 import (
+	"math"
 	"math/big"
 	"testing"
 )
@@ -29,5 +30,34 @@ func TestCompareNumbers(t *testing.T) {
 	}
 	if multipleOf("5", "1e2000000") || !multipleOf("0", "1e2000000") || !multipleOf("0.25", "1e-2000") {
 		t.Error("multipleOf with huge exponents")
+	}
+}
+
+// A count is read exactly by its digits and power of ten, whatever its
+// spelling, and never overflows on a power near the int64 limit.
+func TestReadCount(t *testing.T) {
+	for _, c := range []struct {
+		token      string
+		value      int
+		past, isOk bool
+	}{
+		{"0e10001", 0, false, true},
+		{"10e-1", 1, false, true},
+		{"1.0", 1, false, true},
+		{"1e18", 1000000000000000000, false, true},
+		{"9223372036854775807", math.MaxInt, false, true},
+		{"9223372036854775808", 0, true, true},
+		{"1e19", 0, true, true},
+		{"1e9223372036854775807", 0, true, true},
+		{"11e9223372036854775806", 0, true, true},
+		{"100e9223372036854775805", 0, true, true},
+		{"1e99999999999999999999", 0, true, true},
+		{"-1", 0, false, false},
+		{"0.5", 0, false, false},
+	} {
+		value, past, ok := readCount(c.token)
+		if value != c.value || past != c.past || ok != c.isOk {
+			t.Errorf("readCount(%s) = %d, %v, %v; want %d, %v, %v", c.token, value, past, ok, c.value, c.past, c.isOk)
+		}
 	}
 }

@@ -47,9 +47,9 @@ import (
 // names a case by its ID, or the cases of a group by the group's ID: a suite
 // group's file path, "#", index, a space, and description
 // ("suite/draft2020-12/pattern.json#2 pattern with Unicode property escape
-// requires unicode mode"), or "adversarial/" and a group's name. An entry naming a case fails when the
-// case needs no exemption, and one naming a group when none of its cases
-// does.
+// requires unicode mode"), or "adversarial/" and a group's name. An entry
+// naming a case fails when the case needs no exemption, and one naming a
+// group when none of its cases does.
 type Options struct {
 	// Undecided names cases the evaluator may leave without a verdict: a
 	// pattern feature its engine lacks, a number beyond its arithmetic.
@@ -70,7 +70,9 @@ func exemption(entries map[string]string, c testCase, g group) (string, string, 
 
 // TestSchemaEvaluator checks an evaluator against the evaluator contract.
 // An Undecided or Unlocated entry that names no case, or whose case needs no
-// exemption, fails.
+// exemption, fails. Each group runs as a subtest. Do not call it from a
+// parallel test: it swaps http.DefaultTransport to catch a fetch, and fails
+// a test that has called t.Parallel.
 func TestSchemaEvaluator(t *testing.T, e openbindings.SchemaEvaluator, o Options) {
 	t.Helper()
 	check(t, e, o)

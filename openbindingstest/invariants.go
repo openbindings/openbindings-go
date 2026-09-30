@@ -68,13 +68,16 @@ func (k *kit) concurrency() {
 			which := i % 2
 			own, panicked, err := compileDirect(k.e, bundles[which])
 			if panicked != "" || err != nil {
+				k.checkAnswer("invariant, concurrency (Compile)", err, true, context.Background())
 				k.t.Errorf("invariant, concurrency: compiling: %v %s", err, panicked)
 				return
 			}
 			for j := range 8 {
 				value, want := values[(which+j)%2], []outcome{valid, mismatch}[j%2]
 				for _, compiled := range []openbindings.CompiledSchema{shared[which], own} {
-					switch panicked, answer := validateDirect(compiled, value); {
+					panicked, answer := validateDirect(compiled, value)
+					k.checkAnswer("invariant, concurrency", answer, false, context.Background())
+					switch {
 					case panicked != "":
 						k.t.Errorf("invariant, concurrency: Validate panicked: %s", panicked)
 						return
@@ -99,9 +102,11 @@ func (k *kit) retention() {
 		return
 	}
 	_, first := validateDirect(compiled, decode(`{"a":1}`))
+	k.checkAnswer("invariant, retention", first, false, context.Background())
 	kept := describe(first)
 	for _, v := range []string{`{"a":2,"b":1}`, `{"b":0}`, `{"a":{"b":1}}`} {
-		validateDirect(compiled, decode(v))
+		_, answer := validateDirect(compiled, decode(v))
+		k.checkAnswer("invariant, retention", answer, false, context.Background())
 	}
 	if now := describe(first); now != kept {
 		k.t.Errorf("invariant, retention: a retained error changed: %s became %s", kept, now)
@@ -129,6 +134,8 @@ func (k *kit) cancellation() {
 		k.t.Errorf("invariant, cancellation: Compile panicked given a done ctx: %s", panicked)
 	case err != nil && !errors.Is(err, ctx.Err()):
 		k.t.Errorf("invariant, cancellation: Compile given a done ctx returned an error not matching ctx.Err(): %v", err)
+	default:
+		k.checkAnswer("invariant, cancellation (Compile)", err, true, ctx)
 	}
 	if compiled == nil {
 		if compiled, panicked, err = compileDirect(k.e, bundle); err != nil || panicked != "" {
@@ -141,6 +148,8 @@ func (k *kit) cancellation() {
 		k.t.Errorf("invariant, cancellation: Validate panicked given a done ctx: %s", panicked)
 	case err != nil && !errors.Is(err, ctx.Err()):
 		k.t.Errorf("invariant, cancellation: Validate given a done ctx returned an error not matching ctx.Err(): %v", err)
+	default:
+		k.checkAnswer("invariant, cancellation (Validate)", err, false, ctx)
 	}
 	compiler, _ := openbindings.NewValueContractCompiler(k.e)
 	var iface openbindings.Interface

@@ -40,20 +40,6 @@ func readJSONText(data []byte) (any, error) {
 // that encoding/json writes as base64 (one that marshals itself, such as
 // json.RawMessage, is read as it marshals), which is more likely JSON text
 // meant for ValidateJSON.
-// base64Bytes reports whether encoding/json writes a value as a base64
-// string: a byte slice that neither marshals itself nor is marshaled as text.
-func base64Bytes(value any) bool {
-	v := reflect.ValueOf(value)
-	if !v.IsValid() || v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
-		return false
-	}
-	switch value.(type) {
-	case json.Marshaler, encoding.TextMarshaler:
-		return false
-	}
-	return true
-}
-
 func readGoValue(value any) (any, error) {
 	if base64Bytes(value) {
 		return nil, fmt.Errorf("openbindings: a %T is not validated as a value; use ValidateJSON for JSON text", value)
@@ -71,4 +57,25 @@ func readGoValue(value any) (any, error) {
 		return nil, fmt.Errorf("openbindings: not a JSON value: %w", err)
 	}
 	return readJSONText(data)
+}
+
+// base64Bytes reports whether encoding/json writes a value as a base64
+// string, as its slice encoder decides: a byte slice, reached through any
+// pointers, that neither it nor its element type marshals itself or is
+// marshaled as text.
+func base64Bytes(value any) bool {
+	marshals := func(t reflect.Type) bool {
+		return t.Implements(reflect.TypeFor[json.Marshaler]()) || t.Implements(reflect.TypeFor[encoding.TextMarshaler]())
+	}
+	v := reflect.ValueOf(value)
+	for v.IsValid() && !marshals(v.Type()) && v.Kind() == reflect.Pointer && !v.IsNil() {
+		v = v.Elem()
+	}
+	switch {
+	case !v.IsValid(), marshals(v.Type()), v.CanAddr() && marshals(reflect.PointerTo(v.Type())):
+		return false
+	case v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8:
+		return false
+	}
+	return !marshals(reflect.PointerTo(v.Type().Elem()))
 }

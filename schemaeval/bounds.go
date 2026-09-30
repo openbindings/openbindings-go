@@ -10,12 +10,19 @@ import (
 // bound is a comparison keyword whose number is beyond the library's
 // numeric limits, decided here exactly instead, as a format: it compares
 // decimal numbers by their digits and powers of ten, never building a value
-// of the size its exponent names.
+// of the size its exponent names. A bound with a type is instead a lower
+// count bound past math.MaxInt, which no instance of that type meets.
 type bound struct {
-	keyword, limit string
+	keyword, limit, typ string
 }
 
 func (b bound) validate(v any) error {
+	if b.typ != "" {
+		if jsonType(v) == b.typ {
+			return fmt.Errorf("%s: want at least %s, more than any %s holds", b.keyword, b.limit, b.typ)
+		}
+		return nil
+	}
 	n, isNumber := v.(json.Number)
 	if !isNumber {
 		return nil

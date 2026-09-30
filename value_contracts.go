@@ -184,9 +184,10 @@ func (c *ValueContract) standingRefusal() *NoVerdictError {
 }
 
 // Validate validates a Go value, read as encoding/json encodes it. A
-// top-level []byte that is not a json.RawMessage is refused, naming
-// ValidateJSON; a []byte nested in a value is a base64 string, as
-// encoding/json writes it.
+// top-level byte slice that encoding/json writes as base64 ([]byte, or a
+// named byte slice that does not marshal itself) is refused, naming
+// ValidateJSON; one nested in a value is a base64 string, as encoding/json
+// writes it.
 //
 // It returns nil when the value satisfies the value contract, a
 // *MismatchError when it does not, and a *NoVerdictError when no verdict was

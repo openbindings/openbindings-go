@@ -171,6 +171,12 @@ func TestKitCatchesFaults(t *testing.T) {
 			}
 			return answer
 		}}, Options{}, "not matching ctx.Err()"},
+		"a refusal sentinel for a done ctx": {naive{validate: func(ctx context.Context, _ any, answer error) error {
+			if ctx.Err() != nil {
+				return errors.Join(ctx.Err(), openbindings.ErrUndefined)
+			}
+			return answer
+		}}, Options{}, "invariant, cancellation (Validate): the evaluator's error matches one of core's refusal sentinels"},
 		"wrong paths":                      {naive{}, Options{}, "problem paths"},
 		"an unresolved reference as valid": {naive{loader: permissive{}}, Options{}, "invariant, unresolved references"},
 		"a stale exemption":                {naive{}, Options{Undecided: map[string]string{"adversarial/no-such-case": "none"}}, "which is no case"},

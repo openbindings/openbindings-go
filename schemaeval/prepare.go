@@ -111,7 +111,7 @@ func (p *prepared) prepareSchema(object map[string]any) {
 		case !withinNumericLimits(string(n)):
 			delete(object, keyword)
 			name := fmt.Sprintf("schemaeval-bound-%d", len(p.bounds))
-			p.bounds[name] = bound{keyword, string(n)}
+			p.bounds[name] = bound{keyword: keyword, limit: string(n)}
 			appendAllOf(object, map[string]any{"format": name})
 			p.compares = true
 		default:
@@ -145,7 +145,9 @@ func (p *prepared) prepareSchema(object map[string]any) {
 		case keyword == "minContains":
 			p.stop(object, []string{"array"}, fmt.Sprintf("minContains %s is beyond this evaluator's integers", n))
 		default:
-			appendAllOf(object, map[string]any{"if": map[string]any{"type": count.typ}, "then": false})
+			name := fmt.Sprintf("schemaeval-bound-%d", len(p.bounds))
+			p.bounds[name] = bound{keyword: keyword, limit: string(n), typ: count.typ}
+			appendAllOf(object, map[string]any{"format": name})
 		}
 	}
 	for _, keyword := range []string{"const", "enum"} {
@@ -320,7 +322,11 @@ func readCount(token string) (value int, past, ok bool) {
 		// Its significant digits end in a nonzero digit, so a negative
 		// power leaves a fraction.
 		return 0, false, false
-	case !d.power.IsInt64() || int64(len(d.significant))+d.power.Int64() > int64(len(strconv.Itoa(math.MaxInt))):
+	}
+	// A value within math.MaxInt has at most as many digits; compared so
+	// that no sum can overflow.
+	digits := int64(len(strconv.Itoa(math.MaxInt)))
+	if !d.power.IsInt64() || d.power.Int64() > digits || int64(len(d.significant)) > digits-d.power.Int64() {
 		return 0, true, true
 	}
 	parsed, err := strconv.ParseUint(d.significant+strings.Repeat("0", int(d.power.Int64())), 10, 64)

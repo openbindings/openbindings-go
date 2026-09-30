@@ -140,8 +140,10 @@ var adversaries = []adversary{
 		[]value{{`"a"`, valid, nil}, {`5`, valid, nil}, {`true`, valid, nil}}},
 	{"numbers-unreached", `{"/operations/op/input":{"type":"string","$defs":{"x":{"maximum":1e2000000,"maxItems":1e30}}}}`, "", "",
 		[]value{{`"a"`, valid, nil}, {`5`, mismatch, at("")}}},
-	{"count-spellings", `{"/operations/op/input":{"properties":{"z":{"maxLength":0e10001},"e":{"minLength":0e10001},"f":{"maxItems":10e-1},"g":{"minProperties":1.0},"p":{"minLength":1e10001}}}}`, "", "",
-		[]value{{`{"z":"","e":"","f":[1],"g":{"a":1},"p":5}`, valid, nil}, {`{"z":"x"}`, mismatch, at("/z")}, {`{"f":[1,2]}`, mismatch, at("/f")}, {`{"g":{}}`, mismatch, at("/g")}, {`{"p":"abc"}`, mismatch, at("/p")}}},
+	{"count-spellings", `{"/operations/op/input":{"properties":{"z":{"maxLength":0e10001},"e":{"minLength":0e10001},"f":{"maxItems":10e-1},"g":{"minProperties":1.0},"p":{"minLength":1e10001},
+		"q":{"maxLength":1e9223372036854775807},"r":{"minLength":10e9223372036854775806}}}}`, "", "",
+		[]value{{`{"z":"","e":"","f":[1],"g":{"a":1},"p":5}`, valid, nil}, {`{"z":"x"}`, mismatch, at("/z")}, {`{"f":[1,2]}`, mismatch, at("/f")}, {`{"g":{}}`, mismatch, at("/g")}, {`{"p":"abc"}`, mismatch, at("/p")},
+			{`{"q":"x"}`, valid, nil}, {`{"r":"abc"}`, mismatch, at("/r")}}},
 	{"dot-and-space", `{"/operations/op/input":{"properties":{"t":{"pattern":"^\\S.{0,79}$"},"d":{"pattern":"^.$"},"s":{"pattern":"^\\s$"}}}}`, "", "",
 		[]value{{`{"t":"a "}`, valid, nil}, {`{"t":" x"}`, mismatch, at("/t")}, {`{"d":" "}`, mismatch, at("/d")}, {`{"d":"é"}`, valid, nil}, {`{"s":" "}`, valid, nil}, {`{"s":" "}`, valid, nil}}},
 	{"path-escaping", `{"/operations/op/input":{"properties":{"a/b":{"type":"string"},"m~n":{"required":["q"],"properties":{"q":{"type":"integer"}}}}}}`, "", "",
@@ -149,6 +151,7 @@ var adversaries = []adversary{
 	{"contains-false", `{"/operations/op/input":{"contains":false}}`, "", "", []value{{`[1]`, mismatch, at("")}}},
 	{"property-names-false", `{"/operations/op/input":{"propertyNames":false}}`, "", "", []value{{`{"a":1}`, mismatch, at("")}}},
 	{"property-names-false-twice", `{"/operations/op/input":{"propertyNames":false}}`, "", "", []value{{`{"a":1,"b":2}`, mismatch, at("")}}},
+	{"property-names-two-keywords", `{"/operations/op/input":{"allOf":[{"propertyNames":false},{"propertyNames":{"minLength":2}}]}}`, "", "", []value{{`{"x":1}`, mismatch, at("", "")}}},
 	{"type-and-const", `{"/operations/op/input":{"type":"string","const":1}}`, "", "", []value{{`true`, mismatch, at("", "")}}},
 	{"missing-required", `{"/operations/op/input":{"required":["q"],"properties":{"q":{"type":"integer"}}}}`, "", "", []value{{`{}`, mismatch, at("")}}},
 	{"three-at-one-location", `{"/operations/op/input":{"minimum":5,"multipleOf":2,"maximum":1}}`, "", "", []value{{`3`, mismatch, at("", "", "")}}},

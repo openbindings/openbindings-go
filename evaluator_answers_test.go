@@ -203,16 +203,26 @@ func TestValues_Read(t *testing.T) {
 	if fmt.Sprint(seen) != fmt.Sprint(want) {
 		t.Fatalf("read %#v, want %#v", seen, want)
 	}
+	// A byte slice whose element marshals itself is an array, as
+	// encoding/json writes it.
+	if err := contract.Validate(context.Background(), []digit{1}); err != nil || fmt.Sprint(seen) != "[1]" {
+		t.Fatalf("read %#v: %v", seen, err)
+	}
+	if err := contract.Validate(context.Background(), []pointerDigit{2}); err != nil || fmt.Sprint(seen) != "[2]" {
+		t.Fatalf("read %#v: %v", seen, err)
+	}
 	type body []byte
+	raw := []byte(`{}`)
 	cycle := map[string]any{}
 	cycle["self"] = cycle
 	for name, value := range map[string]any{
-		"a []byte":           []byte(`{}`),
-		"a named byte slice": body(`{}`),
-		"invalid text":       map[string]any{"a": "\xff"},
-		"a NaN":              math.NaN(),
-		"a channel":          make(chan int),
-		"a cycle":            cycle,
+		"a []byte":              []byte(`{}`),
+		"a named byte slice":    body(`{}`),
+		"a pointer to a []byte": &raw,
+		"invalid text":          map[string]any{"a": "\xff"},
+		"a NaN":                 math.NaN(),
+		"a channel":             make(chan int),
+		"a cycle":               cycle,
 	} {
 		if err := contract.Validate(context.Background(), value); err == nil || errors.Is(err, ErrNoVerdict) || errors.Is(err, ErrMismatch) {
 			t.Errorf("%s: want an error saying it is not a JSON value, got %v", name, err)
@@ -252,3 +262,14 @@ func TestValueContract_Zero(t *testing.T) {
 		}
 	}
 }
+
+// digit is a byte that marshals itself as a JSON number.
+type digit byte
+
+func (d digit) MarshalJSON() ([]byte, error) { return []byte(fmt.Sprint(int(d))), nil }
+
+// pointerDigit marshals itself through a pointer, which encoding/json uses
+// for a slice's elements.
+type pointerDigit byte
+
+func (d *pointerDigit) MarshalJSON() ([]byte, error) { return []byte(fmt.Sprint(int(*d))), nil }

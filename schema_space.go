@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -490,8 +491,12 @@ func newSuppliedResources(resources []Resource) (*suppliedResources, error) {
 		seen[normal] = resource.URI
 		value, err := readJSONText(resource.Document)
 		if err != nil {
-			// %v, not %w: a configuration error, which must not match a
-			// value's outcome (ErrNoVerdict, ErrUndefined).
+			// A configuration error, which neither matches nor reads as a
+			// value's outcome (ErrNoVerdict, ErrUndefined): the cause, by %v.
+			var refusal *NoVerdictError
+			if errors.As(err, &refusal) {
+				err = refusal.Cause
+			}
 			return nil, fmt.Errorf("openbindings: the resource %q is not JSON core can read exactly: %v", resource.URI, err)
 		}
 		out.docs = append(out.docs, indexDocument(suppliedDocument, uri, value))
