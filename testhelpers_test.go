@@ -2,7 +2,6 @@ package openbindings
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 )
 
@@ -67,15 +66,14 @@ func exampleValue(v any) json.RawMessage {
 // or "no verdict".
 func inputVerdict(t *testing.T, document, operation string, value any) string {
 	t.Helper()
-	err := ValidateOperationInput(value, mustDecodeInterface(t, document), operation)
-	switch {
-	case err == nil:
-		return "valid"
-	case errors.As(err, new(*SchemaValidationError)):
-		return "mismatch"
-	case errors.As(err, new(*SchemaGraphUnavailableError)):
-		return "no verdict"
+	return verdictOf(t, validateWithTestEvaluator(t, mustDecodeInterface(t, document), operation, "input", value))
+}
+
+func mustDecodeInterface(t *testing.T, document string) *Interface {
+	t.Helper()
+	var iface Interface
+	if err := json.Unmarshal([]byte(document), &iface); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("validating against %s: %v", operation, err)
-	return ""
+	return &iface
 }

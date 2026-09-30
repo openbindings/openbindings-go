@@ -271,3 +271,121 @@ func removeDotSegmentsStrict(input string) string {
 	}
 	return string(output)
 }
+
+// normalURI returns an absolute URI in the normal form core writes and
+// compares collisions in: RFC 3986 §6.2.2 (the scheme and host lowercased,
+// percent-encodings of unreserved characters decoded and the rest written in
+// uppercase hex, dot segments removed), §6.2.3 for http and https (an empty
+// path written "/", an empty or default port removed), and an empty fragment
+// removed. References are never matched in this form: §7 compares characters.
+func normalURI(s string) string {
+	p := splitURI(s)
+	p.scheme = strings.ToLower(p.scheme)
+	if p.hasAuthority {
+		p.authority = normalAuthority(p.authority, p.scheme)
+	}
+	p.path = removeDotSegmentsStrict(normalPercents(p.path))
+	if p.hasAuthority && p.path == "" && (p.scheme == "http" || p.scheme == "https") {
+		p.path = "/"
+	}
+	if p.hasQuery {
+		p.query = normalPercents(p.query)
+	}
+	if p.hasFragment {
+		p.fragment = normalPercents(p.fragment)
+		if p.fragment == "" {
+			p.hasFragment = false
+		}
+	}
+	return p.String()
+}
+
+// normalAuthority normalizes an authority's userinfo, host, and port.
+func normalAuthority(authority, scheme string) string {
+	userinfo, hostport := "", authority
+	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+		userinfo, hostport = normalPercents(authority[:at])+"@", authority[at+1:]
+	}
+	host, port := hostport, ""
+	if colon := strings.LastIndexByte(hostport, ':'); colon >= 0 && !strings.Contains(hostport[colon:], "]") {
+		host, port = hostport[:colon], hostport[colon+1:]
+	}
+	host = strings.ToLower(normalPercents(host))
+	switch {
+	case port == "", scheme == "http" && port == "80", scheme == "https" && port == "443":
+		return userinfo + host
+	}
+	return userinfo + host + ":" + port
+}
+
+// normalPercents decodes each percent-encoding of an unreserved character and
+// writes every other one in uppercase hex (RFC 3986 §6.2.2.1, §6.2.2.2).
+func normalPercents(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
+			c := unhex(s[i+1])<<4 | unhex(s[i+2])
+			if isUnreserved(c) {
+				b.WriteByte(c)
+			} else {
+				b.WriteString(strings.ToUpper(s[i : i+3]))
+			}
+			i += 2
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func isUnreserved(c byte) bool {
+	return isAlpha(c) || isDigit(c) || c == '-' || c == '.' || c == '_' || c == '~'
+}
+
+func unhex(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10
+	}
+	return c - 'A' + 10
+}
+
+// resolveExact resolves a reference against an absolute base URI strictly by
+// RFC 3986 §5.2, character for character apart from dot segments, and
+// returns the target without its fragment, and the fragment (empty fragment
+// and absent fragment alike ""). base is "" for a reference with no base.
+func resolveExact(ref, base string) (target, fragment string) {
+	var from uriParts
+	if base != "" {
+		from = splitURI(base)
+	}
+	t := resolveURIReference(from, splitURI(ref))
+	fragment = t.fragment
+	t.fragment, t.hasFragment = "", false
+	return t.String(), fragment
+}
+
+// fragmentPointer writes a JSON Pointer's reference tokens as a URI fragment
+// (RFC 6901 §6): each token escaped for a pointer, and every byte a fragment
+// does not allow as written percent-encoded, "%" included.
+func fragmentPointer(tokens []string) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		b.WriteByte('/')
+		escaped := strings.NewReplacer("~", "~0", "/", "~1").Replace(token)
+		for i := 0; i < len(escaped); i++ {
+			c := escaped[i]
+			if isUnreserved(c) || strings.IndexByte("!$&'()*+,;=:@", c) >= 0 {
+				b.WriteByte(c)
+				continue
+			}
+			b.WriteString("%" + strings.ToUpper(string("0123456789abcdef"[c>>4])+string("0123456789abcdef"[c&15])))
+		}
+	}
+	return b.String()
+}

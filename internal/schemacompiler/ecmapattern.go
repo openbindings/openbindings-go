@@ -2,49 +2,34 @@ package schemacompiler
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
 )
 
-// errPropertyEscape is the error for a Unicode property escape (\p{...} or
-// \P{...}). The pattern may be valid, but the engine's property tables are
-// not known to match ECMA-262's, so no verdict rests on one.
-var errPropertyEscape = errors.New("a Unicode property escape, whose tables this SDK does not match to ECMA-262's")
-
-// errResetCapture is the error for a backreference to a group inside a
-// quantified atom. ECMA-262 clears such a group's capture at the start of each
-// iteration (§21.2.2.5.1, RepeatMatcher); the engine keeps the capture of an
-// earlier iteration, so ^(a|(b))*\2$ matches "aba" in ECMA-262 and not in
-// the engine. The pattern is valid, but no verdict rests on it.
-var errResetCapture = errors.New("a backreference whose capture semantics the engine does not match to ECMA-262's")
-
-// maxPatternNesting bounds how deeply a pattern nests groups. Checking and
-// compiling a pattern recurses once per level, and patterns never nest near
-// this deep, so a deeper one is a resource limit met (§10.4), not evidence
-// about the pattern.
+// maxPatternNesting bounds how deeply a pattern nests groups. Checking a
+// pattern recurses once per level, and patterns never nest near this deep, so
+// a deeper one is core's own limit met (§10.4), not evidence about the
+// pattern.
 const maxPatternNesting = 256
 
-// errPatternNesting is the error for a pattern nesting groups deeper than
+// ErrPatternNesting is the error for a pattern nesting groups deeper than
 // maxPatternNesting.
-var errPatternNesting = fmt.Errorf("a pattern nesting groups deeper than %d levels, a resource limit of this SDK", maxPatternNesting)
+var ErrPatternNesting = fmt.Errorf("a pattern nesting groups deeper than %d levels, a limit of this SDK", maxPatternNesting)
 
-// checkUnicodePattern returns nil for a Pattern of ECMA-262 (11th edition,
+// CheckPattern returns nil for a Pattern of ECMA-262 (11th edition,
 // §21.2.1) parsed with the u flag, early errors included, the grammar a JSON
-// Schema pattern is read under (JSON Schema Core §6.4), that this SDK
-// evaluates. It returns an error for any other pattern, and for a valid one it
-// does not evaluate (errPropertyEscape, errResetCapture) or that meets a
-// resource limit (errPatternNesting). It takes time in proportion to the
-// pattern's length. The engine the SDK
-// matches with accepts some patterns the grammar refuses, such as a class
-// escape bounding a range ([\w-.]) or an identity escape of a character that
-// is not syntax (\-), so its compile is no check of validity.
-func checkUnicodePattern(pattern string) error {
-	p := &patternParser{src: []rune(pattern), names: map[string]bool{}, groupOf: map[string]int{}}
+// Schema pattern is read under (JSON Schema Core §6.4), with Unicode property
+// escapes checked against that edition's names for Unicode 13.0. It returns
+// ErrPatternNesting for a pattern nesting groups deeper than core's limit,
+// and another error for a pattern that is not one. It takes time in
+// proportion to the pattern's length. Many engines accept patterns the
+// grammar refuses, such as a class escape bounding a range ([\w-.]) or an
+// identity escape of a character that is not syntax (\-).
+func CheckPattern(pattern string) error {
+	p := &patternParser{src: []rune(pattern), names: map[string]bool{}}
 	p.countGroups()
-	p.quantified = make([]int, p.groups+2)
 	if err := p.disjunction(); err != nil {
 		return err
 	}
@@ -61,20 +46,6 @@ func checkUnicodePattern(pattern string) error {
 			return fmt.Errorf("the backreference \\k<%s> names no group", name)
 		}
 	}
-	// quantified counts, for each group, the quantified atoms holding it.
-	for group := 1; group < len(p.quantified); group++ {
-		p.quantified[group] += p.quantified[group-1]
-	}
-	for _, n := range p.backreferences {
-		if group, _ := strconv.Atoi(n); p.quantified[group] > 0 {
-			return errResetCapture
-		}
-	}
-	for _, name := range p.namedReferences {
-		if p.quantified[p.groupOf[name]] > 0 {
-			return errResetCapture
-		}
-	}
 	return nil
 }
 
@@ -87,13 +58,6 @@ type patternParser struct {
 	// References are checked once every group is known.
 	backreferences  []string
 	namedReferences []string
-	// opened counts the capturing groups opened so far; groupOf numbers each
-	// named group. quantified marks the groups each quantified atom holds, a
-	// range of group numbers, by its differences: +1 at the first group, -1
-	// past the last (errResetCapture).
-	opened     int
-	groupOf    map[string]int
-	quantified []int
 	// depth is how many groups the parser is inside.
 	depth int
 }
@@ -169,7 +133,6 @@ func (p *patternParser) alternative() error {
 // assertion takes a quantifier, lookaheads included.
 func (p *patternParser) term() error {
 	quantifiable := true
-	before := p.opened
 	switch r := p.peek(0); {
 	case r == '^' || r == '$':
 		p.i++
@@ -204,10 +167,6 @@ func (p *patternParser) term() error {
 	if isQuantifierStart(p.peek(0)) {
 		if !quantifiable {
 			return p.errorf("nothing to repeat")
-		}
-		if p.opened > before {
-			p.quantified[before+1]++
-			p.quantified[p.opened+1]--
 		}
 		return p.quantifier()
 	}
@@ -279,7 +238,7 @@ func compareDecimal(a, b string) int {
 
 func (p *patternParser) group() error {
 	if p.depth++; p.depth > maxPatternNesting {
-		return errPatternNesting
+		return ErrPatternNesting
 	}
 	defer func() { p.depth-- }()
 	switch {
@@ -297,13 +256,10 @@ func (p *patternParser) group() error {
 			return p.errorf("duplicate group name %q", name)
 		}
 		p.declared[name] = true
-		p.opened++
-		p.groupOf[name] = p.opened
 	case p.lookingAt("(?"):
 		return p.errorf("invalid group")
 	default:
 		p.i++
-		p.opened++
 	}
 	if err := p.disjunction(); err != nil {
 		return err
@@ -398,7 +354,7 @@ func (p *patternParser) characterOrClassEscape(inClass bool) (classEscape bool, 
 	case r == 'd' || r == 'D' || r == 's' || r == 'S' || r == 'w' || r == 'W':
 		return true, nil
 	case r == 'p' || r == 'P':
-		return true, errPropertyEscape
+		return true, p.propertyEscape()
 	case r == 'f' || r == 'n' || r == 'r' || r == 't' || r == 'v':
 		return false, nil
 	case r == 'c':
@@ -588,74 +544,32 @@ func hexValue(r rune) rune {
 	return r - 'A' + 10
 }
 
-// The engine departs from ECMA-262 in places forEngine rewrites into forms it
-// evaluates as ECMA-262 does: . matches U+2028 and U+2029, which are line
-// terminators; \b and \B test for its Unicode word characters rather than
-// the ASCII ones \w matches (§21.2.2.6); an escaped surrogate pair is read as
-// two code units rather than the one code point the u flag makes it; and its
-// unanchored search skips some start positions, so a pattern is matched
-// anchored behind a lazy prefix, which tries every start position in turn and
-// leaves ^, lookbehind, and group numbers as they were.
-const (
-	anyButLineTerminator = `[^\n\r\u2028\u2029]`
-	wordBoundary         = `(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))`
-	notWordBoundary      = `(?:(?<=[A-Za-z0-9_])(?=[A-Za-z0-9_])|(?<![A-Za-z0-9_])(?![A-Za-z0-9_]))`
-	anyStart             = `^[\s\S]*?(?:`
-)
-
-// forEngine returns a pattern checkUnicodePattern accepts as the engine is to
-// compile it.
-func forEngine(pattern string) string {
-	src := []rune(pattern)
-	out := []rune(anyStart)
-	inClass := false
-	for k := 0; k < len(src); k++ {
-		switch r := src[k]; {
-		case r == '\\' && k+1 < len(src):
-			next := src[k+1]
-			if next == 'u' {
-				if value, width, ok := surrogatePair(src[k:]); ok {
-					out = append(out, []rune(fmt.Sprintf(`\u{%X}`, value))...)
-					k += width - 1
-					continue
-				}
-			}
-			k++
-			switch {
-			case !inClass && next == 'b':
-				out = append(out, []rune(wordBoundary)...)
-			case !inClass && next == 'B':
-				out = append(out, []rune(notWordBoundary)...)
-			default:
-				out = append(out, r, next)
-			}
-		case inClass:
-			inClass = r != ']'
-			out = append(out, r)
-		case r == '[':
-			inClass = true
-			out = append(out, r)
-		case r == '.':
-			out = append(out, []rune(anyButLineTerminator)...)
-		default:
-			out = append(out, r)
+// propertyEscape reads what follows \p or \P in u mode: {Name}, a binary
+// property or a General_Category value, or {Name=Value}, a General_Category,
+// Script, or Script_Extensions value (§21.2.2.8.2), each name as ECMA-262
+// 11th edition lists it for Unicode 13.0.
+func (p *patternParser) propertyEscape() error {
+	if p.peek(0) != '{' {
+		return p.errorf("invalid property escape")
+	}
+	p.i++
+	start := p.i
+	for p.peek(0) != '}' {
+		if p.peek(0) == -1 {
+			return p.errorf("unterminated property escape")
 		}
+		p.i++
 	}
-	return string(append(out, ')'))
-}
-
-// surrogatePair reads an escaped lead surrogate and the escaped trail
-// surrogate after it (\uD83D\uDE00), returning the code point they make and
-// the runes they span.
-func surrogatePair(src []rune) (rune, int, bool) {
-	if len(src) < 12 || src[6] != '\\' || src[7] != 'u' {
-		return 0, 0, false
+	body := string(p.src[start:p.i])
+	p.i++
+	if name, value, pair := strings.Cut(body, "="); pair {
+		if values, known := nonBinaryProperties[name]; known && values[value] {
+			return nil
+		}
+		return p.errorf("unknown Unicode property %q", body)
 	}
-	p := &patternParser{src: src}
-	lead, leadOK := p.hex4(2)
-	trail, trailOK := p.hex4(8)
-	if !leadOK || !trailOK || lead < 0xD800 || lead > 0xDBFF || trail < 0xDC00 || trail > 0xDFFF {
-		return 0, 0, false
+	if binaryProperties[body] || generalCategoryValues[body] {
+		return nil
 	}
-	return (lead-0xD800)<<10 + (trail - 0xDC00) + 0x10000, 12, true
+	return p.errorf("unknown Unicode property %q", body)
 }

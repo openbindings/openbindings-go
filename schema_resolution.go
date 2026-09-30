@@ -37,11 +37,10 @@ type reference struct {
 type origin int
 
 const (
-	inDocument   origin = iota // a location in the document
-	inMetaSchema               // a JSON Schema meta-schema the library carries
-	outside                    // a resource the document does not embed
-	ambiguous                  // a URI or anchor more than one schema declares
-	unresolved                 // nothing: no base, no such anchor, not a URI
+	inDocument origin = iota // a location in the document
+	outside                  // a resource the document does not embed
+	ambiguous                // a URI or anchor more than one schema declares
+	unresolved               // nothing: no base, no such anchor, not a URI
 )
 
 type existence int
@@ -110,17 +109,6 @@ func (d documentSchemas) resolveFrom(ref string, resource *schemaResource, view 
 	fragment := target.Fragment
 	target.Fragment, target.RawFragment = "", ""
 	id := target.String()
-	// The schema library resolves references with net/url, which departs from
-	// RFC 3986 for some URIs (a base with no authority, an opaque path with
-	// dot segments, a path beginning //). Where it does, the library would
-	// evaluate another schema than the one RFC 3986 names.
-	libraryBase := bundleURI
-	if resource != nil && resource.libraryURI != "" {
-		libraryBase = resource.libraryURI
-	}
-	if library, joined := libraryJoin(libraryBase, ref); !joined || library != id {
-		return reference{origin: unresolved, exists: undecided, why: fmt.Sprintf("resolves to %s by RFC 3986 and to %q in the schema library", id, library)}
-	}
 	if why, isAmbiguous := d.ambiguous[id]; isAmbiguous {
 		// The reference names no one schema. OBI-D-12 never asks whether it
 		// exists: it judges only same-document references in the document
@@ -129,12 +117,6 @@ func (d documentSchemas) resolveFrom(ref string, resource *schemaResource, view 
 	}
 	if embedded, isEmbedded := d.resources[id]; isEmbedded {
 		return d.resolveFragment(embedded, fragment, view)
-	}
-	if isBuiltInMetaSchema(id) {
-		if fragment != "" {
-			return reference{origin: unresolved, exists: undecided, why: fmt.Sprintf("reaches inside the meta-schema %s, whose contents this SDK does not analyze", id)}
-		}
-		return reference{origin: inMetaSchema, uri: id, exists: undecided}
 	}
 	return reference{origin: outside, uri: id, exists: undecided}
 }

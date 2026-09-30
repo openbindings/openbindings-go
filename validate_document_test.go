@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -601,9 +602,8 @@ func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
 	if report := mustValidateDocument(t, document); report.Evidence["OBI-D-10"] != EvidenceSatisfied {
 		t.Fatalf("OBI-D-10 = %s; findings %+v", report.Evidence["OBI-D-10"], report.Findings)
 	}
-	if got := inputVerdict(t, document, "a", "x"); got != "no verdict" {
-		t.Fatalf("%s, want no verdict", got)
-	}
+	// Whether an evaluator reads such a number is its own limit: the
+	// conformance kit checks one (openbindingstest).
 }
 
 // A document schema finding about a map key is located at the key, the same
@@ -989,7 +989,11 @@ func TestValidateDocument_DepthCountsSubschemasOnly(t *testing.T) {
 		}
 	}
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"array","const":` + deep + `,"$defs":{"u":{"default":` + deep + `}}}}}}`
-	if _, err := CompileOperationSchema(mustDecodeInterface(t, document), "op", "input"); err != nil {
+	contract, err := contractsFor(t, mustDecodeInterface(t, document)).CompileInput(context.Background(), "op")
+	if err == nil {
+		err = contract.Err()
+	}
+	if err != nil {
 		t.Fatalf("deep data is no resource limit: %v", err)
 	}
 }

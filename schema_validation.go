@@ -3,12 +3,10 @@ package openbindings
 import (
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"
@@ -105,11 +103,7 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 // (TestMetaSchema_ComparesNumbersOnlyWithZero).
 func checkAgainstMetaSchema(schema any) ([]schemacompiler.Problem, error) {
 	checked := schemacompiler.Substitute(schema)
-	failures := schemacompiler.MatchFailures()
 	err := compiledMetaSchema.Validate(checked.Value)
-	if schemacompiler.MatchFailures() != failures {
-		return nil, schemacompiler.ErrMatchUnanswered
-	}
 	if err == nil {
 		return nil, nil
 	}
@@ -194,14 +188,7 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 		decided = append(decided, member.tokens)
 	}
 	checked := schemacompiler.Substitute(withoutMembers(view, decided))
-	failures := schemacompiler.MatchFailures()
 	verr := compiledOBISchema.Validate(checked.Value)
-	if schemacompiler.MatchFailures() != failures {
-		// A pattern match reached no answer, which the library read as a
-		// mismatch (§10.4).
-		c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", schemacompiler.ErrMatchUnanswered))
-		return
-	}
 	if verr != nil {
 		problems, mismatch := checked.Outcome(verr)
 		if !mismatch {
@@ -278,200 +265,4 @@ func metaSchemaCacheKey(schema map[string]any) string {
 		return ""
 	}
 	return string(data)
-}
-
-// CompileOperationSchema compiles an operation's input or output schema, for
-// validating values against the value contract it states (OBI-T-08). The
-// operation is named by any of its identifiers, its key or an alias
-// (OBI-T-07). The OBI document is the resolution root of same-document
-// references (§7), and only the schemas the document holds are schemas: an
-// unknown document member never acts as a schema keyword or declares a
-// resource.
-//
-// This SDK's eager compiler requires the statically reachable graph to be
-// available, well-formed, and evaluable, even where a value would not exercise
-// part of it; otherwise a *SchemaGraphUnavailableError says why. This is an
-// implementation limit, not a requirement of OBI-T-08. A graph is
-// unavailable when it reaches a resource the document does not embed, has a
-// reference that does not resolve, or holds a schema that is not well-formed.
-// It cannot be evaluated here when it meets one of this SDK's limits (§10.4):
-// a schema nesting subschemas deeper than 256 levels, a number beyond the
-// numeric limits of schema evaluation where the schema library reads one (a
-// comparison or count keyword's value, or const or enum), a pattern that is
-// not an ECMA-262 regular expression with Unicode semantics, holds a Unicode
-// property escape or a backreference to a group within a quantified atom, or
-// nests groups deeper than 256 levels, a cycle of references that never
-// advances into the value (including one a $dynamicRef closes at run time), a
-// reference that is not a URI-reference, or a $dynamicRef when the document
-// resource declares a $dynamicAnchor, whose dynamic scope the bundle does not
-// reproduce. The schema library is given the schemas the graph uses as a JSON
-// Schema 2020-12 bundle, never the OBI document itself, and evaluates strictly
-// as 2020-12: dependencies, $recursiveRef, $recursiveAnchor, and
-// additionalItems constrain nothing. A JSON Schema meta-schema is outside the
-// document but available as a whole, since the schema library carries it,
-// unless the document declares a $dynamicAnchor named "meta", which could
-// capture the meta-schema's own $dynamicRef; a reference into its interior is
-// not, as this SDK does not analyze the meta-schemas' contents. A document is
-// interpreted only under a supported version: one declaring a well-formed
-// version outside the supported set returns a *VersionRefusalError (OBI-T-04), and one declaring
-// no valid version returns an error (OBI-D-09). Any other error means nothing
-// was compiled: there is no interface, the position is neither "input" nor
-// "output", the name resolves to no one operation (wrapping
-// ErrOperationNotFound), the operation specifies no schema at that position,
-// or the interface cannot be encoded.
-func CompileOperationSchema(i *Interface, operation, position string) (*CompiledSchema, error) {
-	if i == nil {
-		return nil, errors.New("openbindings: interface is nil")
-	}
-	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
-		return nil, refusal
-	}
-	if !IsValidSemver(i.OpenBindings) {
-		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", i.OpenBindings)
-	}
-	key, target, ok := ResolveOperation(i, operation)
-	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrOperationNotFound, operation)
-	}
-	var schema JSONSchema
-	switch position {
-	case "input":
-		schema = target.Input
-	case "output":
-		schema = target.Output
-	default:
-		return nil, fmt.Errorf("openbindings: unknown operation schema position %q", position)
-	}
-	if schema == nil {
-		return nil, fmt.Errorf("openbindings: operation %q specifies no %s schema", key, position)
-	}
-	view, err := documentView(*i)
-	if err != nil {
-		return nil, err
-	}
-	o := newOperationSchemas(view, collectDocumentSchemas(view))
-	path := jsonpointer.Format("operations", key, position)
-	o.analyze([]string{path})
-	if problem := o.graphProblem(path); problem != "" {
-		return nil, &SchemaGraphUnavailableError{Cause: errors.New(problem)}
-	}
-	result := o.compileAlone(path)
-	if result.err != nil {
-		return nil, &SchemaGraphUnavailableError{Cause: result.err}
-	}
-	return result.schema, nil
-}
-
-// ValidateOperationInput validates a value against an operation's input
-// schema, with the complete OBI document as the resolution root (OBI-T-08).
-// It compiles the document's schemas on every call; to validate many values,
-// compile once with CompileOperationSchema and use CompiledSchema.Validate.
-//
-// A nil error means the value validates. A *SchemaValidationError is an
-// established mismatch; a *SchemaGraphUnavailableError means no verdict was
-// reached (see CompileOperationSchema and CompiledSchema.Validate). Any other
-// error means nothing was validated: see CompileOperationSchema.
-func ValidateOperationInput(value any, iface *Interface, operationName string) error {
-	compiled, err := CompileOperationSchema(iface, operationName, "input")
-	if err != nil {
-		return err
-	}
-	return compiled.Validate(value)
-}
-
-// ValidateOperationOutput validates a value against an operation's output
-// schema, as ValidateOperationInput does against its input schema.
-func ValidateOperationOutput(value any, iface *Interface, operationName string) error {
-	compiled, err := CompileOperationSchema(iface, operationName, "output")
-	if err != nil {
-		return err
-	}
-	return compiled.Validate(value)
-}
-
-// SchemaGraphUnavailableError reports that no verdict was reached because this
-// SDK could not compile the governing schema's statically reachable graph,
-// well-formed, and evaluable, or, from CompiledSchema.Validate, because the
-// value holds a number this SDK cannot check against that graph or the
-// schema was not compiled. It is distinct from a mismatch, as OBI-T-08
-// requires of validation against a value contract.
-//
-// Callers can use errors.As rather than parsing diagnostic text. Cause remains
-// available through errors.Unwrap for validator-specific diagnostics.
-type SchemaGraphUnavailableError struct {
-	Cause error
-}
-
-func (e *SchemaGraphUnavailableError) Error() string {
-	if e == nil || e.Cause == nil {
-		return "openbindings: schema graph unavailable"
-	}
-	return fmt.Sprintf("openbindings: schema graph unavailable: %v", e.Cause)
-}
-
-func (e *SchemaGraphUnavailableError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-// SchemaValidationError is an established mismatch between a value and a
-// schema. Use errors.As to distinguish it from a *SchemaGraphUnavailableError,
-// where no verdict was reached; OBI-T-08 requires the two outcomes to stay
-// distinct when a value is validated against a value contract. Cause
-// is the validator's own error.
-type SchemaValidationError struct {
-	Problems []SchemaProblem
-	Cause    error
-}
-
-// SchemaProblem is one failed constraint of a mismatch. Path locates it in the
-// validated value as an RFC 6901 JSON Pointer; the empty pointer is the whole
-// value.
-type SchemaProblem struct {
-	Path    string
-	Message string
-}
-
-func (e *SchemaValidationError) Error() string {
-	if e == nil || len(e.Problems) == 0 {
-		return "openbindings: the value does not validate against the schema"
-	}
-	lines := make([]string, len(e.Problems))
-	for i, problem := range e.Problems {
-		if problem.Path == "" {
-			lines[i] = problem.Message
-		} else {
-			lines[i] = problem.Path + ": " + problem.Message
-		}
-	}
-	return strings.Join(lines, "; ")
-}
-
-func (e *SchemaValidationError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-// schemaValidationError projects a backend validation error onto the SDK's
-// outcomes: a *SchemaValidationError for an established mismatch, and a
-// *SchemaGraphUnavailableError for anything that reached no verdict. checked
-// is what was validated, whose findings state the numbers its stand-ins
-// stand for.
-func schemaValidationError(err error, checked schemacompiler.Substitution) error {
-	if err == nil {
-		return nil
-	}
-	problems, mismatch := checked.Outcome(err)
-	if !mismatch {
-		return &SchemaGraphUnavailableError{Cause: err}
-	}
-	out := &SchemaValidationError{Problems: make([]SchemaProblem, len(problems)), Cause: err}
-	for i, problem := range problems {
-		out.Problems[i] = SchemaProblem{Path: jsonpointer.Format(problem.Location...), Message: problem.Message}
-	}
-	return out
 }

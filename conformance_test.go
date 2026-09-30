@@ -317,13 +317,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 	}
 	outcome := make(chan string, 1)
 	go func() {
-		var err error
-		if scenario.Given.Side == "output" {
-			err = ValidateOperationOutput(scenario.Given.Value, iface, operationKey)
-		} else {
-			err = ValidateOperationInput(scenario.Given.Value, iface, operationKey)
-		}
-		outcome <- contractOutcome(err, "resolver-error")
+		outcome <- contractOutcome(validateWithTestEvaluator(t, iface, operationKey, scenario.Given.Side, scenario.Given.Value), "resolver-error")
 	}()
 	select {
 	case got := <-outcome:
@@ -368,13 +362,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	}
 	actual := make([]string, 0, len(scenario.Given.Values))
 	for _, value := range scenario.Given.Values {
-		var err error
-		if scenario.Given.Side == "output" {
-			err = ValidateOperationOutput(value, iface, operationKey)
-		} else {
-			err = ValidateOperationInput(value, iface, operationKey)
-		}
-		actual = append(actual, contractOutcome(err, "graph-unavailable"))
+		actual = append(actual, contractOutcome(validateWithTestEvaluator(t, iface, operationKey, scenario.Given.Side, value), "graph-unavailable"))
 	}
 	if !slices.Equal(actual, scenario.Expected.Results) {
 		t.Fatalf("results %v; expected %v", actual, scenario.Expected.Results)
@@ -531,20 +519,17 @@ func lowestSupported() semver {
 	return semver{major: supportedLine.major, minor: cmp.Or(supportedLine.minor, "0"), patch: "0"}
 }
 
-// contractOutcome names the outcome of validating a value against an
-// operation's contract in the corpus's terms, read from the error's type
-// alone: OBI-T-08 keeps a mismatch and an unavailable graph distinct, so what
-// a scenario allows never decides which one an error is. unavailable is the
-// scenario's name for an unavailable graph.
+// contractOutcome names the outcome of validating a value against a value
+// contract in the corpus's terms, read from the error alone: OBI-T-08 keeps a
+// mismatch and a no-verdict distinct, so what a scenario allows never decides
+// which one an error is. unavailable is the scenario's name for a no-verdict.
 func contractOutcome(err error, unavailable string) string {
-	var mismatch *SchemaValidationError
-	var graph *SchemaGraphUnavailableError
 	switch {
 	case err == nil:
 		return "valid"
-	case errors.As(err, &mismatch):
+	case errors.Is(err, ErrMismatch):
 		return "instance-mismatch"
-	case errors.As(err, &graph):
+	case errors.Is(err, ErrNoVerdict):
 		return unavailable
 	}
 	return fmt.Sprintf("an unexpected error: %v", err)
@@ -553,8 +538,8 @@ func contractOutcome(err error, unavailable string) string {
 func TestContractOutcome(t *testing.T) {
 	for want, err := range map[string]error{
 		"valid":             nil,
-		"instance-mismatch": &SchemaValidationError{},
-		"resolver-error":    &SchemaGraphUnavailableError{},
+		"instance-mismatch": &MismatchError{},
+		"resolver-error":    &NoVerdictError{},
 		"an unexpected error: operation not found": errors.New("operation not found"),
 	} {
 		if got := contractOutcome(err, "resolver-error"); got != want {
