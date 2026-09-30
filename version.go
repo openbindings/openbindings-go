@@ -26,6 +26,13 @@ const AuthoringVersion = "0.2.0"
 // carries no meaning (§8.1).
 const appliedRelease = "0.2.0"
 
+// appliedRevision is the source-control revision of the specification text
+// this SDK applies while appliedRelease names a working draft, which a
+// validation report names with it (OBI-T-09): a commit of
+// github.com/openbindings/spec. It is "" once appliedRelease is released,
+// when the release alone names the text.
+const appliedRevision = "de2c20be7e67f7ed82a88c6f44ece2ea631d81bb"
+
 // supportedPrereleases lists the prerelease versions this SDK supports, each
 // named explicitly: a prerelease is a draft, and supporting its release does
 // not imply supporting it (§8.1). There are none; naming one means stating it

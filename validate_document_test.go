@@ -40,6 +40,26 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 	}
 }
 
+// A report names the release whose text it applies and, while that release
+// is a working draft, the source-control revision of the text (OBI-T-09),
+// from Interface.Validate and ValidateDocument alike.
+func TestValidationReport_NamesTheTextApplied(t *testing.T) {
+	document := `{"openbindings":"0.2.0","operations":{}}`
+	fromDocument := mustValidateDocument(t, document)
+	fromInterface, err := mustDecodeInterface(t, document).Validate(ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, report := range []ValidationReport{fromDocument, fromInterface} {
+		if report.Version != "0.2.0" || len(report.Revision) != 40 || strings.Trim(report.Revision, "0123456789abcdef") != "" {
+			t.Errorf("version %q, revision %q: want 0.2.0 and a full commit hash while 0.2.0 is a working draft", report.Version, report.Revision)
+		}
+	}
+	if report := ConcludeConformance(map[string]RuleEvidenceStatus{"OBI-D-01": EvidenceSatisfied}); report.Version != "" || report.Revision != "" {
+		t.Errorf("a report from evidence alone names %q at %q", report.Version, report.Revision)
+	}
+}
+
 // A claim about a value in memory is a claim about its serialization (§10),
 // which the model writes only when it decodes back unchanged, so a host
 // object decides OBI-D-01 and a well-formed one concludes conformant, whether

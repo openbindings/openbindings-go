@@ -83,6 +83,7 @@ each of these observable behaviors:
 | compare a dependency's declared kind constraint | `DependencyEntry.AllowsKind(...)` | pending |
 | validate a value against a value contract, with the application's evaluator | `NewValueContractCompiler(...)`, `Resolve`, `CompileInput` / `CompileOutput`, `ValueContract.Validate` | pending |
 | check an evaluator against the evaluator contract | `openbindingstest.TestSchemaEvaluator(...)` | pending |
+| name the specification text a conclusion applied, with its revision while a working draft (OBI-T-09) | `ValidationReport.Version` and `ValidationReport.Revision` | pending |
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |
 

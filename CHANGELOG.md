@@ -4,6 +4,14 @@
 
 > A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
 
+### Added
+
+- **A validation report names the specification revision it applied
+  (OBI-T-09).** `ValidationReport.Revision` is the commit of
+  github.com/openbindings/spec whose text the report applies while
+  `Version` names a working draft; it is empty once that version is
+  released.
+
 ### Changed
 
 - **Value validation takes an evaluator the application supplies (breaking,
