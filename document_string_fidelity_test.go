@@ -30,7 +30,7 @@ func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 		t.Fatalf("parsing must refuse, locating the string, without a violation: %v", err)
 	}
 
-	decoded, report, err := ValidateDocument(raw, ValidateOptions{})
+	decoded, report, err := ValidateDocument(raw)
 	if err != nil || decoded != nil {
 		t.Fatalf("no violation is established and no document decoded: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestDocumentStrings_LoneSurrogatesLeaveTheVersionDecided(t *testing.T) {
 		`{"openbindings":"0.2.0\ud800","operations":{}}`:                  EvidenceViolated,
 		`{"openbindings":"0.2.0","operations":{},"description":"\ud800"}`: EvidenceSatisfied,
 	} {
-		_, report, _ := ValidateDocument([]byte(document), ValidateOptions{})
+		_, report, _ := ValidateDocument([]byte(document))
 		if report.Evidence["OBI-D-09"] != want || report.Evidence["OBI-D-02"] != EvidenceInconclusive {
 			t.Errorf("%s: OBI-D-09 %q, want %q; OBI-D-02 %q", document, report.Evidence["OBI-D-09"], want, report.Evidence["OBI-D-02"])
 		}
@@ -58,11 +58,11 @@ func TestDocumentStrings_LoneSurrogatesLeaveTheVersionDecided(t *testing.T) {
 // Member names are compared exactly: a lone surrogate and U+FFFD are two
 // names, and the same lone surrogate twice is a repeated one (OBI-D-01).
 func TestDocumentStrings_NamesCompareExactly(t *testing.T) {
-	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"x-values":{"\ud800":1,"�":2}}`), ValidateOptions{})
+	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"x-values":{"\ud800":1,"�":2}}`))
 	if report.Evidence["OBI-D-01"] != EvidenceSatisfied {
 		t.Fatalf("distinct names are no duplicate: OBI-D-01 %q", report.Evidence["OBI-D-01"])
 	}
-	_, report, _ = ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"x-values":{"\ud800":1,"\uD800":2}}`), ValidateOptions{})
+	_, report, _ = ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"x-values":{"\ud800":1,"\uD800":2}}`))
 	if report.Evidence["OBI-D-01"] != EvidenceViolated {
 		t.Fatalf("the same name twice is a duplicate: OBI-D-01 %q", report.Evidence["OBI-D-01"])
 	}

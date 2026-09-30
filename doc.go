@@ -14,7 +14,7 @@
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil {
+//	if _, err := iface.Validate(); err != nil {
 //	    log.Fatal(err)
 //	}
 //
@@ -31,7 +31,7 @@
 // decide is inconclusive, not violated. The report beside the error carries
 // the conclusion:
 //
-//	iface, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
+//	iface, report, err := openbindings.ValidateDocument(data)
 //	// report.Conclusion is conformant, non-conformant, or
 //	// conformance-undetermined (§10.4); err is a *ValidationError when a
 //	// violation was established, and a *VersionRefusalError when the declared

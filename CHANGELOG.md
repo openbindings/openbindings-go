@@ -20,6 +20,11 @@
 
 ### Changed
 
+- **Validation takes no options (breaking, pre-1.0).** `ValidateOptions`
+  is gone: no document rule takes anything an application supplies, so
+  `Interface.Validate()` and `ValidateDocument(data)` take no options
+  parameter.
+
 - **Value validation takes an evaluator the application supplies (breaking,
   pre-1.0).** Validating values against value contracts (OBI-T-08) no longer
   drives a JSON Schema library of core's own. `NewValueContractCompiler`
@@ -504,7 +509,7 @@
   `TransformParser` and `ValidateOptions.Transforms` are gone, so a document
   with transforms is conformant when every other rule is decided, where it
   was conformance-undetermined without a parser. `DocumentRules` no longer
-  lists OBI-D-18. `ValidateOptions` has no fields.
+  lists OBI-D-18.
 
 - **A schema `$ref` reaches only a schema the document model places**,
   following the core draft. A `$ref` at an OBI position that resolves to the

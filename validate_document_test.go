@@ -17,7 +17,7 @@ import (
 
 func mustValidateDocument(t *testing.T, document string) ValidationReport {
 	t.Helper()
-	_, report, err := ValidateDocument([]byte(document), ValidateOptions{})
+	_, report, err := ValidateDocument([]byte(document))
 	var violation *ValidationError
 	if err != nil && !errors.As(err, &violation) {
 		t.Fatalf("ValidateDocument: %v", err)
@@ -46,7 +46,7 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{}}`
 	fromDocument := mustValidateDocument(t, document)
-	fromInterface, err := mustDecodeInterface(t, document).Validate(ValidateOptions{})
+	fromInterface, err := mustDecodeInterface(t, document).Validate()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
 	}
 	built := Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"tasks.create": {}}}
 	for name, iface := range map[string]Interface{"decoded": *decoded, "built": built} {
-		report, err := iface.Validate(ValidateOptions{})
+		report, err := iface.Validate()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -81,7 +81,7 @@ func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
 	}
 	// A value with no JSON serialization gets no report.
 	broken := Interface{OpenBindings: "0.2.0", Name: Present("\xff"), Operations: map[string]Operation{}}
-	if report, err := broken.Validate(ValidateOptions{}); err == nil || report.Evidence != nil {
+	if report, err := broken.Validate(); err == nil || report.Evidence != nil {
 		t.Fatalf("a string that is not UTF-8: report %+v, err %v", report, err)
 	}
 }
@@ -99,7 +99,7 @@ const documentWithBinding = `{
 // nothing within them, relative addresses and $ref members included, is
 // judged, and a document with bindings is decided in full.
 func TestValidateDocument_BindingsNeedNoKindificationKnowledge(t *testing.T) {
-	_, report, err := ValidateDocument([]byte(documentWithBinding), ValidateOptions{})
+	_, report, err := ValidateDocument([]byte(documentWithBinding))
 	if err != nil {
 		t.Fatalf("ValidateDocument = %v", err)
 	}
@@ -126,7 +126,7 @@ func hostReport(t *testing.T, document string) (ValidationReport, error) {
 	if err := json.Unmarshal([]byte(document), &iface); err != nil {
 		t.Fatal(err)
 	}
-	return iface.Validate(ValidateOptions{})
+	return iface.Validate()
 }
 
 func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t *testing.T) {
@@ -153,7 +153,7 @@ func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t 
 
 func TestValidate_VersionRefusalIsNotAConclusion(t *testing.T) {
 	document := `{"openbindings":"9.0.0","operations":{}}`
-	iface, report, err := ValidateDocument([]byte(document), ValidateOptions{})
+	iface, report, err := ValidateDocument([]byte(document))
 	var refusal *VersionRefusalError
 	if !errors.As(err, &refusal) || refusal.Version != "9.0.0" {
 		t.Fatalf("ValidateDocument error = %v, want a version refusal for 9.0.0", err)
@@ -163,7 +163,7 @@ func TestValidate_VersionRefusalIsNotAConclusion(t *testing.T) {
 	}
 
 	host := Interface{OpenBindings: "9.0.0", Operations: map[string]Operation{}}
-	hostReport, err := host.Validate(ValidateOptions{})
+	hostReport, err := host.Validate()
 	if !errors.As(err, &refusal) || hostReport.Evidence != nil {
 		t.Fatalf("Validate = %+v, %v; want a version refusal and no report", hostReport, err)
 	}
@@ -179,7 +179,7 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesD01(t *testing.T) {
 		"byte-order mark": append([]byte{0xef, 0xbb, 0xbf}, []byte(`{"openbindings":"0.2.0","operations":{}}`)...),
 	} {
 		t.Run(name, func(t *testing.T) {
-			iface, report, err := ValidateDocument(input, ValidateOptions{})
+			iface, report, err := ValidateDocument(input)
 			var violation *ValidationError
 			if !errors.As(err, &violation) || iface != nil {
 				t.Fatalf("ValidateDocument = %v, %v; want a report, its violation, and no document", iface, err)
@@ -299,7 +299,7 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 	}
 	data := []byte(`{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":""}}}`)
 	_, parseErr := ParseDocument(data)
-	_, _, validateErr := ValidateDocument(data, ValidateOptions{})
+	_, _, validateErr := ValidateDocument(data)
 	var parsed, validated *ValidationError
 	if !errors.As(parseErr, &parsed) || !errors.As(validateErr, &validated) {
 		t.Fatalf("want ValidationErrors, got %v and %v", parseErr, validateErr)
@@ -317,7 +317,7 @@ func TestValidate_GatesOnTheDocumentSchema(t *testing.T) {
 		Version:      Present(""),
 		Operations:   map[string]Operation{"op": {}},
 	}
-	if _, err := iface.Validate(ValidateOptions{}); err == nil {
+	if _, err := iface.Validate(); err == nil {
 		t.Fatal("a present empty version violates the document schema")
 	}
 }
@@ -328,7 +328,7 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 	iface, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0",
 		"operations":{"a":{"input":null,"output":{"$ref":"./local.json"},"description":null}},
 		"sources":{"s":{"kind":"x@1"}},
-		"bindings":{"b":{"operation":"missing","source":"s"}}}`), ValidateOptions{})
+		"bindings":{"b":{"operation":"missing","source":"s"}}}`))
 
 	if iface != nil {
 		t.Fatal("the model cannot carry a null input; no Interface is returned")
@@ -658,7 +658,7 @@ func TestValidateDocument_KeyFindingsAtEveryHolder(t *testing.T) {
 // The version is read, and an unsupported one refused, even from input
 // OBI-D-01 refuses.
 func TestValidateDocument_RefusesVersionsBeforeJudgingBytes(t *testing.T) {
-	if _, _, err := ValidateDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`), ValidateOptions{}); !errors.As(err, new(*VersionRefusalError)) {
+	if _, _, err := ValidateDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`)); !errors.As(err, new(*VersionRefusalError)) {
 		t.Fatalf("want a version refusal, got %v", err)
 	}
 	if _, err := ParseDocument([]byte(`{"openbindings":"9.0.0","operations":{},"a":1,"a":2}`)); !errors.As(err, new(*VersionRefusalError)) {
@@ -669,7 +669,7 @@ func TestValidateDocument_RefusesVersionsBeforeJudgingBytes(t *testing.T) {
 // A version is read before OBI-D-01 only where it is established: a repeated
 // openbindings member declares none.
 func TestValidateDocument_RepeatedVersionIsNotRead(t *testing.T) {
-	_, report, err := ValidateDocument([]byte(`{"openbindings":"0.2.0","openbindings":"0.3.0","operations":{}}`), ValidateOptions{})
+	_, report, err := ValidateDocument([]byte(`{"openbindings":"0.2.0","openbindings":"0.3.0","operations":{}}`))
 	if errors.As(err, new(*VersionRefusalError)) {
 		t.Fatalf("a repeated openbindings member establishes no version: %v", err)
 	}
@@ -730,7 +730,7 @@ func TestParseDocument_ChecksNumbersBeyondTheLimits(t *testing.T) {
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 	nested := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
 	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + nested + `}`
-	_, report, err := ValidateDocument([]byte(deep), ValidateOptions{})
+	_, report, err := ValidateDocument([]byte(deep))
 	if err != nil || report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-09"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
 		t.Fatalf("err %v, OBI-D-01 %q, OBI-D-09 %q, OBI-D-02 %q, conclusion %q", err, report.Evidence["OBI-D-01"], report.Evidence["OBI-D-09"], report.Evidence["OBI-D-02"], report.Conclusion)
 	}
@@ -739,7 +739,7 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 		`"openbindings":"0.2",`:            {Rule: "OBI-D-09", Status: EvidenceViolated, Path: "/openbindings", Message: `"0.2" is not a valid SemVer 2.0.0 string`},
 		`"openbindings":[` + nested + `],`: {Rule: "OBI-D-09", Status: EvidenceViolated, Path: "/openbindings", Message: "must be a SemVer 2.0.0 string; got array"},
 	} {
-		_, report, err := ValidateDocument([]byte(`{`+member+`"operations":{},"x-deep":`+nested+`}`), ValidateOptions{})
+		_, report, err := ValidateDocument([]byte(`{` + member + `"operations":{},"x-deep":` + nested + `}`))
 		if !errors.As(err, new(*ValidationError)) || !reflect.DeepEqual(report.Violations(), []Finding{want}) {
 			t.Errorf("%.40s: violations %+v", member, report.Violations())
 		}
@@ -750,7 +750,7 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 		"a syntax error after it":   `{"openbindings":"0.2.0","x-deep":` + nested + `,"a":}`,
 		"trailing data":             `{"openbindings":"0.2.0","x-deep":` + nested + `} []`,
 	} {
-		if _, report, err := ValidateDocument([]byte(input), ValidateOptions{}); !errors.As(err, new(*ValidationError)) || report.Evidence["OBI-D-01"] != EvidenceViolated {
+		if _, report, err := ValidateDocument([]byte(input)); !errors.As(err, new(*ValidationError)) || report.Evidence["OBI-D-01"] != EvidenceViolated {
 			t.Errorf("%s: OBI-D-01 %q, err %v", name, report.Evidence["OBI-D-01"], err)
 		}
 	}
@@ -758,7 +758,7 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 		t.Fatalf("want a refusal that is not a violation, got %v", err)
 	}
 	unsupported := `{"x-deep":` + nested + `,"operations":{},"openbindings":"0.9.0"}`
-	if _, _, err := ValidateDocument([]byte(unsupported), ValidateOptions{}); !errors.As(err, new(*VersionRefusalError)) {
+	if _, _, err := ValidateDocument([]byte(unsupported)); !errors.As(err, new(*VersionRefusalError)) {
 		t.Fatalf("ValidateDocument: want a version refusal, got %v", err)
 	}
 	if _, err := ParseDocument([]byte(unsupported)); !errors.As(err, new(*VersionRefusalError)) {
@@ -837,7 +837,7 @@ func TestValidateDocument_NumbersBeyondTheLimitsAreChecked(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, report, _ := ValidateDocument([]byte(tc.document), ValidateOptions{})
+			_, report, _ := ValidateDocument([]byte(tc.document))
 			var violated []string
 			for _, finding := range report.Findings {
 				if finding.Rule == "OBI-D-02" {
@@ -873,7 +873,7 @@ func TestValidateDocument_DuplicateNamesAreLocated(t *testing.T) {
 	document := []byte(`{"openbindings":"0.2.0","operations":{"op":{"examples":{"e":{"input":1,"input":2}}}}}`)
 	at := bytes.LastIndex(document, []byte(`"input"`))
 	want := Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Path: "/operations/op/examples/e", Message: `repeats the member name "input"`, Position: Position{Offset: at, Line: 1, Column: at + 1}}
-	if _, report, _ := ValidateDocument(document, ValidateOptions{}); !reflect.DeepEqual(report.Violations(), []Finding{want}) {
+	if _, report, _ := ValidateDocument(document); !reflect.DeepEqual(report.Violations(), []Finding{want}) {
 		t.Fatalf("violations %+v", report.Violations())
 	}
 	var violation *ValidationError
@@ -887,7 +887,7 @@ func TestValidateDocument_DuplicateNamesAreLocated(t *testing.T) {
 func TestValidateDocument_ByteOrderMarkIsNamed(t *testing.T) {
 	for _, version := range []string{"0.2.0", "9.0.0"} {
 		input := append([]byte{0xef, 0xbb, 0xbf}, `{"openbindings":"`+version+`","operations":{}}`...)
-		_, report, err := ValidateDocument(input, ValidateOptions{})
+		_, report, err := ValidateDocument(input)
 		if errors.As(err, new(*VersionRefusalError)) {
 			t.Fatalf("%s: a text with a byte-order mark declares no version: %v", version, err)
 		}
@@ -903,7 +903,7 @@ func TestValidateDocument_ByteOrderMarkIsNamed(t *testing.T) {
 // A dialect other than 2020-12 violates OBI-D-06 alone: the meta-schemas
 // check a $schema's type, and its format is an annotation (OBI-D-10).
 func TestValidateDocument_DialectIsD06Alone(t *testing.T) {
-	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"a":{"input":{"properties":{"a":{"$schema":"http://json-schema.org/draft-07/schema#"}}}}}}`), ValidateOptions{})
+	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{"a":{"input":{"properties":{"a":{"$schema":"http://json-schema.org/draft-07/schema#"}}}}}}`))
 	if !reflect.DeepEqual(report.Violated, []string{"OBI-D-06"}) {
 		t.Fatalf("violated %v; findings %+v", report.Violated, report.Findings)
 	}
@@ -927,7 +927,7 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 		t.Helper()
 		small := []byte(build(1000))
 		large := []byte(build(4000))
-		ratio := float64(allocated(func() { ValidateDocument(large, ValidateOptions{}) })) / float64(allocated(func() { ValidateDocument(small, ValidateOptions{}) }))
+		ratio := float64(allocated(func() { ValidateDocument(large) })) / float64(allocated(func() { ValidateDocument(small) }))
 		if ratio > 6 {
 			t.Errorf("%s: 4 times the input allocated %.1f times the memory", name, ratio)
 		}
@@ -963,7 +963,7 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 	if bytes := allocated(func() { collectDocumentSchemas(view) }); bytes > 50*uint64(len(deep)) {
 		t.Errorf("collecting the schemas of a %d-byte document allocated %d bytes", len(deep), bytes)
 	}
-	if bytes := allocated(func() { ValidateDocument([]byte(deep), ValidateOptions{}) }); bytes > 1000*uint64(len(deep)) {
+	if bytes := allocated(func() { ValidateDocument([]byte(deep)) }); bytes > 1000*uint64(len(deep)) {
 		t.Errorf("validating a %d-byte document allocated %d bytes", len(deep), bytes)
 	}
 }
@@ -982,7 +982,7 @@ func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
 		{schema: nested, evidence: EvidenceInconclusive},
 		{schema: `{"type":42,"not":` + nested + `}`, evidence: EvidenceViolated, violated: []string{"/schemas/A/type"}},
 	} {
-		_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"schemas":{"A":`+tc.schema+`}}`), ValidateOptions{})
+		_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"schemas":{"A":` + tc.schema + `}}`))
 		var inconclusive, violated []string
 		for _, finding := range report.Findings {
 			switch {
@@ -1105,7 +1105,7 @@ func TestValidateDocument_DeepSyntaxErrorsAreDescribed(t *testing.T) {
 		`{"openbindings":"0.2.0","x":` + open:                 "unexpected end of JSON input",
 		`{"openbindings":"0.2.0","x":` + open + closed + `}]`: "invalid character ']' after top-level value",
 	} {
-		_, report, _ := ValidateDocument([]byte(input), ValidateOptions{})
+		_, report, _ := ValidateDocument([]byte(input))
 		if violations := report.Violations(); len(violations) != 1 || !strings.Contains(violations[0].Message, want) {
 			t.Errorf("want %q, got %+v", want, violations)
 		}

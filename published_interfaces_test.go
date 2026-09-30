@@ -26,7 +26,7 @@ func TestPublishedInterfaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		name := strings.TrimPrefix(file, dir)
-		iface, report, err := ValidateDocument(data, ValidateOptions{})
+		iface, report, err := ValidateDocument(data)
 		t.Logf("%s: %s", name, report.Conclusion)
 		if iface == nil {
 			t.Errorf("%s: not decoded: %v", name, err)

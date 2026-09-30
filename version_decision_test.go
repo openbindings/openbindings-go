@@ -35,7 +35,7 @@ func TestVersionDecision_ReadsTheTextAsOBI_T04Decodes(t *testing.T) {
 		"a bad byte within an escape":                 {[]byte("{\"openbindings\":\"0.3.0\",\"description\":\"\\u12\xff4\",\"operations\":{}}"), false},
 		"a repeated openbindings member":              {[]byte(`{"openbindings":"0.2.0","openbindings":"0.3.0","operations":{}}`), false},
 	} {
-		_, _, err := ValidateDocument(tc.input, ValidateOptions{})
+		_, _, err := ValidateDocument(tc.input)
 		_, parseErr := ParseDocument(tc.input)
 		for entry, err := range map[string]error{"ValidateDocument": err, "ParseDocument": parseErr} {
 			if refused := errors.As(err, new(*VersionRefusalError)); refused != tc.refused {

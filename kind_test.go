@@ -35,7 +35,7 @@ func TestDependencyAllowsKind_ExactAndSupportIndependent(t *testing.T) {
 
 func TestUnsupportedKindsDoNotPreventCoreValidation(t *testing.T) {
 	data := []byte(`{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"s":{"kind":"unknown@9"}},"bindings":{"b":{"operation":"op","source":"s"}},"dependencies":{"d":{"operation":"op","kinds":["unknown@9"]}}}`)
-	iface, report, err := ValidateDocument(data, ValidateOptions{})
+	iface, report, err := ValidateDocument(data)
 	if err != nil {
 		t.Fatalf("unknown kind rejected: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestUnsupportedKindsDoNotPreventCoreValidation(t *testing.T) {
 
 func TestFormerKindFieldsAreNotCoreFields(t *testing.T) {
 	data := []byte(`{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"s":{"bindingSpec":"old@1"}},"dependencies":{"d":{"operation":"op","bindingSpecs":["old@1"]}}}`)
-	_, report, err := ValidateDocument(data, ValidateOptions{})
+	_, report, err := ValidateDocument(data)
 	if err == nil {
 		t.Fatal("former fields must not make a conformant document")
 	}

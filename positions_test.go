@@ -17,7 +17,7 @@ func TestFindings_Positions(t *testing.T) {
 		"    \"op\": {\"aliases\": [\"ok\", \"no good\"]}\n" +
 		"  }\n" +
 		"}\n"
-	_, report, _ := ValidateDocument([]byte(document), ValidateOptions{})
+	_, report, _ := ValidateDocument([]byte(document))
 	want := map[string]string{
 		"/description":             "3:3",
 		"/operations/bad key":      "5:5",
@@ -51,7 +51,7 @@ func TestFindings_Positions(t *testing.T) {
 
 	// Interface.Validate reads no bytes, so its findings carry none.
 	iface := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"aliases":["no good"]}}}`)
-	if _, err := iface.Validate(ValidateOptions{}); !errors.As(err, &violation) || violation.Findings[0].Position.IsValid() {
+	if _, err := iface.Validate(); !errors.As(err, &violation) || violation.Findings[0].Position.IsValid() {
 		t.Errorf("Interface.Validate: %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestFindings_D01Positions(t *testing.T) {
 		{"a byte-order mark", "\xef\xbb\xbf{\"openbindings\": \"0.2.0\"}", "1:1"},
 		{"a repeated name", "{\"openbindings\": \"0.2.0\",\n \"openbindings\": \"0.2.0\"}", "2:2"},
 	} {
-		_, report, _ := ValidateDocument([]byte(c.input), ValidateOptions{})
+		_, report, _ := ValidateDocument([]byte(c.input))
 		violations := report.Violations()
 		if len(violations) != 1 || violations[0].Rule != "OBI-D-01" || violations[0].Position.String() != c.want {
 			t.Errorf("%s: %+v, want OBI-D-01 at %s", c.name, violations, c.want)

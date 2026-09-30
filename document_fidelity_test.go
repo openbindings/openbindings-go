@@ -213,12 +213,12 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 		`{"openbindings":"0.2.0","operations":{"a":{}},"dependencies":{"d":{"operation":"a","kinds":[]}}}`,
 	}
 	for _, document := range documents {
-		_, fromBytes, _ := ValidateDocument([]byte(document), ValidateOptions{})
+		_, fromBytes, _ := ValidateDocument([]byte(document))
 		var iface Interface
 		if err := json.Unmarshal([]byte(document), &iface); err != nil {
 			t.Fatalf("%s: decode: %v", document, err)
 		}
-		fromHost, err := iface.Validate(ValidateOptions{})
+		fromHost, err := iface.Validate()
 		var violation *ValidationError
 		if err != nil && !errors.As(err, &violation) {
 			t.Fatalf("%s: %v", document, err)
@@ -329,7 +329,7 @@ func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
 func TestValidate_RefusesAHostObjectWhoseEncodingViolatesTheRules(t *testing.T) {
 	iface := &Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
 	var violation *ValidationError
-	if _, err := iface.Validate(ValidateOptions{}); !errors.As(err, &violation) {
+	if _, err := iface.Validate(); !errors.As(err, &violation) {
 		t.Fatalf("want a *ValidationError, got %T %v", err, err)
 	}
 }
@@ -399,7 +399,7 @@ func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 		Input:    map[string]any{"const": "\ufffd"},
 		Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"\ud800"`)}},
 	}}}
-	if report, err := iface.Validate(ValidateOptions{}); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
+	if report, err := iface.Validate(); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
 		t.Fatalf("want an encoding error and no report, got %v, %+v", err, report)
 	}
 	compiler, _ := NewValueContractCompiler(testEvaluator{})
@@ -446,7 +446,7 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 		if data, err := json.Marshal(iface); err == nil {
 			t.Errorf("%s: encoded %s", name, data)
 		}
-		if report, err := iface.Validate(ValidateOptions{}); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
+		if report, err := iface.Validate(); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
 			t.Errorf("%s: want the encoding error and no report, got %v", name, err)
 		}
 	}

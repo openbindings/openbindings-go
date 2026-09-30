@@ -51,7 +51,7 @@ func ExampleInterface_Validate() {
 	}
 
 	// The error lists every violation established, so it gates on them.
-	if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil {
+	if _, err := iface.Validate(); err != nil {
 		fmt.Println("violation established:", err)
 		return
 	}
@@ -69,7 +69,7 @@ func ExampleValidateDocument() {
 
 	// ValidateDocument decides every document rule on the exact input bytes
 	// and reports the §10.4 conclusion.
-	_, report, err := openbindings.ValidateDocument(data, openbindings.ValidateOptions{})
+	_, report, err := openbindings.ValidateDocument(data)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -92,7 +92,7 @@ func ExampleInterface_Validate_unknownFields() {
 
 	// An unprefixed name the specification does not define is reserved for it
 	// (§12), so the document is non-conformant (OBI-D-02).
-	report, err := iface.Validate(openbindings.ValidateOptions{})
+	report, err := iface.Validate()
 	fmt.Println("violation established:", err != nil)
 	for _, finding := range report.Violations() {
 		fmt.Println(finding.Rule, finding.Message)
