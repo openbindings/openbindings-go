@@ -43,6 +43,31 @@
 // so: every version [SupportedVersions] states, which is every release of the
 // 0.2 line. A document written with this SDK declares [AuthoringVersion].
 //
+// # Value Contracts
+//
+// An operation's input and output contracts (§3) govern each caller-facing
+// value. Validating a value against one (OBI-T-08) takes a [SchemaEvaluator]
+// the application supplies; the SDK has none of its own, and the
+// openbindings-go/schemaeval module is the project's:
+//
+//	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
+//	contracts, err := compiler.Resolve(ctx, iface)
+//	input, err := contracts.CompileInput(ctx, "tasks.create")
+//	err = input.ValidateJSON(ctx, body) // nil, a *MismatchError, a *NoVerdictError, or body is not JSON
+//
+// Core does what the specification fixes: it resolves the document's schemas
+// (§7), and the resources the application supplies, and refuses, located and
+// before any evaluation, what the specification leaves undefined
+// ([ErrUndefined]) as well as what core lacks the capability for or refuses
+// by conservative policy. It hands the evaluator a closed JSON Schema
+// 2020-12 compound document per value contract, whose every reference
+// resolves within it, and reads the evaluator's answer, keeping a panic, a
+// context error, or a malformed answer from becoming a verdict. The
+// evaluator evaluates. The openbindingstest package checks an evaluator
+// against the contract. Core keeps no compiled value contract: the
+// openbindings-go/schemaeval module's examples show a service compiling the
+// contracts it serves at startup, and one compiling on demand.
+//
 // # An Exact Document Model
 //
 // Re-encoding a decoded document reproduces every member:

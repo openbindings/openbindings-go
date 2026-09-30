@@ -19,7 +19,7 @@ import "slices"
 // It reads the model as it is and does not check the declared version: a
 // caller interpreting a document it has not validated or parsed refuses an
 // unsupported version itself (OBI-T-04), as ParseDocument, Validate, and
-// CompileOperationSchema do.
+// ValueContractCompiler.Resolve do.
 func ResolveOperation(iface *Interface, name string) (string, Operation, bool) {
 	if iface == nil {
 		return "", Operation{}, false

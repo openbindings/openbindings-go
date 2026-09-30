@@ -56,26 +56,46 @@ func Resolve(value any, pointer string) (any, bool) {
 	}
 	current := value
 	for _, token := range tokens {
-		switch node := current.(type) {
-		case map[string]any:
-			child, ok := node[token]
-			if !ok {
-				return nil, false
-			}
-			current = child
-		case []any:
-			// An array index is "0" or a digit string without a leading zero.
-			if token == "" || (len(token) > 1 && token[0] == '0') || strings.TrimLeft(token, "0123456789") != "" {
-				return nil, false
-			}
-			index, err := strconv.Atoi(token)
-			if err != nil || index >= len(node) {
-				return nil, false
-			}
-			current = node[index]
-		default:
+		if current, ok = step(current, token); !ok {
 			return nil, false
 		}
 	}
 	return current, true
+}
+
+// Longest returns the longest prefix of a JSON Pointer that addresses a
+// location in value: the pointer itself when it resolves, and "" when it is
+// malformed or its first token addresses nothing.
+func Longest(value any, pointer string) string {
+	tokens, ok := Parse(pointer)
+	if !ok {
+		return ""
+	}
+	current := value
+	for i, token := range tokens {
+		if current, ok = step(current, token); !ok {
+			return Format(tokens[:i]...)
+		}
+	}
+	return pointer
+}
+
+// step returns the member or item of value one reference token names.
+func step(value any, token string) (any, bool) {
+	switch node := value.(type) {
+	case map[string]any:
+		child, ok := node[token]
+		return child, ok
+	case []any:
+		// An array index is "0" or a digit string without a leading zero.
+		if token == "" || (len(token) > 1 && token[0] == '0') || strings.TrimLeft(token, "0123456789") != "" {
+			return nil, false
+		}
+		index, err := strconv.Atoi(token)
+		if err != nil || index >= len(node) {
+			return nil, false
+		}
+		return node[index], true
+	}
+	return nil, false
 }

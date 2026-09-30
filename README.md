@@ -42,49 +42,35 @@ is OBI-D-09, from the declared version. The other rules are inconclusive. Both r
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
-OBI-D-02 and OBI-D-10, and validation of values against value contracts
-(OBI-T-08), use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
-the core schema and locally required JSON Schema 2020-12 meta-schemas are
-embedded at build time. No document rule evaluates a value against the
-document's schemas: an example is an author claim, which
-`ValidateOperationInput` and `ValidateOperationOutput` can check.
-Patterns are ECMA-262 regular expressions with Unicode semantics: a strict
-grammar check refuses what the `u` flag refuses, and
-[`dlclark/regexp2`](https://github.com/dlclark/regexp2) evaluates the rest,
-with `.`, `\b`, `\B`, and escaped surrogate pairs rewritten to ECMA-262's
-meaning. The whole draft2020-12 JSON Schema Test Suite runs against the
-SDK's path from a document to a verdict (see
-`testdata/json-schema-test-suite/README.md`). To exercise the core
+OBI-D-02 and OBI-D-10 evaluate fixed schemas (the derived schema and the
+JSON Schema 2020-12 meta-schemas, embedded at build time) with a private use
+of [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema).
+No document rule evaluates a value against the document's schemas: an
+example is an author claim, which a tool can check against its value
+contract. Validating values (OBI-T-08) takes a JSON Schema evaluator the
+application supplies; see [Validate a value against a value
+contract](#validate-a-value-against-a-value-contract). To exercise the core
 conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
 point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
 
 **Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
 than the JSON decoder's 10,000-level limit prevents full document inspection.
-OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Value-contract
-validation reports schema graph unavailability for schemas the evaluator
-cannot safely evaluate, including patterns that are not ECMA-262 regular
-expressions with Unicode semantics, Unicode property escapes, backreferences to
-a group inside a quantified atom, patterns nesting groups deeper than 256
-levels, pattern matches that exceed `schemacompiler.PatternMatchTimeout`,
-relevant numbers beyond its limits, counts beyond `math.MaxInt`, references
-that are not URI-references, references the schema library resolves (with
-net/url) to another URI than RFC 3986 gives, non-advancing reference cycles
-(including one a
-`$dynamicRef` closes at run time), a `$dynamicRef` when the document resource
-declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle does not
-reproduce, and a reference into a JSON Schema meta-schema's interior, or to a
-whole one when the document declares a `$dynamicAnchor` named `meta`. The
-SDK does not bound the time or memory evaluation takes: that is the schema
-library's, and grows with the value and the schema graph, as in any JSON
-Schema validator (a graph that applies a schema twice at each of many levels
-does work exponential in their number), so an application validating large
-or untrusted values bounds them itself. The schema library's own compile
-takes time that grows faster than the number of schemas a graph uses. An
-inconclusive rule or unavailable graph is never reported as success or
-unqualified conformance. The Core corpus does not exercise every behavior in
-OBI-T-01: the exact kind comparison has direct Go tests, while Core has no
-kind-support registry or implicit dereferencing path.
+OBI-D-10 leaves subschemas beyond 256 levels inconclusive. A value contract
+gets a located no-verdict, before any evaluator runs, where core meets its
+own limits (a schema nesting subschemas deeper than 256 levels, a pattern
+nesting groups deeper than 256) or its conservative policies (such as a
+cycle of schemas applied in place without advancing into the value, or two
+resources sharing an identifier in normal form); each refusal says which
+(`NoVerdictError`). Everything else is the evaluator's: which patterns and
+numbers it can decide, and the time and memory evaluation takes, which grow
+with the value and the schemas as in any JSON Schema validator, so an
+application validating large or untrusted values bounds them itself.
+`schemaeval` documents its own limits. An inconclusive rule or a value
+without a verdict is never reported as success or unqualified conformance.
+The Core corpus does not exercise every behavior in OBI-T-01: the exact kind
+comparison has direct Go tests, while Core has no kind-support registry or
+implicit dereferencing path.
 
 Pending TypeScript parity for the core is recorded in
 [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
@@ -111,8 +97,13 @@ remain resolvable through the Go module proxy.
 
 ```
 .                          ← github.com/openbindings/openbindings-go (the core SDK)
+  openbindingstest/        ← the conformance kit for schema evaluators
+  schemaeval/              ← github.com/openbindings/openbindings-go/schemaeval,
+                             the project's schema evaluator (its own module)
   internal/jsonpointer/    ← RFC 6901 pointers for finding locations
-  internal/schemacompiler/ ← the SDK's use of the JSON Schema library
+  internal/schemacompiler/ ← the document rules' use of the JSON Schema library,
+                             and the ECMA-262 pattern grammar
+  internal/kithook/        ← what the kit reaches that core does not export
 ```
 
 The [`ob` CLI](https://github.com/openbindings/ob) is built on this SDK but lives in its own repo, with its own versioning and release cadence.
@@ -135,7 +126,7 @@ go get github.com/openbindings/openbindings-go
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
 - **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names), and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
-- **Optional value-contract validation** of values against the input or output contract an operation's schema states, under JSON Schema semantics (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values. The eager compiler can return an unavailable result when it cannot establish a verdict; this is an SDK implementation limit, not a document rule or a requirement for other tools
+- **Value-contract validation** of values against an operation's input or output contract (§3, OBI-T-08), with a JSON Schema evaluator the application supplies: core resolves the document's schemas (§7), refuses what the specification leaves undefined, and hands the evaluator a closed JSON Schema 2020-12 bundle per value contract; the evaluator evaluates. [`schemaeval`](schemaeval) is the project's evaluator, and [`openbindingstest`](openbindingstest) checks any evaluator against the contract
 
 ## Quick start
 
@@ -181,15 +172,67 @@ fmt.Println(dependency.Operation, dependency.Kinds, openbindings.Value(operation
 
 ### Validate a value against a value contract
 
+Value validation takes an evaluator; `schemaeval` is the project's. Resolve a
+document's schemas once, compile the value contracts you validate against,
+and keep them:
+
 ```go
-// A nil error means the value validates. A *SchemaValidationError is an
-// established mismatch; a *SchemaGraphUnavailableError means the schema's
-// evaluator could not establish a verdict, often because compilation needed
-// a schema resource the SDK does not have.
-if err := openbindings.ValidateOperationInput(value, iface, "listItems"); err != nil {
-    log.Fatal(err)
+import (
+    openbindings "github.com/openbindings/openbindings-go"
+    "github.com/openbindings/openbindings-go/schemaeval"
+)
+
+compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
+if err != nil { return err }
+contracts, err := compiler.Resolve(ctx, iface)    // §7 resolution; no evaluator yet
+if err != nil { return err }
+input, err := contracts.CompileInput(ctx, "tasks.create")
+if err != nil { return err }                      // no such operation, or ctx done
+if err := input.Err(); err != nil {
+    log.Printf("tasks.create inputs cannot be validated: %v", err)
+}
+
+switch err := input.ValidateJSON(ctx, body); {
+case err == nil:
+    // valid
+case errors.Is(err, openbindings.ErrMismatch):
+    // reject; errors.As for *MismatchError and its Problems
+case errors.Is(err, openbindings.ErrNoVerdict):
+    // no verdict (not a rejection): no schema there (ErrNoValueContract), a
+    // result the specification leaves undefined (ErrUndefined), a capability
+    // core or the evaluator lacks, or a done ctx
+default:
+    // the body is not JSON
 }
 ```
+
+`Validate` takes a Go value, read as encoding/json encodes it. Core keeps no
+compiled contract: a service compiles the contracts it serves at startup, and
+one compiling on demand shares a compile through `singleflight` under a ctx
+no single request owns (see the examples in `schemaeval`). Schemas the
+document references but does not embed are supplied as `Resource`s to
+`NewValueContractCompiler`; core fetches nothing.
+
+### Write an evaluator
+
+An evaluator implements two methods over a bundle core writes (see
+`SchemaEvaluator` for the contract), and proves itself with the kit:
+
+```go
+func TestEvaluator(t *testing.T) {
+    openbindingstest.TestSchemaEvaluator(t, myevaluator.New(), openbindingstest.Options{
+        Undecided: map[string]string{
+            "adversarial/lazy-lookahead/2": "RE2 has no lookaround",
+        },
+    })
+}
+```
+
+The kit runs the JSON Schema Test Suite's draft2020-12 tests (with its remote
+fixtures) and adversarial cases of its own through core and on the evaluator
+directly, checks problem paths, the evaluator's errors, and invariants
+(concurrency, isolation, cancellation, no network), and fails any wrong
+verdict.
 
 ## License
 

@@ -41,13 +41,16 @@ Go first; TypeScript alignment is pending for each of these:
 - **Version decision.** A text beginning with a byte-order mark declares no
   version (OBI-T-04). A report names the release whose text it applies
   (OBI-T-09).
-- **JSON Schema Test Suite.** Go runs the whole draft2020-12 suite through
-  OBI documents, with two stated exclusions and three stated reasons for no
-  verdict (`testdata/json-schema-test-suite/README.md`).
-- **Value validation.** Patterns are ECMA-262 with the `u` flag (native in
-  TypeScript); a match that reaches no answer, and an absent schema, give no
-  verdict (OBI-T-08), as do a resource declaring one name twice, an `$id` of
-  `""` or `#`, and a cycle a `$dynamicRef` closes at run time.
+- **Value contracts.** Validating a value (OBI-T-08) takes a schema
+  evaluator the application supplies; the core has none of its own. The core
+  resolves the document's schemas and the supplied resources (§7), refuses
+  before evaluation, located and labeled, what the specification leaves
+  undefined (`ErrUndefined`), what it lacks the capability for, and what its
+  conservative policies refuse, and hands the evaluator a closed 2020-12
+  bundle. A value gets valid, an established mismatch with located problems,
+  or no verdict. Go's `openbindingstest` kit runs the whole draft2020-12 JSON
+  Schema Test Suite and adversarial cases through any evaluator
+  (`openbindingstest/testdata/json-schema-test-suite/README.md`).
 
 Document validation reports the core's §10.4 conformance conclusion in Go:
 `Interface.Validate(options)` and `ValidateDocument(data, options)` return a
@@ -68,17 +71,18 @@ each of these observable behaviors:
   present; a resource limit is inconclusive, never a violation.
 - **Value-contract validation.** The OBI root is the resolution context,
   not a schema. A claimed value result follows the applicable JSON Schema
-  dialect; a missing capability or resource yields no verdict. Go currently
-  uses an eager compiler, so it can return no verdict for a graph containing
-  an unavailable branch even when a particular value does not enter that
-  branch. That limitation is Go behavior, not a Core or parity requirement.
-  Both SDKs must distinguish an established mismatch from no verdict.
+  dialect; a missing capability or resource yields no verdict. A refusal
+  follows what evaluation can reach; a problem in a schema a contract copies
+  but cannot reach is refused by conservative policy. Both SDKs must
+  distinguish an established mismatch from no verdict.
 
 | Concept | Go | TypeScript |
 |---|---|---|
 | validate a document, with its conformance conclusion | `Interface.Validate(options)` / `ValidateDocument(data, options)` | `validateInterface(...)` (report pending) |
 | apply OBI-T-09 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
 | compare a dependency's declared kind constraint | `DependencyEntry.AllowsKind(...)` | pending |
+| validate a value against a value contract, with the application's evaluator | `NewValueContractCompiler(...)`, `Resolve`, `CompileInput` / `CompileOutput`, `ValueContract.Validate` | pending |
+| check an evaluator against the evaluator contract | `openbindingstest.TestSchemaEvaluator(...)` | pending |
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |
 

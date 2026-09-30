@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,13 +32,22 @@ func TestPublishedInterfaces(t *testing.T) {
 			t.Errorf("%s: not decoded: %v", name, err)
 			continue
 		}
+		contracts := contractsFor(t, iface)
 		for key, operation := range iface.Operations {
-			for position, schema := range map[string]JSONSchema{"input": operation.Input, "output": operation.Output} {
+			for direction, schema := range map[string]JSONSchema{"input": operation.Input, "output": operation.Output} {
 				if schema == nil {
 					continue
 				}
-				if _, err := CompileOperationSchema(iface, key, position); err != nil {
-					t.Errorf("%s: %s %s: %v", name, key, position, err)
+				compile := contracts.CompileInput
+				if direction == "output" {
+					compile = contracts.CompileOutput
+				}
+				contract, err := compile(context.Background(), key)
+				if err == nil {
+					err = contract.Err()
+				}
+				if err != nil {
+					t.Errorf("%s: %s %s: %v", name, key, direction, err)
 				}
 			}
 		}

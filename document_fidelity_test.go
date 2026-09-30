@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math/big"
@@ -401,7 +402,8 @@ func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 	if report, err := iface.Validate(ValidateOptions{}); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
 		t.Fatalf("want an encoding error and no report, got %v, %+v", err, report)
 	}
-	if _, err := CompileOperationSchema(&iface, "op", "input"); err == nil || errors.As(err, new(*SchemaGraphUnavailableError)) {
+	compiler, _ := NewValueContractCompiler(testEvaluator{})
+	if _, err := compiler.Resolve(context.Background(), &iface); err == nil || errors.Is(err, ErrNoVerdict) {
 		t.Fatalf("want an encoding error, got %v", err)
 	}
 }

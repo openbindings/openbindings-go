@@ -509,86 +509,10 @@ func (d *documentCheck) checkDocumentReference(path *schemaPath, keyword, ref st
 		d.c.violated("OBI-D-05", path.at(keyword), fmt.Sprintf("%q must be an absolute URI or a same-document reference, not a relative reference", ref))
 		return
 	}
-	switch r := d.schemas.resolveFrom(ref, nil, d.view); {
-	case r.exists == missing:
-		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("the %s %q %s", keyword, ref, r.why))
-	case r.origin == inDocument:
-		d.checkFragmentTarget(path, keyword, ref, r.location)
+	// A plain name declared more than once is OBI-D-13's to report.
+	if found := d.schemas.lookUpSameDocument(ref, d.view); found.why != "" && !found.declaredTwice {
+		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("the %s %q %s", keyword, ref, found.why))
 	}
-}
-
-// checkFragmentTarget applies OBI-D-12's target clause to a same-document
-// reference in the document resource: it identifies a schema at an OBI
-// position, never the OBI document or a value that is not a schema. The
-// resolver has already refused a location inside a schema with an $id member;
-// a schemas entry declaring $id is itself at an OBI position.
-func (d *documentCheck) checkFragmentTarget(path *schemaPath, keyword, ref, target string) {
-	value, _ := jsonpointer.Resolve(d.view, target)
-	_, isObject := value.(map[string]any)
-	_, isBoolean := value.(bool)
-	switch {
-	case target == "":
-		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("%q names the OBI document itself, which is not a schema", ref))
-	case !isOBIPosition(d.view, target) || !isObject && !isBoolean:
-		d.c.violated("OBI-D-12", path.at(keyword), fmt.Sprintf("%q resolves to %s, which is not a schema at an OBI position", ref, target))
-	}
-}
-
-// isOBIPosition reports whether a location in a document's generic view is an
-// OBI position (§7): an operation's input or output, an entry of schemas, or
-// reached from one through the keywords the 2020-12 meta-schema validates as
-// schemas, the legacy definitions and dependencies included. Each step is
-// read in what the view holds, so a keyword holding a map or an array of
-// schemas leads to an entry only when its value is an object or an array:
-// allOf holding an object has no entries.
-func isOBIPosition(view any, location string) bool {
-	tokens, _ := jsonpointer.Parse(location)
-	root, _ := view.(map[string]any)
-	var node any
-	present := false
-	switch {
-	case len(tokens) >= 2 && tokens[0] == "schemas":
-		schemas, _ := root["schemas"].(map[string]any)
-		node, present = schemas[tokens[1]]
-		tokens = tokens[2:]
-	case len(tokens) >= 3 && tokens[0] == "operations" && (tokens[2] == "input" || tokens[2] == "output"):
-		operations, _ := root["operations"].(map[string]any)
-		operation, _ := operations[tokens[1]].(map[string]any)
-		node, present = operation[tokens[2]]
-		tokens = tokens[3:]
-	}
-	for present && len(tokens) > 0 {
-		schema, _ := node.(map[string]any)
-		value, has := schema[tokens[0]]
-		switch keyword := tokens[0]; {
-		case !has:
-			return false
-		case singleSchemaKeywords[keyword]:
-			node, tokens = value, tokens[1:]
-			continue
-		case len(tokens) < 2:
-			return false
-		case schemaMapKeywords[keyword], describedMapKeywords[keyword]:
-			entries, _ := value.(map[string]any)
-			node, present = entries[tokens[1]]
-		case arraySchemaKeywords[keyword]:
-			_, isArray := value.([]any)
-			node, present = jsonpointer.Resolve(value, jsonpointer.Format(tokens[1]))
-			present = present && isArray
-		default:
-			return false
-		}
-		tokens = tokens[2:]
-	}
-	return present
-}
-
-// describeLocation names a document location for a message.
-func describeLocation(location string) string {
-	if location == "" {
-		return "the OBI document"
-	}
-	return location
 }
 
 // checkUniqueness applies OBI-D-13: no plain name is declared more than once

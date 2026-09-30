@@ -529,12 +529,11 @@ func TestValidateOperationInput_ResolvesFromTheDocumentRoot(t *testing.T) {
 			}},
 		},
 	}
-	var mismatch *SchemaValidationError
 	for _, op := range []string{"byRef", "byPointer"} {
-		if err := ValidateOperationInput(map[string]any{"name": "Bob"}, &i, op); err != nil {
+		if err := validateWithTestEvaluator(t, &i, op, "input", map[string]any{"name": "Bob"}); err != nil {
 			t.Errorf("%s: a conforming value: %v", op, err)
 		}
-		if err := ValidateOperationInput(map[string]any{"name": json.Number("42")}, &i, op); !errors.As(err, &mismatch) {
+		if err := validateWithTestEvaluator(t, &i, op, "input", map[string]any{"name": json.Number("42")}); !errors.Is(err, ErrMismatch) {
 			t.Errorf("%s: want a mismatch, got %v", op, err)
 		}
 	}
@@ -597,14 +596,12 @@ func TestValidateOperationInput_NullAndExternalReferences(t *testing.T) {
 			"viaMap":   {Input: map[string]any{"$ref": "#/schemas/User"}},
 		},
 	}
-	var mismatch *SchemaValidationError
-	if err := ValidateOperationInput(nil, &i, "object"); !errors.As(err, &mismatch) {
+	if err := validateWithTestEvaluator(t, &i, "object", "input", nil); !errors.Is(err, ErrMismatch) {
 		t.Fatalf("null against an object schema: want a mismatch, got %v", err)
 	}
-	var unavailable *SchemaGraphUnavailableError
 	for _, op := range []string{"external", "viaMap"} {
-		if err := ValidateOperationInput(map[string]any{"anything": true}, &i, op); !errors.As(err, &unavailable) {
-			t.Errorf("%s: want no verdict, got %v", op, err)
+		if err := validateWithTestEvaluator(t, &i, op, "input", map[string]any{"anything": true}); !errors.Is(err, ErrNoVerdict) || errors.Is(err, ErrUndefined) {
+			t.Errorf("%s: want no verdict, a capability core lacks, got %v", op, err)
 		}
 	}
 }

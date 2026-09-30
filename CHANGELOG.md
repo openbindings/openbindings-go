@@ -6,6 +6,37 @@
 
 ### Changed
 
+- **Value validation takes an evaluator the application supplies (breaking,
+  pre-1.0).** Validating values against value contracts (OBI-T-08) no longer
+  drives a JSON Schema library of core's own. `NewValueContractCompiler`
+  takes a `SchemaEvaluator` (and any `Resource`s the application supplies for
+  schemas the document references but does not embed); `Resolve` resolves an
+  interface's schemas once (§7); `CompileInput` and `CompileOutput` compile
+  an operation's value contract with the evaluator; `ValueContract.Validate`
+  and `ValidateJSON` return nil, a `*MismatchError` (`ErrMismatch`), or a
+  `*NoVerdictError` (`ErrNoVerdict`), whose cause matches `ErrUndefined`
+  when the specification leaves the result undefined and
+  `ErrNoValueContract` where the operation states no value contract. Core
+  resolves references character for character (§7.4), refuses what the
+  specification leaves undefined before any evaluation, and hands the
+  evaluator a closed JSON Schema 2020-12 bundle: identifiers and references
+  written in RFC 3986 normal form, unreached references to what the bundle
+  does not hold as a schema pointed at a `false` placeholder, legacy
+  `definitions` and `dependencies` schemas moved into `$defs`, the 2020-12
+  meta-schemas embedded when referenced, and the document resource's
+  dynamic scope kept by scope wrappers. Unicode property escapes in patterns
+  are now checked against ECMA-262's names for Unicode 13.0 rather than
+  refused; matching them is the evaluator's.
+  - Added: the `openbindingstest` conformance kit, and the
+    `github.com/openbindings/openbindings-go/schemaeval` module, the
+    project's evaluator (santhosh-tekuri/jsonschema/v6 with ECMA-262
+    patterns by dlclark/regexp2).
+  - Removed: `CompileOperationSchema`, the `CompiledSchema` struct,
+    `ValidateOperationInput`, `ValidateOperationOutput`,
+    `SchemaValidationError`, `SchemaGraphUnavailableError`, and
+    `SchemaProblem.Path` (now `InstanceLocation`). Core no longer depends on
+    dlclark/regexp2.
+
 - **Documentation follows the Core's value-contract lexicon
   (openbindings/spec#131).** Doc comments and guides say "value contract"
   where they meant an operation's input or output contract, and state an
@@ -17,8 +48,8 @@
     meta-schema validity, OBI-D-11 dependency operation keys, and OBI-D-13
     plain-name and `$id` uniqueness. The `$vocabulary` rule and example
     validity are gone: an example is an author claim no document rule checks
-    (OBI-T-10, OBI-T-11), which `ValidateOperationInput` and
-    `ValidateOperationOutput` can check.
+    (OBI-T-10, OBI-T-11), which a value contract can check
+    (`ValueContract.Validate`).
   - `Operation.Idempotent` moves to `BindingEntry.Idempotent`, and
     `DependencyEntry` gains `Description`.
   - OBI-D-05 admits plain-name fragments, `$dynamicRef`, and `$dynamicAnchor`
