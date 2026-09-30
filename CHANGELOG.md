@@ -163,6 +163,19 @@
 
 ### Fixed
 
+- **OBI-D-02 findings on a refused member name point at the member.** The
+  JSON Schema library records such a failure's location without copying it,
+  so a later sibling could overwrite it and the finding pointed somewhere
+  else on most runs. Core now locates the finding where the document holds
+  the name, in every map whose names the document schema constrains.
+- **A cycle every evaluation enters is an undefined result.** A value
+  contract whose evaluation must apply a cycle of schemas in place without
+  advancing (a schema that is only a `$ref` to itself, for one) now refuses
+  with `ErrUndefined`, as OBI-T-08 and §7.4 name it; a cycle only some values
+  enter stays core's conservative refusal.
+- **The corpus harness fails a failing fixture whose rule comes back
+  inconclusive,** instead of skipping it.
+
 - **One operation's evidence no longer depends on another's, and the same
   bytes give the same report.** The library shared state across the
   operations of a document, and listed the members `additionalProperties:

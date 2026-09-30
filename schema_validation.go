@@ -196,10 +196,47 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
 			return
 		}
+		located := map[string]bool{}
 		for _, problem := range problems {
-			c.violated("OBI-D-02", jsonpointer.Format(problem.Location...), "does not validate against the document schema: "+problem.Message)
+			if problem.Name == "" {
+				c.violated("OBI-D-02", jsonpointer.Format(problem.Location...), "does not validate against the document schema: "+problem.Message)
+				continue
+			}
+			// A member name the schema refuses is located where the document
+			// holds it, once per such member however often it is reported.
+			if located[problem.Name] {
+				continue
+			}
+			located[problem.Name] = true
+			at := memberNamesAt(view, problem.Name)
+			if len(at) == 0 {
+				at = []string{jsonpointer.Format(problem.Location...)}
+			}
+			for _, path := range at {
+				c.violated("OBI-D-02", path, "does not validate against the document schema: "+problem.Message)
+			}
 		}
 	}
+}
+
+// namedMaps are the maps whose member names the document schema constrains,
+// with a pattern equal to OBI-D-03's: the keys of the top-level maps and of
+// an operation's examples.
+var namedMaps = [][]string{{"schemas"}, {"operations"}, {"dependencies"}, {"sources"}, {"bindings"}, {"operations", "*", "examples"}}
+
+// memberNamesAt returns where the document holds a member named name in one
+// of namedMaps, in sorted order.
+func memberNamesAt(view any, name string) []string {
+	var out []string
+	for _, at := range namedMaps {
+		for _, m := range membersAt(view, append(slices.Clone(at), "*"), nil) {
+			if m.tokens[len(m.tokens)-1] == name {
+				out = append(out, jsonpointer.Format(m.tokens...))
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // member is a member of a document's generic view and where it is.

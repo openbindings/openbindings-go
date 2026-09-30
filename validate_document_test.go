@@ -629,7 +629,6 @@ func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
 // A document schema finding about a map key is located at the key, the same
 // way every time.
 func TestValidateDocument_KeyFindingPathsAreDeterministic(t *testing.T) {
-	t.Skip("santhosh-tekuri/jsonschema v6.0.3 records a propertyNames failure's location without copying it, so a later sibling overwrites it; fixed upstream by cloning the location")
 	for range 50 {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"bad key":{}},"sources":{},"name":"n","description":"d"}`)
 		for _, finding := range report.Findings {
@@ -637,6 +636,22 @@ func TestValidateDocument_KeyFindingPathsAreDeterministic(t *testing.T) {
 				t.Fatalf("OBI-D-02 finding at %q", finding.Path)
 			}
 		}
+	}
+}
+
+// A refused member name is located wherever the document holds it, in every
+// map whose names the document schema constrains.
+func TestValidateDocument_KeyFindingsAtEveryHolder(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"bad key":{}},"operations":{"bad key":{},"op":{"examples":{"bad key":{}}}}}`)
+	var paths []string
+	for _, finding := range report.Findings {
+		if finding.Rule == "OBI-D-02" {
+			paths = append(paths, finding.Path)
+		}
+	}
+	want := []string{"/operations/bad key", "/operations/op/examples/bad key", "/schemas/bad key"}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("OBI-D-02 findings at %q, want %q", paths, want)
 	}
 }
 
