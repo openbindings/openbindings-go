@@ -1,23 +1,18 @@
 draft2020-12/ is the tests/draft2020-12 folder of the JSON Schema Test Suite
-(https://github.com/json-schema-org/JSON-Schema-Test-Suite), at commit
-5b0ee1613e45fcc2bddac00e07c19cd49b00d8a8, under its MIT license (LICENSE
-here). It is unmodified; to update it, replace the folder with the one at a
-newer commit and change the commit named here.
+(https://github.com/json-schema-org/JSON-Schema-Test-Suite), and remotes/ its
+remotes folder, at commit 5b0ee1613e45fcc2bddac00e07c19cd49b00d8a8, under its
+MIT license (LICENSE here). Both are unmodified; to update them, replace the
+folders with the ones at a newer commit and change the commit named here.
 
-json_schema_test_suite_test.go runs each case through an OBI document, to
-test the SDK's whole path from a document to a verdict: how it hands schemas
-to its schema library, and its own ECMA-262 pattern engine and handling of
-numbers. Every file runs except two, which test what OBI-T-08 rules out:
+The conformance kit (openbindingstest) runs each suite schema as an OBI
+document's input contract, with the remote fixtures supplied as resources
+under their http://localhost:1234/ URIs, through core and on the evaluator
+directly. Every file runs except two, which test what OBI-T-08 rules out:
 
 - optional/format/ asserts format, which OBI-T-08 makes an annotation
   (format.json tests that it is one);
 - optional/dependencies-compatibility.json evaluates dependencies, which
   strict 2020-12 does not define.
 
-Each schema runs as a resource of its own, and one holding no same-document
-reference also runs in the document resource. A case may reach no verdict
-only for the cause the SDK reports: a remote schema of the suite's
-(http://localhost:1234/...), which no document here embeds; a Unicode
-property escape, which the SDK does not evaluate; or, in
-optional/refOfUnknownKeyword.json, a reference to a value under a keyword
-that holds no schema.
+A group core refuses is pinned in suite.go, with its reason; an evaluator
+names in its Options what it cannot decide or locate.

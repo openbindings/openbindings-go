@@ -53,7 +53,7 @@
 //	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
 //	contracts, err := compiler.Resolve(ctx, iface)
 //	input, err := contracts.CompileInput(ctx, "tasks.create")
-//	err = input.ValidateJSON(ctx, body) // nil, a *MismatchError, or a *NoVerdictError
+//	err = input.ValidateJSON(ctx, body) // nil, a *MismatchError, a *NoVerdictError, or body is not JSON
 //
 // Core does what the specification fixes: it resolves the document's schemas
 // (§7), and the resources the application supplies, and refuses, located and
@@ -64,7 +64,9 @@
 // resolves within it, and reads the evaluator's answer, keeping a panic, a
 // context error, or a malformed answer from becoming a verdict. The
 // evaluator evaluates. The openbindingstest package checks an evaluator
-// against the contract.
+// against the contract. Core keeps no compiled value contract: the
+// openbindings-go/schemaeval module's examples show a service compiling the
+// contracts it serves at startup, and one compiling on demand.
 //
 // # An Exact Document Model
 //

@@ -6,14 +6,40 @@
 //	compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
 //
 // It evaluates a bundle as JSON Schema 2020-12 with format an annotation. It
-// gives no verdict, only where evaluation reaches it, for what it cannot
-// decide: a pattern its engine does not match as ECMA-262 does (a Unicode
-// property escape, a backreference to a group inside a quantified atom), a
-// pattern match that meets Options.PatternMatchTimeout, a number beyond its
-// numeric limits (4096 characters, an exponent within ±10000) that a schema
-// compares, and a $dynamicRef applied to property names, which the library
-// checks without the dynamic scope. openbindingstest checks it against the
-// evaluator contract.
+// gives no verdict, only where evaluation reaches it, for a pattern its
+// engine does not match as ECMA-262 does (a Unicode property escape, a
+// backreference to a group inside a quantified atom), a pattern match that
+// meets Options.PatternMatchTimeout, a const or enum holding a number beyond
+// its numeric limits (4096 characters, an exponent within ±10000), and a
+// $dynamicRef applied to property names, which the library checks without
+// the dynamic scope. Comparison and count keywords are decided exactly
+// whatever their numbers. A value holding a number beyond the limits gets no
+// verdict when the bundle compares numbers anywhere, reached or not, and is
+// otherwise validated with a stand-in number. Where a
+// schema's type fails, the library reports none of that schema's other
+// failing keywords, so its problems can be fewer than the contract's.
+// openbindingstest checks it against the evaluator contract.
+//
+// # Adapting another library
+//
+// This module's approach adapts other JSON Schema libraries too:
+//   - Compile each bundle with a compiler of its own, so no bundle affects
+//     another's, and read JSON numbers as json.Number, never float64.
+//   - Give the library a loader that fails for every URI. Every reference
+//     resolves within the bundle, so the loader is never needed; if the
+//     library can finish compiling with a reference unresolved, check that
+//     it resolved every one and fail Compile if not.
+//   - Where the library cannot decide a keyword, give no verdict only where
+//     evaluation reaches it: this module replaces such a keyword with a
+//     format of its own that stops evaluation when applied.
+//   - Project the library's errors onto the contract's problem locations
+//     (see openbindings.SchemaEvaluator). Libraries commonly evaluate a
+//     missing required property's schema against null, report the failed
+//     branches of a passing applicator, locate propertyNames at the name or
+//     once per name, or report unevaluatedItems once for all items.
+//   - Run openbindingstest.TestSchemaEvaluator under -race, and name in its
+//     Options, with a reason, each case the library cannot decide or
+//     locate.
 package schemaeval
 
 import (

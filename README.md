@@ -56,30 +56,21 @@ point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
 
 **Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
 than the JSON decoder's 10,000-level limit prevents full document inspection.
-OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Value-contract
-validation reports schema graph unavailability for schemas the evaluator
-cannot safely evaluate, including patterns that are not ECMA-262 regular
-expressions with Unicode semantics, Unicode property escapes, backreferences to
-a group inside a quantified atom, patterns nesting groups deeper than 256
-levels, pattern matches that exceed `schemacompiler.PatternMatchTimeout`,
-relevant numbers beyond its limits, counts beyond `math.MaxInt`, references
-that are not URI-references, references the schema library resolves (with
-net/url) to another URI than RFC 3986 gives, non-advancing reference cycles
-(including one a
-`$dynamicRef` closes at run time), a `$dynamicRef` when the document resource
-declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle does not
-reproduce, and a reference into a JSON Schema meta-schema's interior, or to a
-whole one when the document declares a `$dynamicAnchor` named `meta`. The
-SDK does not bound the time or memory evaluation takes: that is the schema
-library's, and grows with the value and the schema graph, as in any JSON
-Schema validator (a graph that applies a schema twice at each of many levels
-does work exponential in their number), so an application validating large
-or untrusted values bounds them itself. The schema library's own compile
-takes time that grows faster than the number of schemas a graph uses. An
-inconclusive rule or unavailable graph is never reported as success or
-unqualified conformance. The Core corpus does not exercise every behavior in
-OBI-T-01: the exact kind comparison has direct Go tests, while Core has no
-kind-support registry or implicit dereferencing path.
+OBI-D-10 leaves subschemas beyond 256 levels inconclusive. A value contract
+gets a located no-verdict, before any evaluator runs, where core meets its
+own limits (a schema nesting subschemas deeper than 256 levels, a pattern
+nesting groups deeper than 256) or its conservative policies (such as a
+cycle of schemas applied in place without advancing into the value, or two
+resources sharing an identifier in normal form); each refusal says which
+(`NoVerdictError`). Everything else is the evaluator's: which patterns and
+numbers it can decide, and the time and memory evaluation takes, which grow
+with the value and the schemas as in any JSON Schema validator, so an
+application validating large or untrusted values bounds them itself.
+`schemaeval` documents its own limits. An inconclusive rule or a value
+without a verdict is never reported as success or unqualified conformance.
+The Core corpus does not exercise every behavior in OBI-T-01: the exact kind
+comparison has direct Go tests, while Core has no kind-support registry or
+implicit dereferencing path.
 
 Pending TypeScript parity for the core is recorded in
 [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).

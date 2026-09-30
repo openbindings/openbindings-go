@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"math/big"
 	"net/url"
 	"reflect"
 	"sort"
@@ -122,7 +121,19 @@ func (p *prepared) prepareSchema(object map[string]any) {
 	for _, keyword := range sortedKeys(object) {
 		count, isCount := countKeywords[keyword]
 		n, isNumber := object[keyword].(json.Number)
-		if !isCount || !isNumber || fitsInt(string(n)) {
+		if !isCount || !isNumber {
+			continue
+		}
+		value, past, ok := readCount(string(n))
+		switch {
+		case !ok:
+			// Not a non-negative integer, which core never hands over
+			// (OBI-D-10): left for the library.
+			continue
+		case !past:
+			// Spelled as the library reads it, whatever its spelling in
+			// the bundle (0e10001, 1.0, 10e-1).
+			object[keyword] = json.Number(strconv.Itoa(value))
 			continue
 		}
 		// No string, array, or object has more than math.MaxInt characters,
@@ -295,14 +306,28 @@ func (b bundleIndex) reachesDynamicRef(schema any, visiting map[uintptr]bool) bo
 	return false
 }
 
-// fitsInt reports whether a count is within math.MaxInt, as the library
-// reads counts.
-func fitsInt(token string) bool {
-	if !withinNumericLimits(token) {
-		return false
+// readCount reads a count keyword's number exactly, by its digits and power
+// of ten, never building a value of the size its exponent names: its value
+// when it is a non-negative integer within math.MaxInt, past when it is an
+// integer beyond math.MaxInt, and ok false when it is neither a non-negative
+// integer nor zero.
+func readCount(token string) (value int, past, ok bool) {
+	d := decimalOf(token)
+	switch {
+	case d.significant == "":
+		return 0, false, true
+	case d.negative || d.power.Sign() < 0:
+		// Its significant digits end in a nonzero digit, so a negative
+		// power leaves a fraction.
+		return 0, false, false
+	case !d.power.IsInt64() || int64(len(d.significant))+d.power.Int64() > int64(len(strconv.Itoa(math.MaxInt))):
+		return 0, true, true
 	}
-	count, ok := new(big.Rat).SetString(token)
-	return ok && count.Cmp(new(big.Rat).SetInt64(math.MaxInt)) <= 0
+	parsed, err := strconv.ParseUint(d.significant+strings.Repeat("0", int(d.power.Int64())), 10, 64)
+	if err != nil || parsed > math.MaxInt {
+		return 0, true, true
+	}
+	return int(parsed), false, true
 }
 
 func numbersWithinLimits(value any) bool {

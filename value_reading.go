@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,11 +36,27 @@ func readJSONText(data []byte) (any, error) {
 // structs by exported fields, and a json.RawMessage as written. It refuses,
 // with an error saying the value is not a JSON value, what encoding/json
 // cannot encode (a NaN, a channel, a cycle) and invalid UTF-8, which
-// encoding/json would replace; and a top-level []byte, which encoding/json
-// writes as base64 but is more likely JSON text meant for ValidateJSON.
+// encoding/json would replace; and a top-level byte slice of any named type
+// that encoding/json writes as base64 (one that marshals itself, such as
+// json.RawMessage, is read as it marshals), which is more likely JSON text
+// meant for ValidateJSON.
+// base64Bytes reports whether encoding/json writes a value as a base64
+// string: a byte slice that neither marshals itself nor is marshaled as text.
+func base64Bytes(value any) bool {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() || v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return false
+	}
+	switch value.(type) {
+	case json.Marshaler, encoding.TextMarshaler:
+		return false
+	}
+	return true
+}
+
 func readGoValue(value any) (any, error) {
-	if _, isBytes := value.([]byte); isBytes {
-		return nil, errors.New("openbindings: a []byte is not validated as a value; use ValidateJSON for JSON text")
+	if base64Bytes(value) {
+		return nil, fmt.Errorf("openbindings: a %T is not validated as a value; use ValidateJSON for JSON text", value)
 	}
 	if below, problem := invalidUTF8(reflect.ValueOf(value), map[heldValue]bool{}); problem != "" {
 		slices.Reverse(below)

@@ -48,8 +48,8 @@
     meta-schema validity, OBI-D-11 dependency operation keys, and OBI-D-13
     plain-name and `$id` uniqueness. The `$vocabulary` rule and example
     validity are gone: an example is an author claim no document rule checks
-    (OBI-T-10, OBI-T-11), which `ValidateOperationInput` and
-    `ValidateOperationOutput` can check.
+    (OBI-T-10, OBI-T-11), which a value contract can check
+    (`ValueContract.Validate`).
   - `Operation.Idempotent` moves to `BindingEntry.Idempotent`, and
     `DependencyEntry` gains `Description`.
   - OBI-D-05 admits plain-name fragments, `$dynamicRef`, and `$dynamicAnchor`

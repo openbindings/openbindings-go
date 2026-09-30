@@ -264,6 +264,10 @@ func TestNewValueContractCompiler_RefusesResources(t *testing.T) {
 			t.Errorf("%s: want an error", name)
 		}
 	}
+	// A configuration error never reads as a value's outcome.
+	if _, err := NewValueContractCompiler(testEvaluator{}, Resource{URI: "https://ex.test/a", Document: json.RawMessage(`{"a":1,"a":2}`)}); errors.Is(err, ErrNoVerdict) || errors.Is(err, ErrUndefined) {
+		t.Errorf("a repeated member: %v", err)
+	}
 	if _, err := NewValueContractCompiler(testEvaluator{}, Resource{URI: "https://ex.test/a#", Document: json.RawMessage(`true`)}); err != nil {
 		t.Errorf("an empty fragment is removed: %v", err)
 	}
@@ -382,6 +386,11 @@ func TestCompile_NoValueContract(t *testing.T) {
 	if _, err := contracts.CompileInput(context.Background(), "missing"); !errors.Is(err, ErrOperationNotFound) {
 		t.Fatalf("%v", err)
 	}
+	// Locations are URI-references, percent-encoded.
+	contract, _ = contractsFor(t, mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"tasks create":{}}}`)).CompileInput(context.Background(), "tasks create")
+	if !errors.As(contract.Err(), &refusal) || refusal.Location != "#/operations/tasks%20create/input" {
+		t.Fatalf("%v", contract.Err())
+	}
 }
 
 // A name two operations carry resolves to neither (OBI-T-07).
@@ -415,9 +424,13 @@ func TestBundle_SpellingsVary(t *testing.T) {
 
 // The namespace avoids every host the document mentions.
 func TestBundle_NamespaceAvoidsTheDocument(t *testing.T) {
-	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/T"}}},"schemas":{"T":{"$id":"https://BUNDLE-0.openbindings.invalid/t","type":"string"}}}`
-	bundle := bundleOf(t, document, "/operations/op/input")
-	if !strings.HasPrefix(bundle["$id"].(string), "https://bundle-1.openbindings.invalid/") {
-		t.Fatalf("root %v", bundle["$id"])
+	// Any spelling whose normal form names the host: case, and
+	// percent-encoded unreserved characters.
+	for _, id := range []string{"https://BUNDLE-0.openbindings.invalid/t", "https://%62undle-0.openbindings.invalid/t", "https://bundle-0.openbindings%2Einvalid/t"} {
+		document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"` + id + `"}}},"schemas":{"T":{"$id":"` + id + `","type":"string"}}}`
+		bundle := bundleOf(t, document, "/operations/op/input")
+		if !strings.HasPrefix(bundle["$id"].(string), "https://bundle-1.openbindings.invalid/") {
+			t.Errorf("%s: root %v", id, bundle["$id"])
+		}
 	}
 }

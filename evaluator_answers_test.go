@@ -203,14 +203,16 @@ func TestValues_Read(t *testing.T) {
 	if fmt.Sprint(seen) != fmt.Sprint(want) {
 		t.Fatalf("read %#v, want %#v", seen, want)
 	}
+	type body []byte
 	cycle := map[string]any{}
 	cycle["self"] = cycle
 	for name, value := range map[string]any{
-		"a []byte":     []byte(`{}`),
-		"invalid text": map[string]any{"a": "\xff"},
-		"a NaN":        math.NaN(),
-		"a channel":    make(chan int),
-		"a cycle":      cycle,
+		"a []byte":           []byte(`{}`),
+		"a named byte slice": body(`{}`),
+		"invalid text":       map[string]any{"a": "\xff"},
+		"a NaN":              math.NaN(),
+		"a channel":          make(chan int),
+		"a cycle":            cycle,
 	} {
 		if err := contract.Validate(context.Background(), value); err == nil || errors.Is(err, ErrNoVerdict) || errors.Is(err, ErrMismatch) {
 			t.Errorf("%s: want an error saying it is not a JSON value, got %v", name, err)

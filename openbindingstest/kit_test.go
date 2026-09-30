@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/openbindings/openbindings-go"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -146,6 +148,29 @@ func TestKitCatchesFaults(t *testing.T) {
 		"a mismatch from Compile": {naive{compile: func(openbindings.SchemaBundle, openbindings.CompiledSchema) (openbindings.CompiledSchema, error) {
 			return nil, &openbindings.MismatchError{}
 		}}, Options{}, "Compile error holds a *MismatchError"},
+		"a compiled schema not safe to share": {naive{compile: func(_ openbindings.SchemaBundle, compiled openbindings.CompiledSchema) (openbindings.CompiledSchema, error) {
+			return oneAtATime{compiled, new(atomic.Int32)}, nil
+		}}, Options{}, "invariant, concurrency"},
+		"wrong paths under one spelling": {naive{compile: func(bundle openbindings.SchemaBundle, compiled openbindings.CompiledSchema) (openbindings.CompiledSchema, error) {
+			if bytes.Contains(bundle.Document, []byte("contract.invalid")) {
+				return relocated{compiled}, nil
+			}
+			return compiled, nil
+		}}, Options{}, "under core's second spelling"},
+		"a retained error changed": {naive{compile: func(bundle openbindings.SchemaBundle, compiled openbindings.CompiledSchema) (openbindings.CompiledSchema, error) {
+			// Outside the concurrency invariant, where rewriting one error
+			// would race as well as fail.
+			if bytes.Contains(bundle.Document, []byte("kit.invalid/shared")) {
+				return compiled, nil
+			}
+			return &reusing{inner: compiled}, nil
+		}}, Options{}, "a retained error changed"},
+		"its own error for a done ctx": {naive{validate: func(ctx context.Context, _ any, answer error) error {
+			if ctx.Err() != nil {
+				return errors.New("naive: stopped")
+			}
+			return answer
+		}}, Options{}, "not matching ctx.Err()"},
 		"wrong paths":                      {naive{}, Options{}, "problem paths"},
 		"an unresolved reference as valid": {naive{loader: permissive{}}, Options{}, "invariant, unresolved references"},
 		"a stale exemption":                {naive{}, Options{Undecided: map[string]string{"adversarial/no-such-case": "none"}}, "which is no case"},
@@ -156,6 +181,50 @@ func TestKitCatchesFaults(t *testing.T) {
 			t.Errorf("%s: the kit did not report %q", name, c.reported)
 		}
 	}
+}
+
+// oneAtATime answers correctly only when no other Validate runs on it at
+// once, as a compiled schema keeping unsynchronized state would.
+type oneAtATime struct {
+	inner    openbindings.CompiledSchema
+	inFlight *atomic.Int32
+}
+
+func (o oneAtATime) Validate(ctx context.Context, value any) error {
+	defer o.inFlight.Add(-1)
+	if o.inFlight.Add(1) > 1 {
+		return nil
+	}
+	time.Sleep(100 * time.Microsecond)
+	return o.inner.Validate(ctx, value)
+}
+
+// reusing returns one *MismatchError for every mismatch, rewriting it each
+// time.
+type reusing struct {
+	inner openbindings.CompiledSchema
+	held  openbindings.MismatchError
+}
+
+func (r *reusing) Validate(ctx context.Context, value any) error {
+	answer := r.inner.Validate(ctx, value)
+	if errors.As(answer, new(*openbindings.MismatchError)) {
+		r.held.Problems = []openbindings.SchemaProblem{{Message: fmt.Sprint(value)}}
+		return &r.held
+	}
+	return answer
+}
+
+// relocated reports every problem at a location no value has.
+type relocated struct{ inner openbindings.CompiledSchema }
+
+func (r relocated) Validate(ctx context.Context, value any) error {
+	answer := r.inner.Validate(ctx, value)
+	var held *openbindings.MismatchError
+	if errors.As(answer, &held) {
+		return &openbindings.MismatchError{Problems: []openbindings.SchemaProblem{{InstanceLocation: "/nowhere", Message: "relocated"}}, Cause: answer}
+	}
+	return answer
 }
 
 // answering answers the same whatever the value.

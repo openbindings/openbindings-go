@@ -19,7 +19,9 @@
 // the contract decides them. Every error the evaluator returns is checked
 // against its contract, and invariants check concurrency, isolation between
 // bundles, retained errors, that nothing is changed or fetched, and
-// cancellation. Run it under -race.
+// cancellation. Each group runs as a subtest named by its ID, so -run selects
+// groups. Run it under -race, and not as a parallel test: it swaps
+// http.DefaultTransport to catch a fetch.
 package openbindingstest
 
 import (
@@ -43,8 +45,9 @@ import (
 
 // Options exempt named cases, each with a reason the report shows. An entry
 // names a case by its ID, or the cases of a group by the group's ID: a suite
-// case's ID up to its group index ("suite/draft2020-12/pattern.json#2"), or
-// "adversarial/" and a group's name. An entry naming a case fails when the
+// group's file path, "#", index, a space, and description
+// ("suite/draft2020-12/pattern.json#2 pattern with Unicode property escape
+// requires unicode mode"), or "adversarial/" and a group's name. An entry naming a case fails when the
 // case needs no exemption, and one naming a group when none of its cases
 // does.
 type Options struct {
@@ -77,6 +80,9 @@ func TestSchemaEvaluator(t *testing.T, e openbindings.SchemaEvaluator, o Options
 // to see what the kit finds.
 func check(t testing.TB, e openbindings.SchemaEvaluator, o Options) {
 	t.Helper()
+	// The network trap swaps http.DefaultTransport; t.Setenv refuses a
+	// parallel test, so no test of the package runs beside the swap.
+	t.Setenv("OPENBINDINGSTEST_NETWORK_TRAP", "1")
 	restore := trapNetwork(t)
 	defer restore()
 	k := &kit{t: t, e: e, o: o, seen: map[string]bool{}, report: map[string]*tally{}}
@@ -87,11 +93,31 @@ func check(t testing.TB, e openbindings.SchemaEvaluator, o Options) {
 	}
 	groups = append(groups, adversarialGroups()...)
 	for _, g := range groups {
-		k.runGroup(g)
+		k.inSubtest(g.id, func() { k.runGroup(g) })
 	}
-	k.invariants()
+	k.inSubtest("invariants", k.invariants)
 	k.checkOptions()
 	k.logReport()
+}
+
+// inSubtest runs f reporting through a subtest of the given name when the
+// kit reports through a *testing.T, so an author can run one group with
+// -run; otherwise it runs f as it is.
+func (k *kit) inSubtest(name string, f func()) {
+	parent, ok := k.t.(*testing.T)
+	if !ok {
+		f()
+		return
+	}
+	ran := false
+	parent.Run(name, func(t *testing.T) {
+		ran = true
+		k.t = t
+		defer func() { k.t = parent }()
+		f()
+	})
+	// A subtest -run filters out never starts.
+	k.filtered = k.filtered || !ran
 }
 
 // outcome is what a validation answers.
@@ -138,6 +164,9 @@ type kit struct {
 	// pinnedCases the cases core refuses, which need none.
 	usedUndecided, usedUnlocated, pinnedCases []string
 	report                                    map[string]*tally
+	// filtered is whether -run left some group unrun, so the entries of
+	// Options cannot be judged against every case.
+	filtered bool
 }
 
 type tally struct {
@@ -253,8 +282,11 @@ func (k *kit) runCase(g group, c testCase, contract *openbindings.ValueContract,
 		answers[spelling] = classifyAnswer(answer)
 		paths[spelling] = problemPaths(answer)
 	}
-	if answers[0] != answers[1] || answers[0] != got {
-		t.Errorf("%s on %s: through core %v, directly %v and %v under the two spellings: an evaluator must not depend on core's spellings", c.id, c.value, got, answers[0], answers[1])
+	switch {
+	case answers[0] != answers[1]:
+		t.Errorf("%s on %s: directly %v and %v under the two spellings: an evaluator must not depend on core's spellings", c.id, c.value, answers[0], answers[1])
+	case answers[0] != got:
+		t.Errorf("%s on %s: through core %v, directly %v: core reads an answer the evaluator contract forbids otherwise (%v)", c.id, c.value, got, answers[0], through)
 	}
 	entry, reason, excused := exemption(k.o.Undecided, c, g)
 	switch {
@@ -274,23 +306,33 @@ func (k *kit) runCase(g group, c testCase, contract *openbindings.ValueContract,
 	if got != mismatch {
 		return
 	}
-	k.checkPaths(g, c, paths[0], counts)
+	k.checkPaths(g, c, paths, counts)
 }
 
-// checkPaths judges the problem paths the evaluator reported directly.
-func (k *kit) checkPaths(g group, c testCase, paths []string, counts *tally) {
+// checkPaths judges the problem paths the evaluator reported directly, under
+// each spelling; a case is located when its paths are under both.
+func (k *kit) checkPaths(g group, c testCase, spellings [2][]string, counts *tally) {
 	value := decode(c.value)
-	located := true
-	if c.paths == nil {
-		for _, path := range paths {
-			if _, ok := jsonpointer.Resolve(value, path); !ok {
-				located = false
-			}
+	isLocated := func(paths []string) bool {
+		if c.paths == nil {
+			return !slices.ContainsFunc(paths, func(path string) bool {
+				_, ok := jsonpointer.Resolve(value, path)
+				return !ok
+			})
 		}
-	} else {
 		sorted := slices.Clone(paths)
 		sort.Strings(sorted)
-		located = slices.ContainsFunc(c.paths, func(want []string) bool { return slices.Equal(want, sorted) })
+		return slices.ContainsFunc(c.paths, func(want []string) bool { return slices.Equal(want, sorted) })
+	}
+	located, paths, where := true, spellings[0], ""
+	for spelling, reported := range spellings {
+		if !isLocated(reported) {
+			located, paths = false, reported
+			if spelling == 1 {
+				where = " under core's second spelling"
+			}
+			break
+		}
 	}
 	entry, reason, excused := exemption(k.o.Unlocated, c, g)
 	switch {
@@ -302,9 +344,9 @@ func (k *kit) checkPaths(g group, c testCase, paths []string, counts *tally) {
 		counts.unlocated++
 		counts.reasons = append(counts.reasons, "unlocated "+c.id+": "+reason)
 	case c.paths == nil:
-		k.t.Errorf("%s on %s: problem paths %q do not all resolve in the value", c.id, c.value, paths)
+		k.t.Errorf("%s on %s: problem paths %q%s do not all resolve in the value", c.id, c.value, paths, where)
 	default:
-		k.t.Errorf("%s on %s: problem paths %q, want %q", c.id, c.value, paths, c.paths)
+		k.t.Errorf("%s on %s: problem paths %q%s, want %q", c.id, c.value, paths, where, c.paths)
 	}
 }
 
@@ -418,7 +460,7 @@ func decode(text string) any {
 }
 
 // checkOptions fails an exemption that names no case, or whose case needed
-// none.
+// none. A run -run filtered judges only the entries naming cases it ran.
 func (k *kit) checkOptions() {
 	for _, entries := range []struct {
 		name  string
@@ -427,6 +469,7 @@ func (k *kit) checkOptions() {
 	}{{"Undecided", k.o.Undecided, k.usedUndecided}, {"Unlocated", k.o.Unlocated, k.usedUnlocated}} {
 		for id := range entries.given {
 			switch {
+			case !k.seen[id] && k.filtered:
 			case !k.seen[id]:
 				k.t.Errorf("Options.%s names %q, which is no case", entries.name, id)
 			case slices.Contains(k.pinnedCases, id):

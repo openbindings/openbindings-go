@@ -50,7 +50,8 @@ type schemaDoc struct {
 	// schemas) of the OBI document, and "" for any other document.
 	units map[string]*docUnit
 	// words holds every $id, $ref, and $dynamicRef string the document's
-	// schemas hold, lowercased, which a bundle's namespace must avoid.
+	// schemas hold, spelled for the namespace choice (spelledForNamespace),
+	// which a bundle's namespace must avoid.
 	words []string
 }
 
@@ -194,7 +195,7 @@ func (d *schemaDoc) walk(value any, location string, resource *docResource, unit
 		}
 		for _, keyword := range []string{"$id", "$ref", "$dynamicRef"} {
 			if word, ok := v[keyword].(string); ok {
-				d.words = append(d.words, strings.ToLower(word))
+				d.words = append(d.words, spelledForNamespace(word))
 			}
 		}
 		forEachDescribedSubschema(v, func(child any, tokens ...string) {
@@ -489,7 +490,9 @@ func newSuppliedResources(resources []Resource) (*suppliedResources, error) {
 		seen[normal] = resource.URI
 		value, err := readJSONText(resource.Document)
 		if err != nil {
-			return nil, fmt.Errorf("openbindings: the resource %q is not JSON core can read exactly: %w", resource.URI, err)
+			// %v, not %w: a configuration error, which must not match a
+			// value's outcome (ErrNoVerdict, ErrUndefined).
+			return nil, fmt.Errorf("openbindings: the resource %q is not JSON core can read exactly: %v", resource.URI, err)
 		}
 		out.docs = append(out.docs, indexDocument(suppliedDocument, uri, value))
 	}

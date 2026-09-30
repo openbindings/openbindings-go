@@ -314,7 +314,7 @@ func (w *bundleWriter) chooseNamespace() string {
 	var words []string
 	for _, d := range append([]*schemaDoc{w.space.obi}, w.space.supplied.docs...) {
 		words = append(words, d.words...)
-		words = append(words, strings.ToLower(d.uri))
+		words = append(words, spelledForNamespace(d.uri))
 	}
 	for k := 0; ; k++ {
 		host := fmt.Sprintf("bundle-%d.openbindings.invalid", k)
@@ -329,6 +329,14 @@ func (w *bundleWriter) chooseNamespace() string {
 			return "https://" + host + "/"
 		}
 	}
+}
+
+// spelledForNamespace spells an identifier, reference, or URI as the
+// namespace choice compares it: lowercased, with percent-encoded unreserved
+// characters decoded, so every spelling whose normal form names a host
+// shows that host literally (a generated host is all unreserved characters).
+func spelledForNamespace(word string) string {
+	return strings.ToLower(normalPercents(word))
 }
 
 // generated returns a name core generates, spelled as the bundle's spelling

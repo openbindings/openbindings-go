@@ -76,13 +76,14 @@ type onDemand struct {
 }
 
 func (d *onDemand) input(ctx context.Context, operation string) (*openbindings.ValueContract, error) {
-	d.mu.Lock()
-	kept := d.inputs[operation]
-	d.mu.Unlock()
-	if kept != nil {
+	if kept := d.kept(operation); kept != nil {
 		return kept, nil
 	}
 	results := d.flight.DoChan(operation, func() (any, error) {
+		// Another request may have compiled it since the check above.
+		if kept := d.kept(operation); kept != nil {
+			return kept, nil
+		}
 		contract, err := d.contracts.CompileInput(d.lifetime, operation)
 		if err != nil {
 			return nil, err // ErrOperationNotFound, or the service shutting down
@@ -101,6 +102,12 @@ func (d *onDemand) input(ctx context.Context, operation string) (*openbindings.V
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (d *onDemand) kept(operation string) *openbindings.ValueContract {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.inputs[operation]
 }
 
 // A service compiling on demand serves a request whose ctx is live even

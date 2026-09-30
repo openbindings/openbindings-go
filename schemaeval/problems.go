@@ -76,8 +76,19 @@ func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []ope
 		return []openbindings.SchemaProblem{{InstanceLocation: at, Message: ve.ErrorKind.LocalizedString(kindPrinter)}}
 	}
 	var out []openbindings.SchemaProblem
+	names := -1
 	for _, cause := range ve.Causes {
-		out = append(out, problems(cause, standsFor)...)
+		found := problems(cause, standsFor)
+		if _, isNames := cause.ErrorKind.(*kind.PropertyNames); isNames && len(found) == 1 {
+			// The library reports propertyNames once per invalid name; the
+			// keyword fails once, at the object.
+			if names >= 0 && out[names].InstanceLocation == found[0].InstanceLocation {
+				out[names].Message += "; " + found[0].Message
+				continue
+			}
+			names = len(out)
+		}
+		out = append(out, found...)
 	}
 	return out
 }

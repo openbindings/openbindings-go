@@ -40,39 +40,53 @@ func (k *kit) bundleOf(positions string, spelling int) json.RawMessage {
 
 // concurrency compiles bundles that share their root's $id and an inner $id
 // with different content, on one evaluator at once, and validates each
-// compiled schema from many goroutines: each gives its own answers. Run
-// under -race.
+// bundle's compiled schema, one shared by every goroutine and one of each
+// goroutine's own, from many goroutines at once: each gives its own answers,
+// as a service validating against a retained ValueContract needs. Run under
+// -race.
 func (k *kit) concurrency() {
 	types := []string{"string", "integer"}
 	values := []any{"s", json.Number("1")}
 	var bundles [2]json.RawMessage
+	var shared [2]openbindings.CompiledSchema
 	for i := range bundles {
 		bundles[i] = k.bundleOf(`{"/operations/op/input":{"$ref":"https://kit.invalid/shared"},"/schemas/S":{"$id":"https://kit.invalid/shared","type":"`+types[i]+`"}}`, 0)
+		compiled, panicked, err := compileDirect(k.e, bundles[i])
+		if panicked != "" || err != nil {
+			k.t.Errorf("invariant, concurrency: compiling: %v %s", err, panicked)
+			return
+		}
+		shared[i] = compiled
 	}
+	start := make(chan struct{})
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 	for i := range 32 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
 			which := i % 2
-			compiled, panicked, err := compileDirect(k.e, bundles[which])
+			own, panicked, err := compileDirect(k.e, bundles[which])
 			if panicked != "" || err != nil {
-				mu.Lock()
 				k.t.Errorf("invariant, concurrency: compiling: %v %s", err, panicked)
-				mu.Unlock()
 				return
 			}
-			for j := range 4 {
-				_, answer := validateDirect(compiled, values[(which+j)%2])
-				if got, want := classifyAnswer(answer), []outcome{valid, mismatch}[j%2]; got != want {
-					mu.Lock()
-					k.t.Errorf("invariant, concurrency and isolation: a bundle of type %s on %v: %v, want %v", types[which], values[(which+j)%2], got, want)
-					mu.Unlock()
+			for j := range 8 {
+				value, want := values[(which+j)%2], []outcome{valid, mismatch}[j%2]
+				for _, compiled := range []openbindings.CompiledSchema{shared[which], own} {
+					switch panicked, answer := validateDirect(compiled, value); {
+					case panicked != "":
+						k.t.Errorf("invariant, concurrency: Validate panicked: %s", panicked)
+						return
+					case classifyAnswer(answer) != want:
+						k.t.Errorf("invariant, concurrency and isolation: a bundle of type %s on %v: %v, want %v", types[which], value, classifyAnswer(answer), want)
+						return
+					}
 				}
 			}
 		}()
 	}
+	close(start)
 	wg.Wait()
 }
 
@@ -170,6 +184,7 @@ func (k *kit) unresolvable() {
 				k.t.Errorf("invariant, unresolved references: Validate panicked on %s: %s", root, panicked)
 				continue
 			}
+			k.checkAnswer("invariant, unresolved references (Validate)", answer, false, context.Background())
 			if got := classifyAnswer(answer); got != noVerdict {
 				k.t.Errorf("invariant, unresolved references: %s on %s: %v, want no verdict", root, v, got)
 			}

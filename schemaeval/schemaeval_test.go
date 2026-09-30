@@ -15,17 +15,20 @@ const propertyEscape = "a Unicode property escape, whose tables this evaluator d
 func TestConformance(t *testing.T) {
 	openbindingstest.TestSchemaEvaluator(t, schemaeval.New(schemaeval.Options{}), openbindingstest.Options{
 		Undecided: map[string]string{
-			"suite/draft2020-12/optional/ecmascript-regex.json#10": propertyEscape,
-			"suite/draft2020-12/optional/ecmascript-regex.json#14": propertyEscape,
-			"suite/draft2020-12/optional/ecmascript-regex.json#15": propertyEscape,
-			"suite/draft2020-12/optional/ecmascript-regex.json#19": propertyEscape,
-			"suite/draft2020-12/pattern.json#2":                    propertyEscape,
-			"suite/draft2020-12/patternProperties.json#5":          propertyEscape,
-			"adversarial/lazy-property-escape-not/1":               propertyEscape,
-			"adversarial/lazy-pattern-properties/2":                propertyEscape,
-			"adversarial/dynamic-ref-under-property-names":         "the library checks property names without the dynamic scope",
-			"adversarial/numbers-in-values/0":                      "a value's number beyond 1e±10000, which the schema compares",
-			"adversarial/numbers-in-values/1":                      "a value's number beyond 1e±10000, where the schema compares numbers",
+			"suite/draft2020-12/optional/ecmascript-regex.json#10 patterns always use unicode semantics with pattern":           propertyEscape,
+			"suite/draft2020-12/optional/ecmascript-regex.json#14 pattern with non-ASCII digits":                                propertyEscape,
+			"suite/draft2020-12/optional/ecmascript-regex.json#15 patterns always use unicode semantics with patternProperties": propertyEscape,
+			"suite/draft2020-12/optional/ecmascript-regex.json#19 patternProperties with non-ASCII digits":                      propertyEscape,
+			"suite/draft2020-12/pattern.json#2 pattern with Unicode property escape requires unicode mode":                      propertyEscape,
+			"suite/draft2020-12/patternProperties.json#5 patternProperties with Unicode property escape":                        propertyEscape,
+			"adversarial/lazy-property-escape-not/1":                                                                            propertyEscape,
+			"adversarial/lazy-pattern-properties/2":                                                                             propertyEscape,
+			"adversarial/dynamic-ref-under-property-names":                                                                      "the library checks property names without the dynamic scope",
+			"adversarial/numbers-in-values/0":                                                                                   "a value's number beyond 1e±10000, which the schema compares",
+			"adversarial/numbers-in-values/1":                                                                                   "a value's number beyond 1e±10000, where the schema compares numbers",
+		},
+		Unlocated: map[string]string{
+			"adversarial/type-and-const/0": "the library stops at a failing type, reporting no other failing keyword of that schema",
 		},
 	})
 }
