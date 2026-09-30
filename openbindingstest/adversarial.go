@@ -84,7 +84,9 @@ var adversaries = []adversary{
 		[]value{{`5`, valid, nil}, {`"s"`, mismatch, nil}}},
 	{"scope-wrappers", `{"/schemas/StrictTree":{"$dynamicAnchor":"node","$ref":"https://ex.invalid/tree","unevaluatedProperties":false},
 		"/operations/op/input":{"$ref":"#/schemas/StrictTree"}}`, tree, "",
-		[]value{{`{"kids":[{"kids":[]}]}`, valid, nil}, {`{"kids":[{"x":1}]}`, mismatch, at("/kids/0/x")}, {`{"x":1}`, mismatch, at("/x")}}},
+		// kids fails, so its annotations are dropped and it is unevaluated
+		// too (JSON Schema Core §7.7.1.2).
+		[]value{{`{"kids":[{"kids":[]}]}`, valid, nil}, {`{"kids":[{"x":1}]}`, mismatch, at("/kids", "/kids/0/x")}, {`{"x":1}`, mismatch, at("/x")}}},
 	{"scope-wrappers-meta", `{"/schemas/A":{"$dynamicAnchor":"meta"},"/operations/op/input":{"$ref":"https://json-schema.org/draft/2020-12/schema"}}`, "", "",
 		[]value{{`{"properties":{"p":{"minLength":-1}}}`, valid, nil}, {`{"minLength":-1}`, mismatch, nil}}},
 	{"scope-wrappers-none-under-id", `{"/schemas/A":{"$dynamicAnchor":"meta"},"/operations/op/input":{"$id":"https://ex.invalid/e","$ref":"https://json-schema.org/draft/2020-12/schema"}}`, "", "",

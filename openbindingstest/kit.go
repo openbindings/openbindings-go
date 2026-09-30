@@ -41,15 +41,26 @@ import (
 	"github.com/openbindings/openbindings-go/internal/kithook"
 )
 
-// Options exempt named cases, each with a reason the report shows.
+// Options exempt named cases, each with a reason the report shows. An entry
+// names a case by its ID, or every case of a group by the group's ID: a
+// suite case's ID up to its group index ("suite/draft2020-12/pattern.json#2"),
+// or "adversarial/" and a group's name.
 type Options struct {
-	// Undecided names cases the evaluator may leave without a verdict, by
-	// ID: a pattern feature its engine lacks, a number beyond its
-	// arithmetic.
+	// Undecided names cases the evaluator may leave without a verdict: a
+	// pattern feature its engine lacks, a number beyond its arithmetic.
 	Undecided map[string]string
 	// Unlocated names cases whose problem paths the evaluator cannot locate
 	// as the contract says.
 	Unlocated map[string]string
+}
+
+// exemption returns the entry of entries that names a case or its group.
+func exemption(entries map[string]string, c testCase, g group) (string, string, bool) {
+	if reason, ok := entries[c.id]; ok {
+		return c.id, reason, true
+	}
+	reason, ok := entries[g.id]
+	return g.id, reason, ok
 }
 
 // TestSchemaEvaluator checks an evaluator against the evaluator contract.
@@ -198,6 +209,8 @@ func (k *kit) runGroup(g group) {
 		return
 	case refused:
 		counts.pinned += len(g.cases)
+		k.seen[g.id] = true
+		k.pinnedCases = append(k.pinnedCases, g.id)
 		for _, c := range g.cases {
 			k.seen[c.id] = true
 			k.pinnedCases = append(k.pinnedCases, c.id)
@@ -213,7 +226,7 @@ func (k *kit) runGroup(g group) {
 func (k *kit) runCase(g group, c testCase, contract *openbindings.ValueContract, direct [2]openbindings.CompiledSchema, counts *tally) {
 	t := k.t
 	t.Helper()
-	k.seen[c.id] = true
+	k.seen[c.id], k.seen[g.id] = true, true
 	through := contract.ValidateJSON(context.Background(), []byte(c.value))
 	got := classify(through)
 	var answers [2]outcome
@@ -241,14 +254,14 @@ func (k *kit) runCase(g group, c testCase, contract *openbindings.ValueContract,
 	if answers[0] != answers[1] || answers[0] != got {
 		t.Errorf("%s on %s: through core %v, directly %v and %v under the two spellings: an evaluator must not depend on core's spellings", c.id, c.value, got, answers[0], answers[1])
 	}
-	reason, excused := k.o.Undecided[c.id]
+	entry, reason, excused := exemption(k.o.Undecided, c, g)
 	switch {
 	case got == c.want && excused:
-		t.Errorf("%s: Options.Undecided names it, but it got its verdict", c.id)
+		t.Errorf("%s: Options.Undecided names it (%s), but it got its verdict", c.id, entry)
 	case got == c.want:
 		counts.evaluated++
 	case got == noVerdict && excused:
-		k.usedUndecided = append(k.usedUndecided, c.id)
+		k.usedUndecided = append(k.usedUndecided, entry)
 		counts.undecided++
 		counts.reasons = append(counts.reasons, "undecided "+c.id+": "+reason)
 		return
@@ -259,11 +272,11 @@ func (k *kit) runCase(g group, c testCase, contract *openbindings.ValueContract,
 	if got != mismatch {
 		return
 	}
-	k.checkPaths(c, paths[0], counts)
+	k.checkPaths(g, c, paths[0], counts)
 }
 
 // checkPaths judges the problem paths the evaluator reported directly.
-func (k *kit) checkPaths(c testCase, paths []string, counts *tally) {
+func (k *kit) checkPaths(g group, c testCase, paths []string, counts *tally) {
 	value := decode(c.value)
 	located := true
 	if c.paths == nil {
@@ -277,13 +290,13 @@ func (k *kit) checkPaths(c testCase, paths []string, counts *tally) {
 		sort.Strings(sorted)
 		located = slices.ContainsFunc(c.paths, func(want []string) bool { return slices.Equal(want, sorted) })
 	}
-	reason, excused := k.o.Unlocated[c.id]
+	entry, reason, excused := exemption(k.o.Unlocated, c, g)
 	switch {
 	case located && excused:
-		k.t.Errorf("%s: Options.Unlocated names it, but its paths are located", c.id)
+		k.t.Errorf("%s: Options.Unlocated names it (%s), but its paths are located", c.id, entry)
 	case located:
 	case excused:
-		k.usedUnlocated = append(k.usedUnlocated, c.id)
+		k.usedUnlocated = append(k.usedUnlocated, entry)
 		counts.unlocated++
 		counts.reasons = append(counts.reasons, "unlocated "+c.id+": "+reason)
 	case c.paths == nil:
@@ -406,6 +419,8 @@ func (k *kit) checkOptions() {
 				k.t.Errorf("Options.%s names %q, which is no case", entries.name, id)
 			case slices.Contains(k.pinnedCases, id):
 				k.t.Errorf("Options.%s names %q, which core refuses, so it needs no exemption", entries.name, id)
+			case !slices.Contains(entries.used, id):
+				k.t.Errorf("Options.%s names %q, which no case needed", entries.name, id)
 			}
 		}
 	}
