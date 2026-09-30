@@ -18,16 +18,17 @@ its environment, independently of protocol. See the
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
-This implementation targets the Core 0.2 working draft as
-[openbindings/spec#129](https://github.com/openbindings/spec/pull/129) leaves
-it on the spec's `release/0.2` branch, whose conformance corpus it passes.
+This implementation targets the Core 0.2 working draft on the spec's
+`release/0.2` branch, whose conformance corpus it passes; a validation report
+names the revision of that text it applied (`ValidationReport.Revision`).
 
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
 [§10.4](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#104-conformance-conclusions):
 evidence for every document rule, located findings, a
 conclusion of conformant, non-conformant, or conformance-undetermined, and the
-specification version its rule identifiers belong to.
+specification version its rule identifiers belong to, with its revision while
+that version is a working draft.
 No document rule requires an implementation or publication for a source's
 kind. Core carries source and binding `content` without interpreting it.
 `Interface.Validate(options)` does the same for a document already in

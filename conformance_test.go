@@ -144,10 +144,13 @@ func runConformanceDir(t *testing.T, dir string) {
 				if parseErr == nil {
 					report, validateErr = iface.Validate(ValidateOptions{})
 				}
+				// This validator decides every document rule the corpus
+				// exercises, so a rule a failing fixture names that comes back
+				// inconclusive is a regression, not a capability it lacks.
 				if !tt.Valid && parseErr == nil && validateErr == nil {
 					for _, expectedRule := range tt.Violates {
 						if report.Evidence[expectedRule] == EvidenceInconclusive {
-							t.Skipf("%s was not decided by this validator", expectedRule)
+							t.Errorf("%s was left inconclusive", expectedRule)
 						}
 					}
 				}
