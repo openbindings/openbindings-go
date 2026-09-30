@@ -281,7 +281,7 @@ func metaSchemaCacheKey(schema map[string]any) string {
 }
 
 // CompileOperationSchema compiles an operation's input or output schema, for
-// validating values against the operation's contract (OBI-T-08). The
+// validating values against the value contract it states (OBI-T-08). The
 // operation is named by any of its identifiers, its key or an alias
 // (OBI-T-07). The OBI document is the resolution root of same-document
 // references (§7), and only the schemas the document holds are schemas: an
@@ -394,7 +394,7 @@ func ValidateOperationOutput(value any, iface *Interface, operationName string) 
 // well-formed, and evaluable, or, from CompiledSchema.Validate, because the
 // value holds a number this SDK cannot check against that graph or the
 // schema was not compiled. It is distinct from a mismatch, as OBI-T-08
-// requires of validation against an operation's contract.
+// requires of validation against a value contract.
 //
 // Callers can use errors.As rather than parsing diagnostic text. Cause remains
 // available through errors.Unwrap for validator-specific diagnostics.
@@ -419,7 +419,7 @@ func (e *SchemaGraphUnavailableError) Unwrap() error {
 // SchemaValidationError is an established mismatch between a value and a
 // schema. Use errors.As to distinguish it from a *SchemaGraphUnavailableError,
 // where no verdict was reached; OBI-T-08 requires the two outcomes to stay
-// distinct when a value is validated against an operation's contract. Cause
+// distinct when a value is validated against a value contract. Cause
 // is the validator's own error.
 type SchemaValidationError struct {
 	Problems []SchemaProblem

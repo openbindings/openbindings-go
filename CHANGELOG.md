@@ -6,6 +6,11 @@
 
 ### Changed
 
+- **Documentation follows the Core's value-contract lexicon
+  (openbindings/spec#131).** Doc comments and guides say "value contract"
+  where they meant an operation's input or output contract, and state an
+  absent `Input` or `Output` as stating no value contract. No API changes.
+
 - **Aligned with the 0.2 Core draft of openbindings/spec#129 (breaking, pre-1.0).**
   - Rule identifiers follow the draft: OBI-D-07 and OBI-D-08 are binding
     operation and source keys, OBI-D-09 the declared version, OBI-D-10

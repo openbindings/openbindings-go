@@ -14,8 +14,8 @@ import (
 // A decoded schema holds generic JSON values, with every number a
 // json.Number, so a number keeps its exact text.
 //
-// As an operation's Input or Output, a nil JSONSchema means the schema is
-// unspecified (the member is absent). As an entry of Interface.Schemas, where
+// As an operation's Input or Output, a nil JSONSchema means the member is
+// absent, which states no value contract in that direction (§5.1). As an entry of Interface.Schemas, where
 // the entry itself says the member is present, nil is a JSON null, which is
 // not a schema: OBI-D-10 reports it. Well-formedness of a present value is a
 // document rule enforced by Validate rather than by this type.
@@ -88,8 +88,9 @@ func (e OperationExample) MarshalJSON() ([]byte, error) {
 }
 
 // Operation is a protocol-independent capability contract (§5.1). Input and
-// Output are nil when the document specifies no contract at that boundary;
-// any schema value, including `{}` and the boolean schemas, is present.
+// Output state its input and output contracts; each is nil when the document
+// states no value contract in that direction, and any schema value,
+// including `{}` and the boolean schemas, is present.
 type Operation struct {
 	Description *string  `json:"description,omitempty"`
 	Deprecated  *bool    `json:"deprecated,omitempty"`
