@@ -6,6 +6,12 @@
 
 ### Added
 
+- **Findings carry their position in the input.** `Finding.Position` is
+  where a finding from `ValidateDocument` or `ParseDocument` lies in the
+  input bytes (byte offset, line, and column, as `go/token` counts them): a
+  member at its name, any other value at its first byte, and a break in
+  OBI-D-01 at the byte that breaks it. `Interface.Validate` reads no bytes,
+  so its findings carry the zero `Position`.
 - **A validation report names the specification revision it applied
   (OBI-T-09).** `ValidationReport.Revision` is the commit of
   github.com/openbindings/spec whose text the report applies while

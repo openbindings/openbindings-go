@@ -867,10 +867,12 @@ func TestValidateDocument_NumbersBeyondTheLimitsAreChecked(t *testing.T) {
 	}
 }
 
-// A repeated member name is located at the object that repeats it.
+// A repeated member name is located at the object that repeats it, and
+// positioned at the name repeated.
 func TestValidateDocument_DuplicateNamesAreLocated(t *testing.T) {
 	document := []byte(`{"openbindings":"0.2.0","operations":{"op":{"examples":{"e":{"input":1,"input":2}}}}}`)
-	want := Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Path: "/operations/op/examples/e", Message: `repeats the member name "input"`}
+	at := bytes.LastIndex(document, []byte(`"input"`))
+	want := Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Path: "/operations/op/examples/e", Message: `repeats the member name "input"`, Position: Position{Offset: at, Line: 1, Column: at + 1}}
 	if _, report, _ := ValidateDocument(document, ValidateOptions{}); !reflect.DeepEqual(report.Violations(), []Finding{want}) {
 		t.Fatalf("violations %+v", report.Violations())
 	}

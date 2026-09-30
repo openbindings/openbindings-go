@@ -50,9 +50,11 @@ func (e *loneSurrogateError) Error() string {
 // duplicateNameError reports an object that repeats a member name, which
 // OBI-D-01 refuses.
 type duplicateNameError struct {
-	// location is the JSON Pointer of the object.
+	// location is the JSON Pointer of the object, and at the byte offset of
+	// the repeated name.
 	location string
 	name     string
+	at       int
 }
 
 func (e *duplicateNameError) Error() string {
@@ -145,6 +147,13 @@ type exactScan struct {
 	readVersion bool
 	versions    [][]byte
 	versionAt   int // where the root member's value being read begins; -1 when none
+
+	// With want, the scan records in located where each wanted location
+	// begins (locate); nodes holds the want node of each step of path, nil
+	// where nothing wanted lies at or below it.
+	want    *wantNode
+	nodes   []*wantNode
+	located map[string]int
 }
 
 // scanStep is one reference token of the scan's path: a member name, or an
@@ -171,6 +180,9 @@ func (s *exactScan) run() error {
 	b := s.b
 	s.versionAt = -1
 	i := skipJSONSpace(b, 0)
+	if s.want != nil && s.want.wanted {
+		s.located[""] = i
+	}
 values:
 	for {
 		// A value begins at b[i].
@@ -192,13 +204,14 @@ values:
 			continue values
 		case c == '[':
 			s.enter(nil)
-			s.path = append(s.path, scanStep{index: 0})
+			s.push(scanStep{index: 0})
 			if i = skipJSONSpace(b, i+1); i < len(b) && b[i] == ']' {
 				s.open = s.open[:len(s.open)-1]
-				s.path = s.path[:len(s.path)-1]
+				s.pop()
 				i++
 				break
 			}
+			s.reach(i)
 			continue values
 		case c == '"':
 			var lone bool
@@ -243,18 +256,19 @@ values:
 			names := s.open[len(s.open)-1]
 			switch {
 			case b[i] == ',' && names == nil:
-				s.path[len(s.path)-1].index++
+				s.nextIndex()
 				i = skipJSONSpace(b, i+1)
+				s.reach(i)
 				continue values
 			case b[i] == ',':
-				s.path = s.path[:len(s.path)-1]
+				s.pop()
 				if i, err = s.member(skipJSONSpace(b, i+1)); err != nil {
 					return err
 				}
 				continue values
 			case b[i] == ']' && names == nil, b[i] == '}' && names != nil:
 				s.open = s.open[:len(s.open)-1]
-				s.path = s.path[:len(s.path)-1]
+				s.pop()
 				i++
 			case names == nil:
 				return syntaxError(b[i], "after array element")
@@ -263,6 +277,92 @@ values:
 			}
 		}
 	}
+}
+
+// push appends a step to the scan's path, with its want node.
+func (s *exactScan) push(step scanStep) {
+	s.path = append(s.path, step)
+	if s.want == nil {
+		return
+	}
+	parent := s.want
+	if len(s.nodes) > 0 {
+		parent = s.nodes[len(s.nodes)-1]
+	}
+	var node *wantNode
+	if parent != nil {
+		token := step.name
+		if step.index >= 0 {
+			token = strconv.Itoa(step.index)
+		}
+		node = parent.children[token]
+	}
+	s.nodes = append(s.nodes, node)
+}
+
+// pop removes the last step of the scan's path.
+func (s *exactScan) pop() {
+	s.path = s.path[:len(s.path)-1]
+	if s.want != nil {
+		s.nodes = s.nodes[:len(s.nodes)-1]
+	}
+}
+
+// nextIndex advances the innermost array's index.
+func (s *exactScan) nextIndex() {
+	step := s.path[len(s.path)-1]
+	s.pop()
+	s.push(scanStep{index: step.index + 1})
+}
+
+// reach records, when it is wanted, that the location the scan's path names
+// begins at b[i]: its first occurrence, should a name repeat.
+func (s *exactScan) reach(i int) {
+	if s.want == nil || len(s.nodes) == 0 {
+		return
+	}
+	if node := s.nodes[len(s.nodes)-1]; node != nil && node.wanted {
+		if _, seen := s.located[node.path]; !seen {
+			s.located[node.path] = i
+		}
+	}
+}
+
+// wantNode is one reference token of the locations a scan is to find.
+type wantNode struct {
+	children map[string]*wantNode
+	// wanted marks a location to find, path its JSON Pointer.
+	wanted bool
+	path   string
+}
+
+// locate returns the byte offset where each of paths begins in data: a
+// member's name, or an array element's or the document's value. A path the
+// input does not reach, or reaches only past a syntax error, is absent.
+func locate(data []byte, paths []string) map[string]int {
+	root := &wantNode{}
+	for _, path := range paths {
+		tokens, ok := jsonpointer.Parse(path)
+		if !ok {
+			continue
+		}
+		node := root
+		for _, token := range tokens {
+			if node.children == nil {
+				node.children = map[string]*wantNode{}
+			}
+			child := node.children[token]
+			if child == nil {
+				child = &wantNode{}
+				node.children[token] = child
+			}
+			node = child
+		}
+		node.wanted, node.path = true, path
+	}
+	scan := exactScan{b: data, want: root, located: map[string]int{}}
+	_ = scan.run() // what it located before any syntax error stands
+	return scan.located
 }
 
 // enter opens an object, with the names it has had, or an array, with nil.
@@ -292,10 +392,11 @@ func (s *exactScan) member(i int) (int, error) {
 	}
 	names := s.open[len(s.open)-1]
 	if _, repeated := names[name]; repeated && s.repeat == nil {
-		s.repeat = &duplicateNameError{location: s.location(), name: name}
+		s.repeat = &duplicateNameError{location: s.location(), name: name, at: i}
 	}
 	names[name] = struct{}{}
-	s.path = append(s.path, scanStep{name: name, index: -1})
+	s.push(scanStep{name: name, index: -1})
+	s.reach(i)
 	if i = skipJSONSpace(b, nameEnd); i >= len(b) {
 		return 0, errUnexpectedEnd
 	}

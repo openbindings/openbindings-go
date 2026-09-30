@@ -25,7 +25,8 @@ names the revision of that text it applied (`ValidationReport.Revision`).
 **Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
 [§10.4](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#104-conformance-conclusions):
-evidence for every document rule, located findings, a
+evidence for every document rule, findings located by JSON Pointer and by
+line and column in the input, a
 conclusion of conformant, non-conformant, or conformance-undetermined, and the
 specification version its rule identifiers belong to, with its revision while
 that version is a working draft.

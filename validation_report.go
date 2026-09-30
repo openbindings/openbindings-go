@@ -57,6 +57,9 @@ type Finding struct {
 	Path string
 	// Message states what was established, or why it could not be decided.
 	Message string
+	// Position is where the finding lies in the input bytes, from
+	// ValidateDocument and ParseDocument; the zero Position otherwise.
+	Position Position
 }
 
 // ValidationReport is a validator's account of one document under the core
