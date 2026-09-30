@@ -162,7 +162,7 @@ func relativeText(base []string, problem Problem) string {
 // []any or map[string]any of JSON values, whose keys are well-formed UTF-8. A value outside that domain has no JSON
 // meaning to validate, so validation reaches no verdict on it.
 func ValueProblem(v any) string {
-	return valueProblem(v, map[container]bool{})
+	return valueProblem(v, map[container]walk{})
 }
 
 // container identifies a map or a non-empty slice by its backing storage.
@@ -171,25 +171,41 @@ type container struct {
 	length int
 }
 
-// valueProblem is ValueProblem, with open holding the containers being
-// walked: a value holding itself is no JSON value, and walking it would never
-// end.
-func valueProblem(v any, open map[container]bool) string {
-	var held container
+// containerOf returns the container a value is, if it is one.
+func containerOf(v any) (container, bool) {
 	switch v := v.(type) {
 	case map[string]any:
-		held = container{at: reflect.ValueOf(v).Pointer(), length: -1}
+		return container{at: reflect.ValueOf(v).Pointer(), length: -1}, true
 	case []any:
 		if len(v) > 0 {
-			held = container{at: reflect.ValueOf(v).Pointer(), length: len(v)}
+			return container{at: reflect.ValueOf(v).Pointer(), length: len(v)}, true
 		}
 	}
-	if held.at != 0 {
-		if open[held] {
+	return container{}, false
+}
+
+// walk is how far a walk of a value has gone through a container it holds.
+type walk uint8
+
+const (
+	walking walk = iota + 1 // entered and not yet left: met again, it holds itself
+	walked                  // left: a value may hold it more than once
+)
+
+// valueProblem is ValueProblem, with seen recording the containers the walk
+// has entered: a value holding itself is no JSON value, and walking it would
+// never end, while one that holds a container many times is walked through it
+// once, so a value sharing its parts costs no more than it holds.
+func valueProblem(v any, seen map[container]walk) string {
+	if held, isContainer := containerOf(v); isContainer {
+		switch seen[held] {
+		case walking:
 			return "holds itself; a JSON value holds no cycle"
+		case walked:
+			return ""
 		}
-		open[held] = true
-		defer delete(open, held)
+		seen[held] = walking
+		defer func() { seen[held] = walked }()
 	}
 	switch v := v.(type) {
 	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
@@ -207,7 +223,7 @@ func valueProblem(v any, open map[container]bool) string {
 		return finiteProblem(v)
 	case []any:
 		for i, item := range v {
-			if problem := valueProblem(item, open); problem != "" {
+			if problem := valueProblem(item, seen); problem != "" {
 				return fmt.Sprintf("/%d: %s", i, problem)
 			}
 		}
@@ -217,7 +233,7 @@ func valueProblem(v any, open map[container]bool) string {
 			if problem := textProblem(key); problem != "" {
 				return "a member name: " + problem
 			}
-			if problem := valueProblem(v[key], open); problem != "" {
+			if problem := valueProblem(v[key], seen); problem != "" {
 				return jsonpointer.Format(key) + ": " + problem
 			}
 		}

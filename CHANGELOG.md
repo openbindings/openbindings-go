@@ -68,11 +68,24 @@
     meta-schema's own `$dynamicRef`, or a reference that is not a
     URI-reference. `additionalItems` is data, as in 2020-12: the schema
     library no longer collects identifiers within it.
-  - Validation counts, before evaluating a value, the schema applications the
-    graph can make on it, and past 2^22 gives no verdict, so a small acyclic
-    graph that applies a schema twice at each level no longer runs for
-    exponential time. `then` and `else`, and the places a `$dynamicRef` may
-    land, count once.
+  - The SDK does not bound the time or memory evaluation takes, which is the
+    schema library's; an application validating large or untrusted values
+    bounds them itself. A budget on schema applications, briefly added, was
+    removed: bounding the library's work means modeling its internals.
+  - Value validation gives no verdict where the schema library, which
+    resolves URIs with net/url, would reach another schema than RFC 3986
+    names: a base with no authority, an opaque path with dot segments, a
+    reference beginning `//`. The comparison runs with the library's own
+    net/url, whose results differ between Go releases.
+  - Encoding walks the model's own types and structs a schema holds, so an
+    operation holding itself returns an error instead of exhausting the
+    stack, and invalid UTF-8 in such a struct is refused. A value holding one
+    container many times is checked once through it, not through every path.
+  - The pattern checker compares quantifier bounds, backreferences, and
+    Unicode escapes as digit strings, in time proportional to their length.
+  - The JSON Schema Test Suite check allows no verdict only for the cause the
+    SDK reports, and runs each schema holding no same-document reference in
+    the document resource as well.
   - A host value or object that holds itself returns an error instead of
     exhausting the stack. Dynamic references to many anchors of one name,
     references to a URI many schemas declare, `$id`s of many dot segments,

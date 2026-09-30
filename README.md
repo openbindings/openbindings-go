@@ -68,16 +68,19 @@ expressions with Unicode semantics, Unicode property escapes, backreferences to
 a group inside a quantified atom, patterns nesting groups deeper than 256
 levels, pattern matches that exceed `schemacompiler.PatternMatchTimeout`,
 relevant numbers beyond its limits, counts beyond `math.MaxInt`, references
-that are not URI-references, non-advancing reference cycles (including one a
+that are not URI-references, references the schema library resolves (with
+net/url) to another URI than RFC 3986 gives, non-advancing reference cycles
+(including one a
 `$dynamicRef` closes at run time), a `$dynamicRef` when the document resource
 declares a `$dynamicAnchor`, whose dynamic scope the SDK's bundle does not
 reproduce, and a reference into a JSON Schema meta-schema's interior, or to a
-whole one when the document declares a `$dynamicAnchor` named `meta`. Before
-evaluating a value, validation counts the schema applications the graph can
-make on it, which the schema library does not bound: past 4,194,304 (2^22)
-it reaches no verdict, so a small graph that applies a schema twice at each
-of many levels cannot run for hours. The schema library's own compile takes
-time that grows faster than the number of schemas a graph uses. An
+whole one when the document declares a `$dynamicAnchor` named `meta`. The
+SDK does not bound the time or memory evaluation takes: that is the schema
+library's, and grows with the value and the schema graph, as in any JSON
+Schema validator (a graph that applies a schema twice at each of many levels
+does work exponential in their number), so an application validating large
+or untrusted values bounds them itself. The schema library's own compile
+takes time that grows faster than the number of schemas a graph uses. An
 inconclusive rule or unavailable graph is never reported as success or
 unqualified conformance. The Core corpus does not exercise every behavior in
 OBI-T-01: the exact kind comparison has direct Go tests, while Core has no

@@ -56,6 +56,17 @@ func TestCheckUnicodePattern_Limits(t *testing.T) {
 	if err := checkUnicodePattern(nested(maxPatternNesting + 1)); !errors.Is(err, errPatternNesting) {
 		t.Fatalf("nesting past the limit: %v", err)
 	}
+	// Numbers compare as digit strings, whatever their length.
+	for pattern, valid := range map[string]bool{
+		`a{9,10}`: true, `a{10,9}`: false, `a{0010,9}`: false, `a{0009,0010}`: true,
+		`\u{0000041}`: true, `\u{10FFFF}`: true, `\u{110000}`: false, `\u{0000000110000}`: false,
+		`(a)\1`: true, `(a)\0001`: false, `(a)\100000000000000000000000000`: false,
+		"a{" + strings.Repeat("9", 200000) + "}": true,
+	} {
+		if err := checkUnicodePattern(pattern); (err == nil) != valid {
+			t.Errorf("%.40q: %v, want valid %v", pattern, err, valid)
+		}
+	}
 	// Many quantified groups beside one another, each marking itself.
 	wide := strings.Repeat("(a)*", 200000) + `\1`
 	start := time.Now()

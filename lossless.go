@@ -364,12 +364,15 @@ func verifyStrings(typed any, lossless LosslessFields) error {
 // invalidUTF8 reports where, below a value, a string or map key holds invalid
 // UTF-8, or a container holds itself, as the reference tokens from the value,
 // last first, and what is wrong: the path is spelled out only when one is
-// found. It does not descend into a value that encodes itself (an OBI-defined
-// object, or raw JSON, which encodeObject verifies as written). open holds
-// the containers being walked, a cycle among which would never end.
+// found. It walks structs as encoding/json writes them, by their exported
+// fields, and does not descend into a value that encodes itself (raw JSON,
+// which encodeObject verifies as written) unless this package defines it:
+// an OBI-defined object encodes with a walk of its own, which would begin with
+// nothing open and so never see a cycle through it. open holds the containers
+// being walked, a cycle among which would never end.
 func invalidUTF8(v reflect.Value, open map[heldValue]bool) ([]string, string) {
 	const invalid = "invalid UTF-8, which would not encode as held"
-	if !v.IsValid() || (v.Kind() != reflect.Interface && v.Type().Implements(marshalerType)) {
+	if !v.IsValid() || (v.Kind() != reflect.Interface && v.Type().Implements(marshalerType) && !ownType(v.Type())) {
 		return nil, ""
 	}
 	if held, isContainer := heldBy(v); isContainer {
@@ -406,8 +409,37 @@ func invalidUTF8(v reflect.Value, open map[heldValue]bool) ([]string, string) {
 				return append(below, key.String()), problem
 			}
 		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			field := v.Type().Field(i)
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if !field.IsExported() || name == "-" {
+				continue
+			}
+			if name == "" {
+				name = field.Name
+			}
+			if below, problem := invalidUTF8(v.Field(i), open); problem != "" {
+				if field.Anonymous {
+					return below, problem
+				}
+				return append(below, name), problem
+			}
+		}
 	}
 	return nil, ""
+}
+
+// modelPackage is this package's import path.
+var modelPackage = reflect.TypeFor[Interface]().PkgPath()
+
+// ownType reports whether a type, or the type it points to, is defined by this
+// package.
+func ownType(t reflect.Type) bool {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.PkgPath() == modelPackage
 }
 
 // heldValue identifies what a pointer, a map, or a non-empty slice refers to.

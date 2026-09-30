@@ -408,12 +408,23 @@ func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 
 // Encoding refuses a model it could not write as held: a string or name
 // holding invalid UTF-8, which encoding/json would replace with U+FFFD (two
-// keys could even become one name); a member name both Extensions and Unknown
-// hold; and raw JSON in a schema that decoding would refuse. Validate returns
+// keys could even become one name), in a struct a schema holds too; a value
+// that holds itself, through the model's own types as well; a member name
+// both Extensions and Unknown hold; and raw JSON in a schema that decoding
+// would refuse. Validate returns
 // the encoding error, never a report on another document.
 func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 	text := func(s string) *string { return &s }
+	selfHolding := Operation{}
+	selfHolding.Input = &selfHolding
+	type schemaStruct struct {
+		Type  string `json:"type"`
+		Title string `json:"title"`
+	}
 	for name, iface := range map[string]Interface{
+		"an operation holding itself": {OpenBindings: "0.2.0", Operations: map[string]Operation{"op": selfHolding}},
+		"invalid UTF-8 in a schema held as a struct": {OpenBindings: "0.2.0", Operations: map[string]Operation{
+			"op": {Input: schemaStruct{Type: "string", Title: "caf\xff"}}}},
 		"invalid UTF-8 in a typed string":    {OpenBindings: "0.2.0", Description: text("caf\xff")},
 		"a lone surrogate in a typed string": {OpenBindings: "0.2.0", Name: text("\xed\xa0\x80")},
 		"operation keys that would become one name": {OpenBindings: "0.2.0", Operations: map[string]Operation{

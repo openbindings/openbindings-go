@@ -8,29 +8,9 @@ import (
 	"time"
 )
 
-// A small acyclic graph that applies a schema twice at each level would have
-// the library apply it 2^n times: validation reaches no verdict, a resource
-// limit met, and says so at once.
-func TestValidate_EvaluationBudget(t *testing.T) {
-	var b strings.Builder
-	b.WriteString(`{"openbindings":"0.2.0","schemas":{"S0":true`)
-	for i := 1; i <= 40; i++ {
-		fmt.Fprintf(&b, `,"S%d":{"allOf":[{"$ref":"#/schemas/S%d"},{"$ref":"#/schemas/S%d"}]}`, i, i-1, i-1)
-	}
-	b.WriteString(`},"operations":{"op":{"input":{"$ref":"#/schemas/S40"}}}}`)
-	start := time.Now()
-	err := ValidateOperationInput(json.Number("0"), mustDecodeInterface(t, b.String()), "op")
-	if outcome(err) != "unavailable" || !strings.Contains(err.Error(), "resource limit") {
-		t.Fatalf("want the evaluation budget met, got %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("finding the budget met took %v", elapsed)
-	}
-}
-
-// The budget counts the one place a $dynamicRef lands and the one branch of
-// an if that applies, so recursive schemas and large values are evaluated.
-func TestValidate_EvaluationBudgetAdmitsOrdinaryWork(t *testing.T) {
+// Recursive schemas over deep values, large values, and deep chains of
+// conditionals are evaluated.
+func TestValidate_OrdinaryRecursionAndSize(t *testing.T) {
 	tree := `{"openbindings":"0.2.0","schemas":{
 		"Tree":{"$id":"https://e.example/tree","$dynamicAnchor":"node","type":"object","properties":{"data":true,"children":{"type":"array","items":{"$dynamicRef":"#node"}}}},
 		"Strict":{"$id":"https://e.example/strict","$dynamicAnchor":"node","$ref":"tree","unevaluatedProperties":false}},
@@ -62,6 +42,24 @@ func TestValidate_EvaluationBudgetAdmitsOrdinaryWork(t *testing.T) {
 	branches.WriteString(`},"operations":{"op":{"input":{"$ref":"#/schemas/B40"}}}}`)
 	if got := inputOutcome(t, branches.String(), json.Number("1")); got != "valid" {
 		t.Errorf("40 levels of if, then, and else: %s", got)
+	}
+}
+
+// A value may hold one container many times; the checks before evaluation
+// walk it once, so a value of 60 levels, each holding the level below twice,
+// is checked at once rather than through its 2^60 paths.
+func TestValidate_SharedValueParts(t *testing.T) {
+	var value any = json.Number("1e99999")
+	for range 60 {
+		value = []any{value, value}
+	}
+	document := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":true}}}`)
+	start := time.Now()
+	if got := outcome(ValidateOperationInput(value, document, "op")); got != "valid" {
+		t.Fatalf("got %s", got)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("checking a shared value took %v", elapsed)
 	}
 }
 

@@ -67,6 +67,11 @@ type schemaResource struct {
 	// ("" or "#") resolves to its base, a URI the schema enclosing it already
 	// has.
 	uri *url.URL
+	// libraryURI is the URL the schema library gives the resource, which
+	// resolves its $id with net/url against its own URL for the enclosing
+	// resource (libraryJoin), or "" when it gives none. diverges states how
+	// the two differ when the library's URL is not uri, or is "".
+	libraryURI, diverges string
 	// anchors maps each plain-name anchor the resource declares to where the
 	// schema declaring it sits, once per declaration, by $anchor or
 	// $dynamicAnchor, in document order, spelled out only when used: JSON
@@ -107,13 +112,18 @@ func collectDocumentSchemas(view any) documentSchemas {
 				d.identifiers[identifier] = append(d.identifiers[identifier], at)
 			}
 			var base *url.URL
+			libraryBase := bundleURI
 			if resource != nil {
-				base = resource.uri
+				base, libraryBase = resource.uri, resource.libraryURI
 			}
 			location := at.from(nil)
 			resource = &schemaResource{location: location, schema: object, anchors: map[string][]*pathNode{}}
 			if isString {
 				resource.uri = resolveID(raw, base)
+				resource.libraryURI, _ = libraryJoin(libraryBase, raw)
+				if resource.uri != nil && resource.libraryURI != resource.uri.String() {
+					resource.diverges = fmt.Sprintf("its $id %q resolves to %s by RFC 3986 and to %q in the schema library", raw, resource.uri, resource.libraryURI)
+				}
 			}
 			d.at[location] = resource
 			if resource.uri != nil {
@@ -261,6 +271,30 @@ func resolveID(raw string, base *url.URL) *url.URL {
 	}
 	parsed.Fragment, parsed.RawFragment = "", ""
 	return parsed
+}
+
+// libraryJoin resolves a reference against a base URL as the schema library
+// does (santhosh-tekuri/jsonschema's url.join): the reference's fragment
+// split off at its first #, the rest resolved with net/url's
+// ResolveReference, and a relative reference against an opaque base keeping
+// that base's opaque part. It returns the URL without fragment, or false when
+// net/url does not parse the base or the reference, where the library would
+// report an error.
+func libraryJoin(base, ref string) (string, bool) {
+	parsedBase, err := url.Parse(base)
+	if err != nil {
+		return "", false
+	}
+	ref, _, _ = strings.Cut(ref, "#")
+	parsedRef, err := url.Parse(ref)
+	if err != nil {
+		return "", false
+	}
+	resolved := parsedBase.ResolveReference(parsedRef)
+	if !parsedRef.IsAbs() && parsedBase.Opaque != "" {
+		resolved.Opaque = parsedBase.Opaque
+	}
+	return resolved.String(), true
 }
 
 // resolveURI resolves ref against base, which may be nil when ref is
