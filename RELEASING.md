@@ -71,6 +71,13 @@ release's CHANGELOG entry states the result.
 | The text named | Met. |
 | Parity | Not met: see `IMPLEMENTATION_PARITY.md`. |
 
+Peer ranking (2026-09-30, at aa158a9, two reviewers): 2nd and 3rd of 6,
+behind smithy-model (and protocompile, for one reviewer), ahead of gqlparser,
+libopenapi, and kin-openapi. Strongest on fidelity, validation rigor,
+conformance evidence, and scope; weakest on diagnostics (no source
+positions; OBI-D-02 map-key findings mislocated by the pinned JSON Schema
+library) and documentation.
+
 ## Changelog
 
 - The root `CHANGELOG.md` covers the module.
