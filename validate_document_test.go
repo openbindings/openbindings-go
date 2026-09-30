@@ -197,7 +197,7 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesD01(t *testing.T) {
 // Value validation reaches a verdict only where the document's own schemas
 // decide it (OBI-T-08): a graph reaching a resource the document does not
 // embed, or a reference that resolves nowhere, reaches none.
-func TestValidateOperationInput_Scope(t *testing.T) {
+func TestInputContract_Scope(t *testing.T) {
 	for name, tc := range map[string]struct{ document, want string }{
 		"a graph reaching an external resource": {`{"openbindings":"0.2.0","operations":{"a":{"input":{"$ref":"https://schemas.example.com/task.json"}}}}`, "no verdict"},
 		"an unrelated external reference": {`{"openbindings":"0.2.0",
@@ -376,7 +376,7 @@ func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 
 // Value validation follows an absolute reference with a fragment into a
 // resource the document embeds.
-func TestValidateOperationInput_ThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
+func TestInputContract_ThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
 	document := `{"openbindings":"0.2.0",
 		"schemas":{"T":{"$id":"https://example.com/t","$defs":{"S":{"type":"string"}}}},
 		"operations":{"a":{"input":{"$ref":"https://example.com/t#/$defs/S"}}}}`
@@ -456,7 +456,7 @@ func TestValidateDocument_ReferenceCyclesTerminate(t *testing.T) {
 // unreferenced definition is not part of it, a plain-name anchor inside an
 // embedded resource resolves, and a graph reaching an $id more than one schema
 // declares reaches no verdict.
-func TestValidateOperationInput_GraphIsWhatEvaluationApplies(t *testing.T) {
+func TestInputContract_GraphIsWhatEvaluationApplies(t *testing.T) {
 	for name, document := range map[string]string{
 		"unreferenced external definition": `{"openbindings":"0.2.0","operations":{"op":{
 			"input":{"type":"string","$defs":{"dead":{"$ref":"https://outside.example/x"}}}}}}`,

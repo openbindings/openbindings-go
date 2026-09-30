@@ -65,9 +65,8 @@ func init() {
 // SupportedVersions. A release of the supported line is supported whatever
 // its patch version, a prerelease only when it is named explicitly, and
 // build metadata is ignored (§8.1). Of well-formed versions, ParseDocument,
-// ValidateDocument, Interface.Validate, CompileOperationSchema,
-// ValidateOperationInput, and ValidateOperationOutput refuse exactly those it
-// reports false for.
+// ValidateDocument, Interface.Validate, and ValueContractCompiler.Resolve
+// refuse exactly those it reports false for.
 //
 // A malformed (non-SemVer) v is no version at all: IsSupportedVersion
 // returns false and a parse error, while validation reports such a document
