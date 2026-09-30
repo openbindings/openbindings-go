@@ -1,7 +1,7 @@
 # Go/TypeScript implementation parity
 
 OpenBindings 0.2.0 treats the Go and TypeScript SDKs as two idiomatic
-implementations of one observable contract. They run the same core
+implementations of one observable behavior. They run the same core
 conformance corpus. The checked-in
 [`reference-sdk-correspondence.json`](../spec/conformance/reference-sdk-correspondence.json)
 also guards the public role and family correspondence.
@@ -66,7 +66,7 @@ each of these observable behaviors:
 - **Rules over the document's JSON.** Every document rule is judged on the
   document's JSON, never its typed decoding, and literally on the values
   present; a resource limit is inconclusive, never a violation.
-- **Operation-contract validation.** The OBI root is the resolution context,
+- **Value-contract validation.** The OBI root is the resolution context,
   not a schema. A claimed value result follows the applicable JSON Schema
   dialect; a missing capability or resource yields no verdict. Go currently
   uses an eager compiler, so it can return no verdict for a graph containing

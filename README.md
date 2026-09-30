@@ -2,7 +2,7 @@
 
 The core [OpenBindings](https://openbindings.com) SDK for Go: the OBI document
 model, its document rules and conformance report, operation resolution, and
-validation of values against operation contracts, as the core specification
+validation of values against value contracts, as the core specification
 defines them.
 
 OpenBindings is an open standard. **One interface. Any binding.** Describe
@@ -42,7 +42,7 @@ is OBI-D-09, from the declared version. The other rules are inconclusive. Both r
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
-OBI-D-02 and OBI-D-10, and validation of values against operation contracts
+OBI-D-02 and OBI-D-10, and validation of values against value contracts
 (OBI-T-08), use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
 embedded at build time. No document rule evaluates a value against the
@@ -61,7 +61,7 @@ point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
 
 **Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
 than the JSON decoder's 10,000-level limit prevents full document inspection.
-OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Contract
+OBI-D-10 leaves subschemas beyond 256 levels inconclusive. Value-contract
 validation reports schema graph unavailability for schemas the evaluator
 cannot safely evaluate, including patterns that are not ECMA-262 regular
 expressions with Unicode semantics, Unicode property escapes, backreferences to
@@ -135,7 +135,7 @@ go get github.com/openbindings/openbindings-go
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
 - **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names), and a violation gate for acting on documents
 - **Operation resolution** by key or alias (`ResolveOperation`)
-- **Optional operation-contract validation** of values against an operation's input or output schema under JSON Schema semantics (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values. The eager compiler can return an unavailable result when it cannot establish a verdict; this is an SDK implementation limit, not a document rule or a requirement for other tools
+- **Optional value-contract validation** of values against the input or output contract an operation's schema states, under JSON Schema semantics (§7, OBI-T-08): `ValidateOperationInput`, `ValidateOperationOutput`, and `CompileOperationSchema` to compile once and validate many values. The eager compiler can return an unavailable result when it cannot establish a verdict; this is an SDK implementation limit, not a document rule or a requirement for other tools
 
 ## Quick start
 
@@ -179,7 +179,7 @@ operation := iface.Operations[dependency.Operation]
 fmt.Println(dependency.Operation, dependency.Kinds, openbindings.Value(operation.Description))
 ```
 
-### Validate a value against an operation contract
+### Validate a value against a value contract
 
 ```go
 // A nil error means the value validates. A *SchemaValidationError is an
