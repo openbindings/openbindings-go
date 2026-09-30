@@ -34,6 +34,17 @@ var errNumericLimit = errors.New("a number beyond the numeric limits of schema e
 // ("" for v itself) and errNumericLimit. It returns a nil error when v holds
 // none. Only a json.Number can exceed them; Go's numeric types cannot.
 func NumericLimit(v any) (location string, err error) {
+	return numericLimit(v, map[container]bool{})
+}
+
+// numericLimit is NumericLimit, with within recording the containers found to
+// hold no number beyond the limits, so a value sharing its parts is walked
+// through each once.
+func numericLimit(v any, within map[container]bool) (string, error) {
+	held, isContainer := containerOf(v)
+	if isContainer && within[held] {
+		return "", nil
+	}
 	switch v := v.(type) {
 	case json.Number:
 		if !withinNumericLimits(string(v)) {
@@ -41,16 +52,19 @@ func NumericLimit(v any) (location string, err error) {
 		}
 	case []any:
 		for i, item := range v {
-			if location, err := NumericLimit(item); err != nil {
+			if location, err := numericLimit(item, within); err != nil {
 				return jsonpointer.Format(fmt.Sprint(i)) + location, err
 			}
 		}
 	case map[string]any:
 		for _, key := range slices.Sorted(maps.Keys(v)) {
-			if location, err := NumericLimit(v[key]); err != nil {
+			if location, err := numericLimit(v[key], within); err != nil {
 				return jsonpointer.Format(key) + location, err
 			}
 		}
+	}
+	if isContainer {
+		within[held] = true
 	}
 	return "", nil
 }
@@ -106,8 +120,11 @@ func Substitute(v any) Substitution {
 	s := Substitution{standsFor: map[string]string{}}
 	chosen := map[string]json.Number{}
 	fresh := 0
+	// copies holds the copy made of each container, so a value sharing its
+	// parts shares their copies and is copied through each once.
+	copies := map[container]any{}
 	var substitute func(v any) any
-	substitute = func(v any) any {
+	substituteOne := func(v any) any {
 		switch v := v.(type) {
 		case json.Number:
 			if withinNumericLimits(string(v)) {
@@ -156,6 +173,17 @@ func Substitute(v any) Substitution {
 		}
 		return v
 	}
+	substitute = func(v any) any {
+		held, isContainer := containerOf(v)
+		if copied, done := copies[held]; isContainer && done {
+			return copied
+		}
+		out := substituteOne(v)
+		if isContainer {
+			copies[held] = out
+		}
+		return out
+	}
 	s.Value = substitute(v)
 	return s
 }
@@ -164,6 +192,18 @@ func Substitute(v any) Substitution {
 // ValueProblem accepts, spelled as the schema library reads it: a Go number by
 // fmt.Sprint, whose spelling of a finite float is a JSON number.
 func forEachNumber(v any, fn func(json.Number)) {
+	visitNumbers(v, fn, map[container]bool{})
+}
+
+// visitNumbers is forEachNumber, with visited recording the containers
+// walked, so a value sharing its parts is walked through each once.
+func visitNumbers(v any, fn func(json.Number), visited map[container]bool) {
+	if held, isContainer := containerOf(v); isContainer {
+		if visited[held] {
+			return
+		}
+		visited[held] = true
+	}
 	switch v := v.(type) {
 	case json.Number:
 		fn(v)
@@ -171,11 +211,11 @@ func forEachNumber(v any, fn func(json.Number)) {
 		fn(json.Number(fmt.Sprint(v)))
 	case []any:
 		for _, item := range v {
-			forEachNumber(item, fn)
+			visitNumbers(item, fn, visited)
 		}
 	case map[string]any:
 		for _, member := range v {
-			forEachNumber(member, fn)
+			visitNumbers(member, fn, visited)
 		}
 	}
 }

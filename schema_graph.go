@@ -114,29 +114,13 @@ type schemaNode struct {
 	// to what applies to property names, and to what applies to a member or
 	// item.
 	inPlaceTo, propertyNamesTo, advancingTo []string
-	// choiceOf marks each in-place edge that belongs to a group of which one
-	// alone applies, by the group's number, or is -1 for an edge that always
-	// applies: then and else, and the places a $dynamicRef may land.
-	choiceOf []int
-	// advanceBy says which members or items each advancing edge applies to.
-	advanceBy []advance
 	// The same, linked: edges is all of them.
-	edges, inPlace, propertyNames, advancing []int
-	dynamicRef                               bool
-	// meta is whether the schema references a meta-schema the library
-	// carries, which applies to the whole value (see evaluationBudget).
-	meta bool
+	edges, inPlace, propertyNames []int
+	dynamicRef                    bool
 	// hub is whether the node stands for every schema declaring one name as
 	// a $dynamicAnchor rather than for a schema.
 	hub   bool
 	local graphFacts
-}
-
-// advance is which members or items an advancing edge applies to: every
-// one, or the one a key names (a property name, or an item's index).
-type advance struct {
-	items, every bool
-	key          string
 }
 
 // hubRoot is a hub's root, and hubPrefix marks an edge to a hub: the node
@@ -219,8 +203,8 @@ func (o *operationSchemas) analyze(starts []string) {
 	}
 	for i := range g.nodes {
 		n := &g.nodes[i]
-		n.inPlace, n.propertyNames, n.advancing = ids(n.root, n.inPlaceTo), ids(n.root, n.propertyNamesTo), ids(n.root, n.advancingTo)
-		n.edges = slices.Concat(n.inPlace, n.propertyNames, n.advancing)
+		n.inPlace, n.propertyNames = ids(n.root, n.inPlaceTo), ids(n.root, n.propertyNamesTo)
+		n.edges = slices.Concat(n.inPlace, n.propertyNames, ids(n.root, n.advancingTo))
 		n.inPlaceTo, n.propertyNamesTo, n.advancingTo = nil, nil, nil
 	}
 
@@ -342,27 +326,23 @@ func (o *operationSchemas) examine(at, root string) schemaNode {
 			node.local.problem = fmt.Sprintf("the schema at %s is not at a schema position, and it declares %s, which only a schema position declares; define it in schemas to use it", at, keyword)
 		}
 	}
-	groups := 0
 	for _, keyword := range []string{"$ref", "$dynamicRef"} {
 		ref, isString := object[keyword].(string)
 		if !isString {
 			continue
 		}
-		// A $dynamicRef lands in one place: its static target, or a schema
-		// declaring its name as a $dynamicAnchor, through the hub.
-		choice := -1
+		// A $dynamicRef may land on its static target, or, through the hub,
+		// on any schema declaring its name as a $dynamicAnchor.
 		if keyword == "$dynamicRef" {
 			node.dynamicRef, node.local.dynamicRef = true, true
-			choice, groups = groups, groups+1
 			if name := plainName(ref); len(o.schemas.dynamicAnchors[name]) > 0 {
-				node.inPlaceTo, node.choiceOf = append(node.inPlaceTo, hubPrefix+name), append(node.choiceOf, choice)
+				node.inPlaceTo = append(node.inPlaceTo, hubPrefix+name)
 			}
 		}
 		switch target := o.schemas.resolve(ref, at, o.view); target.origin {
 		case inDocument:
-			node.inPlaceTo, node.choiceOf = append(node.inPlaceTo, target.location), append(node.choiceOf, choice)
+			node.inPlaceTo = append(node.inPlaceTo, target.location)
 		case inMetaSchema:
-			node.meta = true
 			node.local.metaSchema = firstOf(node.local.metaSchema, target.uri)
 		case outside:
 			node.local.outside = firstOf(node.local.outside, target.uri)
@@ -370,8 +350,6 @@ func (o *operationSchemas) examine(at, root string) schemaNode {
 			node.local.problem = firstOf(node.local.problem, fmt.Sprintf("the %s %q at %s %s", keyword, ref, at, target.why))
 		}
 	}
-	// Then and else: one alone applies.
-	branch := groups
 	forEachSubschema(object, func(_ any, tokens ...string) {
 		keyword := tokens[0]
 		if keyword == "$defs" || keyword == "contentSchema" {
@@ -384,43 +362,22 @@ func (o *operationSchemas) examine(at, root string) schemaNode {
 		}
 		child := at + jsonpointer.Format(tokens...)
 		switch {
-		case keyword == "then" || keyword == "else":
-			node.inPlaceTo, node.choiceOf = append(node.inPlaceTo, child), append(node.choiceOf, branch)
 		case inPlaceKeywords[keyword]:
-			node.inPlaceTo, node.choiceOf = append(node.inPlaceTo, child), append(node.choiceOf, -1)
+			node.inPlaceTo = append(node.inPlaceTo, child)
 		case keyword == "propertyNames":
 			node.propertyNamesTo = append(node.propertyNamesTo, child)
 		default:
 			node.advancingTo = append(node.advancingTo, child)
-			node.advanceBy = append(node.advanceBy, advanceOf(tokens))
 		}
 	})
 	return node
-}
-
-// advanceOf returns which members or items the subschema at the keyword
-// tokens name applies to.
-func advanceOf(tokens []string) advance {
-	switch tokens[0] {
-	case "properties":
-		return advance{key: tokens[1]}
-	case "prefixItems":
-		return advance{items: true, key: tokens[1]}
-	case "items", "contains", "unevaluatedItems":
-		return advance{items: true, every: true}
-	}
-	// patternProperties, additionalProperties, unevaluatedProperties: which
-	// members they apply to depends on the names, so every one counts.
-	return advance{every: true}
 }
 
 // hub returns the hub node for a $dynamicAnchor name: in place to every
 // schema declaring it, of which a landing reaches one.
 func (o *operationSchemas) hub(name string) schemaNode {
 	node := schemaNode{location: name, root: hubRoot, hub: true}
-	for _, at := range o.schemas.dynamicAnchors[name] {
-		node.inPlaceTo, node.choiceOf = append(node.inPlaceTo, at), append(node.choiceOf, 0)
-	}
+	node.inPlaceTo = append(node.inPlaceTo, o.schemas.dynamicAnchors[name]...)
 	return node
 }
 

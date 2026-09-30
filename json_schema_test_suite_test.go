@@ -69,29 +69,39 @@ func TestJSONSchemaTestSuite(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, group := range groups {
-			iface := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":`+string(asResource(t, group.Schema))+`}}}`)
+			// Each schema runs as a resource of its own. One holding no
+			// same-document reference runs as the document resource's too,
+			// where no $id is added and the bundle rewrites nothing.
+			embeddings := map[string]json.RawMessage{"as a resource": asResource(t, group.Schema)}
+			if !strings.Contains(string(group.Schema), `"#`) && !strings.Contains(string(group.Schema), `"$id"`) {
+				embeddings["in the document resource"] = group.Schema
+			}
 			standalone := compileStandalone(t, group.Schema)
-			for _, test := range group.Tests {
-				cases++
-				name := relative + ": " + group.Description + ": " + test.Description
-				value := decodeValue(t, test.Data)
-				ours := outcome(ValidateOperationInput(value, iface, "op"))
-				want := map[bool]string{true: "valid", false: "mismatch"}[test.Valid]
-				library := "unavailable"
-				if standalone != nil {
-					library = outcome(schemaValidationError(standalone.Validate(decodeLibraryValue(t, test.Data)), schemacompiler.Substitution{}))
-				}
-				switch {
-				case ours == "unavailable":
-					reason := suiteNoVerdict(relative, string(group.Schema))
-					if reason == "" {
-						t.Errorf("%s: no verdict, for no reason the suite test allows", name)
+			for embedding, schema := range embeddings {
+				iface := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"input":`+string(schema)+`}}}`)
+				for _, test := range group.Tests {
+					cases++
+					name := relative + ": " + group.Description + ": " + test.Description + " (" + embedding + ")"
+					value := decodeValue(t, test.Data)
+					err := ValidateOperationInput(value, iface, "op")
+					ours := outcome(err)
+					want := map[bool]string{true: "valid", false: "mismatch"}[test.Valid]
+					library := "unavailable"
+					if standalone != nil {
+						library = outcome(schemaValidationError(standalone.Validate(decodeLibraryValue(t, test.Data)), schemacompiler.Substitution{}))
 					}
-					refused[reason]++
-				case ours == want:
-					agreed++
-				default:
-					t.Errorf("%s: got %s; the suite says %s, the library alone %s", name, ours, want, library)
+					switch {
+					case ours == "unavailable":
+						reason := suiteNoVerdict(relative, err.Error())
+						if reason == "" {
+							t.Errorf("%s: no verdict, for no reason the suite test allows: %v", name, err)
+						}
+						refused[reason]++
+					case ours == want:
+						agreed++
+					default:
+						t.Errorf("%s: got %s; the suite says %s, the library alone %s", name, ours, want, library)
+					}
 				}
 			}
 		}
@@ -106,19 +116,20 @@ var suiteExcluded = map[string]string{
 	"optional/dependencies-compatibility.json": "these evaluate dependencies, which strict 2020-12 does not define, so it constrains nothing",
 }
 
-// suiteNoVerdict returns why a suite case may reach no verdict, or "" when it
-// may not: its schema references one of the suite's remote schemas, which no
-// document here embeds; holds a Unicode property escape, which this SDK does
-// not evaluate; or references a value under a keyword that holds no schema,
-// which evaluation does not reach (the maintainer's open question on
-// identity keywords in unknown members).
-func suiteNoVerdict(file, schema string) string {
+// suiteNoVerdict returns the reason a suite case may reach no verdict, read
+// from the cause the SDK gives, or "" when none allows it: the graph reaches
+// one of the suite's remote schemas, or names one as its dialect, which no
+// document here embeds; a pattern holds a Unicode property escape, which this
+// SDK does not evaluate; or, in the file that tests it, a reference names a
+// value under a keyword that holds no schema, which evaluation does not reach
+// (the maintainer's open question on identity keywords in unknown members).
+func suiteNoVerdict(file, cause string) string {
 	switch {
-	case strings.Contains(schema, "localhost:1234"):
+	case strings.Contains(cause, "http://localhost:1234/") && (strings.Contains(cause, "which the document does not embed") || strings.Contains(cause, "declares $schema")):
 		return "remote schema"
-	case strings.Contains(schema, `\\p{`) || strings.Contains(schema, `\\P{`):
+	case strings.Contains(cause, "Unicode property escape"):
 		return "Unicode property escape"
-	case file == "optional/refOfUnknownKeyword.json":
+	case file == "optional/refOfUnknownKeyword.json" && strings.Contains(cause, "is not a schema position"):
 		return "reference to no schema position"
 	}
 	return ""

@@ -307,17 +307,11 @@ func (o *operationSchemas) rootProblem(at string) string {
 		}
 		return true
 	})
-	resources := o.resourcesIn[at]
-	if resource := o.schemas.resourceAt(at); resource != nil && resource.location != at {
-		// A root within a resource resolves its references against it.
-		resources = append(slices.Clip(resources), &schemaResource{location: at, uri: resource.uri, schema: asObject(value)})
-	}
-	for _, resource := range resources {
-		if resource.uri == nil || resource.uri.Opaque == "" {
-			continue
-		}
-		if relative := relativeReference(resource.schema, resource.location); relative != "" {
-			problems = append(problems, fmt.Sprintf("the schema at %s declares %s, whose path is not hierarchical, and holds the relative reference %s, which the schema library resolves differently from RFC 3986", resource.location, resource.uri, relative))
+	for _, resource := range o.resourcesIn[at] {
+		if resource.diverges != "" {
+			// The library would give the resource another URL than the one
+			// RFC 3986 gives it, so references would reach other schemas.
+			problems = append(problems, fmt.Sprintf("the schema at %s declares a resource the schema library identifies differently: %s", resource.location, resource.diverges))
 		}
 	}
 	if len(problems) == 0 {
@@ -465,31 +459,6 @@ func holdsNumber(value any) bool {
 func asObject(value any) map[string]any {
 	object, _ := value.(map[string]any)
 	return object
-}
-
-// relativeReference returns the first reference or nested $id the schemas of
-// a resource hold that is relative and not a bare fragment, or "".
-func relativeReference(resource map[string]any, at string) string {
-	var found []string
-	walkSchemaObjects(resource, func(object map[string]any, path []string) bool {
-		for _, keyword := range []string{"$ref", "$dynamicRef", "$id"} {
-			if keyword == "$id" && len(path) == 0 {
-				continue
-			}
-			value, ok := object[keyword].(string)
-			if !ok || strings.HasPrefix(value, "#") {
-				continue
-			}
-			if parsed, err := url.Parse(value); err == nil && !parsed.IsAbs() {
-				found = append(found, fmt.Sprintf("%q at %s", value, at+jsonpointer.Format(path...)))
-			}
-		}
-		return true
-	})
-	if len(found) == 0 {
-		return ""
-	}
-	return slices.Min(found)
 }
 
 // schemaBundle is a bundle and the locations copied into it.
@@ -652,7 +621,7 @@ func (o *operationSchemas) compileAlone(start string) compiled {
 	if err != nil {
 		return compiled{err: own.describe(err)}
 	}
-	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start), cost: o.costGraph(start)}}
+	return compiled{schema: &CompiledSchema{backend: schema, comparison: o.comparison(start)}}
 }
 
 // comparison states where what the library compiles for start compares a

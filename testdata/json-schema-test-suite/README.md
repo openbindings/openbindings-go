@@ -14,7 +14,10 @@ numbers. Every file runs except two, which test what OBI-T-08 rules out:
 - optional/dependencies-compatibility.json evaluates dependencies, which
   strict 2020-12 does not define.
 
-A case may reach no verdict only when its schema references one of the
-suite's remote schemas (http://localhost:1234/...), which no document here
-embeds; holds a Unicode property escape, which the SDK does not evaluate; or
-references a value under a keyword that holds no schema.
+Each schema runs as a resource of its own, and one holding no same-document
+reference also runs in the document resource. A case may reach no verdict
+only for the cause the SDK reports: a remote schema of the suite's
+(http://localhost:1234/...), which no document here embeds; a Unicode
+property escape, which the SDK does not evaluate; or, in
+optional/refOfUnknownKeyword.json, a reference to a value under a keyword
+that holds no schema.

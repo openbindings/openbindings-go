@@ -1,9 +1,11 @@
 package schemacompiler
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
-	"math/big"
+	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -50,7 +52,7 @@ func checkUnicodePattern(pattern string) error {
 		return p.errorf("unmatched )")
 	}
 	for _, n := range p.backreferences {
-		if n.Cmp(big.NewInt(int64(p.groups))) > 0 {
+		if compareDecimal(n, strconv.Itoa(p.groups)) > 0 {
 			return fmt.Errorf("the backreference \\%s names no capturing group", n)
 		}
 	}
@@ -64,7 +66,7 @@ func checkUnicodePattern(pattern string) error {
 		p.quantified[group] += p.quantified[group-1]
 	}
 	for _, n := range p.backreferences {
-		if p.quantified[n.Int64()] > 0 {
+		if group, _ := strconv.Atoi(n); p.quantified[group] > 0 {
 			return errResetCapture
 		}
 	}
@@ -83,7 +85,7 @@ type patternParser struct {
 	// names holds every group name; declared the names met so far.
 	names, declared map[string]bool
 	// References are checked once every group is known.
-	backreferences  []*big.Int
+	backreferences  []string
 	namedReferences []string
 	// opened counts the capturing groups opened so far; groupOf numbers each
 	// named group. quantified marks the groups each quantified atom holds, a
@@ -226,7 +228,7 @@ func (p *patternParser) quantifier() error {
 		high := low
 		if p.peek(0) == ',' {
 			p.i++
-			high = nil
+			high = ""
 			if p.peek(0) != '}' {
 				if high, ok = p.digits(); !ok {
 					return p.errorf("incomplete quantifier")
@@ -237,7 +239,7 @@ func (p *patternParser) quantifier() error {
 			return p.errorf("incomplete quantifier")
 		}
 		p.i++
-		if high != nil && low.Cmp(high) > 0 {
+		if high != "" && compareDecimal(low, high) > 0 {
 			return p.errorf("numbers out of order in {} quantifier")
 		}
 	} else {
@@ -249,16 +251,30 @@ func (p *patternParser) quantifier() error {
 	return nil
 }
 
-func (p *patternParser) digits() (*big.Int, bool) {
+// digits reads a decimal number, returning its digits without leading zeros
+// ("0" for zero). Numbers are compared as digit strings (compareDecimal), so
+// one of any length costs time in proportion to it.
+func (p *patternParser) digits() (string, bool) {
 	start := p.i
 	for '0' <= p.peek(0) && p.peek(0) <= '9' {
 		p.i++
 	}
 	if p.i == start {
-		return nil, false
+		return "", false
 	}
-	n, _ := new(big.Int).SetString(string(p.src[start:p.i]), 10)
-	return n, true
+	if n := strings.TrimLeft(string(p.src[start:p.i]), "0"); n != "" {
+		return n, true
+	}
+	return "0", true
+}
+
+// compareDecimal compares two decimal numbers written without leading zeros,
+// returning -1, 0, or +1.
+func compareDecimal(a, b string) int {
+	if len(a) != len(b) {
+		return cmp.Compare(len(a), len(b))
+	}
+	return strings.Compare(a, b)
 }
 
 func (p *patternParser) group() error {
@@ -426,12 +442,13 @@ func (p *patternParser) unicodeEscapeValue() (rune, error) {
 		if p.i == start || p.peek(0) != '}' {
 			return 0, p.errorf("invalid Unicode escape")
 		}
-		value, _ := new(big.Int).SetString(string(p.src[start:p.i]), 16)
+		digits := strings.TrimLeft(string(p.src[start:p.i]), "0")
 		p.i++
-		if value.Cmp(big.NewInt(0x10FFFF)) > 0 {
+		value, err := strconv.ParseUint("0"+digits, 16, 32)
+		if len(digits) > 6 || err != nil || value > 0x10FFFF {
 			return 0, p.errorf("Unicode escape beyond U+10FFFF")
 		}
-		return rune(value.Int64()), nil
+		return rune(value), nil
 	}
 	unit, ok := p.hex4(0)
 	if !ok {
