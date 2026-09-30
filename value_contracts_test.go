@@ -318,7 +318,7 @@ func TestRefusals(t *testing.T) {
 // inside another resource fails both.
 func TestRefusals_SameDocumentLookupIsShared(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/A/properties/x"}}},"schemas":{"A":{"$id":"https://ex.test/a","properties":{"x":{"$id":"https://ex.test/b"}}}}}`
-	if _, report, _ := ValidateDocument([]byte(document), ValidateOptions{}); !slices.Contains(report.Violated, "OBI-D-12") {
+	if _, report, _ := ValidateDocument([]byte(document)); !slices.Contains(report.Violated, "OBI-D-12") {
 		t.Errorf("OBI-D-12 passes the reference: %+v", report.Findings)
 	}
 	if refusal := refusalOf(t, document, "op"); !errors.Is(refusal, ErrUndefined) {

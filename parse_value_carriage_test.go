@@ -9,7 +9,7 @@ import (
 func TestPublicDocumentReadersRetainNumbers(t *testing.T) {
 	for _, token := range []string{"9007199254740993", "0.10000000000000000001", "1e400", "1e-400"} {
 		validate := func(data []byte) (*Interface, error) {
-			iface, _, err := ValidateDocument(data, ValidateOptions{})
+			iface, _, err := ValidateDocument(data)
 			return iface, err
 		}
 		for name, read := range map[string]func([]byte) (*Interface, error){"parse": ParseDocument, "validate": validate} {

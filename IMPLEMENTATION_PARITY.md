@@ -53,7 +53,7 @@ Go first; TypeScript alignment is pending for each of these:
   (`openbindingstest/testdata/json-schema-test-suite/README.md`).
 
 Document validation reports the core's §10.4 conformance conclusion in Go:
-`Interface.Validate(options)` and `ValidateDocument(data, options)` return a
+`Interface.Validate()` and `ValidateDocument(data)` return a
 `ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-09 to caller evidence through
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
@@ -78,7 +78,7 @@ each of these observable behaviors:
 
 | Concept | Go | TypeScript |
 |---|---|---|
-| validate a document, with its conformance conclusion | `Interface.Validate(options)` / `ValidateDocument(data, options)` | `validateInterface(...)` (report pending) |
+| validate a document, with its conformance conclusion | `Interface.Validate()` / `ValidateDocument(data)` | `validateInterface(...)` (report pending) |
 | apply OBI-T-09 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
 | compare a dependency's declared kind constraint | `DependencyEntry.AllowsKind(...)` | pending |
 | validate a value against a value contract, with the application's evaluator | `NewValueContractCompiler(...)`, `Resolve`, `CompileInput` / `CompileOutput`, `ValueContract.Validate` | pending |

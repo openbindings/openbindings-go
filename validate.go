@@ -14,10 +14,6 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
-// ValidateOptions configures validation. It has no fields: no document rule
-// takes a capability an application supplies (§10.2).
-type ValidateOptions struct{}
-
 // Validate checks a document already in memory against every document rule
 // this SDK can decide. It reports the per-rule evidence, the located findings,
 // and the §10.4 conformance conclusion.
@@ -32,7 +28,7 @@ type ValidateOptions struct{}
 // ValidateDocument.
 //
 // The error is a *ValidationError listing every established violation, so
-// `if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil`
+// `if _, err := iface.Validate(); err != nil`
 // gates on violations. A nil error
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
@@ -47,7 +43,7 @@ type ValidateOptions struct{}
 // object that cannot be encoded returns that error and no report, as does
 // one holding, in a member the model carries as raw JSON, bytes decoding
 // would refuse: the model encodes only what it would decode back unchanged.
-func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
+func (i Interface) Validate() (ValidationReport, error) {
 	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
 	}
@@ -56,7 +52,7 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 		return ValidationReport{}, err
 	}
 	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
-	checkDocument(&c, view, options)
+	checkDocument(&c, view)
 	return c.conclude()
 }
 
@@ -79,8 +75,7 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
 // (OBI-T-04). The version is read first, from any input that is one JSON
 // value, however deeply it nests.
-// options configures validation, as for Interface.Validate.
-func ValidateDocument(data []byte, options ValidateOptions) (*Interface, ValidationReport, error) {
+func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
@@ -113,7 +108,7 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 	if refusal := declaredVersionRefusal(view); refusal != nil {
 		return nil, ValidationReport{}, refusal
 	}
-	checkDocument(&c, view, options)
+	checkDocument(&c, view)
 	positionFindings(data, c.findings)
 	report, verr := c.conclude()
 	var iface Interface
@@ -239,7 +234,7 @@ func versionRefusalOf(version string) *VersionRefusalError {
 // document schema requires a member or a type, OBI-D-02 also reports it. No
 // rule evaluates a value against the document's schemas: an example is an
 // author claim, which no document rule checks (OBI-T-10).
-func checkDocument(c *ruleChecks, view any, options ValidateOptions) {
+func checkDocument(c *ruleChecks, view any) {
 	checkDeclaredVersion(c, view)
 	validateAgainstOBISchema(c, view)
 

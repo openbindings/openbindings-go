@@ -148,7 +148,7 @@ iface, err := openbindings.ParseDocument(data)
 if err != nil {
     log.Fatal(err)
 }
-if _, err := iface.Validate(openbindings.ValidateOptions{}); err != nil {
+if _, err := iface.Validate(); err != nil {
     log.Fatal(err)
 }
 

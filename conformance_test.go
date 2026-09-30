@@ -142,7 +142,7 @@ func runConformanceDir(t *testing.T, dir string) {
 				var report ValidationReport
 				var validateErr error
 				if parseErr == nil {
-					report, validateErr = iface.Validate(ValidateOptions{})
+					report, validateErr = iface.Validate()
 				}
 				// This validator decides every document rule the corpus
 				// exercises, so a rule a failing fixture names that comes back
@@ -259,7 +259,7 @@ func testResolveOperationScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, _, err := ValidateDocument(scenario.Given.Document, ValidateOptions{})
+	iface, _, err := ValidateDocument(scenario.Given.Document)
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -303,7 +303,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, _, err := ValidateDocument(scenario.Given.Document, ValidateOptions{})
+	iface, _, err := ValidateDocument(scenario.Given.Document)
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -348,7 +348,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, _, err := ValidateDocument(scenario.Given.Document, ValidateOptions{})
+	iface, _, err := ValidateDocument(scenario.Given.Document)
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 // document rule the fixture names recorded as violated.
 func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt conformanceTest) {
 	t.Helper()
-	_, report, err := ValidateDocument(documentBytes, ValidateOptions{})
+	_, report, err := ValidateDocument(documentBytes)
 	var refusal *VersionRefusalError
 	refused := errors.As(err, &refusal)
 	var violation *ValidationError

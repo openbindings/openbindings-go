@@ -9,7 +9,7 @@ import (
 
 func TestInterfaceValidate_RequiresOpenBindingsAndOperations(t *testing.T) {
 	i := Interface{}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -52,7 +52,7 @@ func TestInterfaceValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 		OpenBindings: "1.0.0",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for higher-major version")
 	}
@@ -68,7 +68,7 @@ func TestInterfaceValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
 		OpenBindings: "0.99.0",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for pre-1.0 higher-minor version")
 	}
@@ -83,7 +83,7 @@ func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_12(t *testing.T) {
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for invalid semver")
 	}
@@ -100,7 +100,7 @@ func TestInterfaceValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
 			"b": {Aliases: []string{"shared"}},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err == nil {
+	if _, err := i.Validate(); err == nil {
 		t.Fatalf("expected error")
 	}
 }
@@ -116,7 +116,7 @@ func TestInterfaceValidate_AliasAsContractNameIsValid(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
@@ -126,7 +126,7 @@ func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T)
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -183,7 +183,7 @@ func TestInterfaceValidate_SourceAndBindingContentAreTheKindifications(t *testin
 			"a.text":     {Operation: "a", Source: "text", Content: json.RawMessage(`["a",1,true]`)},
 		},
 	}
-	report, err := i.Validate(ValidateOptions{})
+	report, err := i.Validate()
 	if err != nil {
 		t.Fatalf("source and binding content are the binding specification's, got %v", err)
 	}
@@ -204,11 +204,11 @@ func TestInterfaceValidate_PlainNameFragments(t *testing.T) {
 			"Task": map[string]any{"$anchor": "task", "type": "object"},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("a declared plain name identifies its schema, got %v", err)
 	}
 	i.Operations["getTask"] = Operation{Output: map[string]any{"$ref": "#missing"}}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil || !strings.Contains(err.Error(), "names a plain name no schema in the document resource declares (OBI-D-12)") {
 		t.Fatalf("an undeclared plain name violates OBI-D-12, got %v", err)
 	}
@@ -225,7 +225,7 @@ func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatal("dangling same-document $ref should be rejected")
 	}
@@ -243,7 +243,7 @@ func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("percent-encoded fragment should resolve to Task, got %v", err)
 	}
 }
@@ -257,7 +257,7 @@ func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) 
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatal("dangling percent-encoded $ref should be rejected")
 	}
@@ -283,7 +283,7 @@ func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("resource-internal $ref should be out of D-16 scope, got %v", err)
 	}
 }
@@ -306,7 +306,7 @@ func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("anchor inside $id scope must be permitted, got %v", err)
 	}
 }
@@ -329,7 +329,7 @@ func TestInterfaceValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) 
 			},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("nested relative $id inside $id scope must be permitted, got %v", err)
 	}
 }
@@ -346,7 +346,7 @@ func TestInterfaceValidate_TopLevelRelativeIDRejected(t *testing.T) {
 			"Task": map[string]any{"$id": "task.schema.json", "type": "object"},
 		},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatal("relative $id at an OBI position should be rejected")
 	}
@@ -367,11 +367,11 @@ func TestInterfaceValidate_DynamicReferencesInTheDocumentResource(t *testing.T) 
 			"Node": map[string]any{"$dynamicAnchor": "node", "type": "object"},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("a $dynamicRef naming a declared $dynamicAnchor conforms, got %v", err)
 	}
 	i.Schemas = nil
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil || !strings.Contains(err.Error(), "OBI-D-12") {
 		t.Fatalf("a $dynamicRef naming nothing violates OBI-D-12, got %v", err)
 	}
@@ -401,7 +401,7 @@ func TestInterfaceValidate_DynamicPairInsideIDScopePermitted(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("dynamic pair inside $id scope must be permitted, got %v", err)
 	}
 }
@@ -422,7 +422,7 @@ func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
 			}},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("property named $dynamicRef/$dynamicAnchor must be treated as data, got %v", err)
 	}
 }
@@ -443,7 +443,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -465,7 +465,7 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -502,7 +502,7 @@ func TestInterfaceValidate_ExamplesAreAuthorClaims(t *testing.T) {
 			"nullCase": {Input: json.RawMessage("null")},
 		},
 	)
-	report, err := i.Validate(ValidateOptions{})
+	report, err := i.Validate()
 	if err != nil {
 		t.Fatalf("a false example is not a document-rule violation, got %v", err)
 	}
@@ -615,7 +615,7 @@ func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
 	}
-	_, err := iface.Validate(ValidateOptions{})
+	_, err := iface.Validate()
 	if err == nil {
 		t.Fatal("a document below the supported release line must refuse")
 	}
@@ -651,7 +651,7 @@ func TestInterfaceValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
 			},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("expected boolean-form schemas to validate, got %v", err)
 	}
 }
@@ -691,7 +691,7 @@ func TestInterfaceValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.
 				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{"op": tc.op},
 			}
-			_, err := i.Validate(ValidateOptions{})
+			_, err := i.Validate()
 			if err == nil {
 				t.Fatal("expected OBI-D-10 violation")
 			}
@@ -714,7 +714,7 @@ func TestInterfaceValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
 			"op": {Output: "not-a-schema"},
 		},
 	}
-	_, err := i.Validate(ValidateOptions{})
+	_, err := i.Validate()
 	if err == nil {
 		t.Fatal("expected OBI-D-10 violations")
 	}
@@ -747,7 +747,7 @@ func TestInterfaceValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T)
 			},
 		},
 	}
-	if _, err := i.Validate(ValidateOptions{}); err != nil {
+	if _, err := i.Validate(); err != nil {
 		t.Fatalf("expected narrow OBI-D-10 to accept, got %v", err)
 	}
 }
@@ -760,7 +760,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 			"customer.delivery": {Operation: "deliver"},
 		},
 	}
-	if _, err := valid.Validate(ValidateOptions{}); err != nil {
+	if _, err := valid.Validate(); err != nil {
 		t.Fatalf("valid dependency: %v", err)
 	}
 
@@ -768,7 +768,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 	emptyConstraint.Dependencies = map[string]DependencyEntry{
 		"customer.delivery": {Operation: "deliver", Kinds: []string{}},
 	}
-	if _, err := emptyConstraint.Validate(ValidateOptions{}); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
+	if _, err := emptyConstraint.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
 		t.Fatalf("empty kinds validation = %v, want OBI-D-02", err)
 	}
 
@@ -776,7 +776,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 	missingOperation.Dependencies = map[string]DependencyEntry{
 		"customer.delivery": {Operation: "missing"},
 	}
-	if _, err := missingOperation.Validate(ValidateOptions{}); err == nil || !strings.Contains(err.Error(), "OBI-D-11") {
+	if _, err := missingOperation.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-11") {
 		t.Fatalf("missing dependency operation validation = %v, want OBI-D-11", err)
 	}
 }
@@ -785,7 +785,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 // path. An unknown field without the x- prefix violates OBI-D-02 (§12).
 func unknownFieldViolations(t *testing.T, iface Interface) map[string]string {
 	t.Helper()
-	report, _ := iface.Validate(ValidateOptions{})
+	report, _ := iface.Validate()
 	byPath := map[string]string{}
 	for _, finding := range report.Violations() {
 		if finding.Rule == "OBI-D-02" {
