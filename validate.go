@@ -104,7 +104,7 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01", "OBI-D-09")
 			checkDeclaredVersion(&c, versionView(data))
 		default:
-			c.findings = append(c.findings, d01Violation(err))
+			c.findings = append(c.findings, d01Violation(data, err))
 			c.inconclusiveExcept("OBI-D-01 refuses the input, so this rule was not checked", "OBI-D-01")
 		}
 		report, verr := c.conclude()
@@ -114,6 +114,7 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 		return nil, ValidationReport{}, refusal
 	}
 	checkDocument(&c, view, options)
+	positionFindings(data, c.findings)
 	report, verr := c.conclude()
 	var iface Interface
 	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
@@ -124,11 +125,11 @@ func ValidateDocument(data []byte, options ValidateOptions) (*Interface, Validat
 
 // d01Violation is the OBI-D-01 finding for input verifyExactJSON refuses,
 // located at the object that repeats a member name when that is why.
-func d01Violation(err error) Finding {
+func d01Violation(data []byte, err error) Finding {
 	if duplicate := (*duplicateNameError)(nil); errors.As(err, &duplicate) {
-		return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Path: duplicate.location, Message: "repeats the member name " + strconv.Quote(duplicate.name)}
+		return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Path: duplicate.location, Message: "repeats the member name " + strconv.Quote(duplicate.name), Position: d01Position(data, err)}
 	}
-	return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err)}
+	return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err), Position: d01Position(data, err)}
 }
 
 // documentView encodes a host document and decodes the generic JSON view the

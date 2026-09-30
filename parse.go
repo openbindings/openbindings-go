@@ -32,13 +32,14 @@ func ParseDocument(data []byte) (*Interface, error) {
 		if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
 			return nil, fmt.Errorf("parse document: %w", err)
 		}
-		return nil, &ValidationError{Findings: []Finding{d01Violation(err)}}
+		return nil, &ValidationError{Findings: []Finding{d01Violation(data, err)}}
 	}
 	if refusal := declaredVersionRefusal(raw); refusal != nil {
 		return nil, refusal
 	}
 	var c ruleChecks
 	validateAgainstOBISchema(&c, raw)
+	positionFindings(data, c.findings)
 	if verr := c.violationError(); verr != nil {
 		return nil, verr
 	}
