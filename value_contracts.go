@@ -77,19 +77,12 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, i *Interface) (*Val
 		states:   map[string][2]bool{},
 	}
 	for key, operation := range i.Operations {
-		contracts.keys[key] = key
-		for _, alias := range operation.Aliases {
-			if _, taken := contracts.keys[alias]; !taken {
-				contracts.keys[alias] = key
-			}
-		}
 		contracts.states[key] = [2]bool{operation.Input != nil, operation.Output != nil}
-	}
-	// An alias that repeats a key or another alias resolves as ResolveOperation
-	// resolves it.
-	for name := range contracts.keys {
-		if key, _, found := ResolveOperation(i, name); found {
-			contracts.keys[name] = key
+		// A name more than one operation carries resolves to none.
+		for _, name := range append([]string{key}, operation.Aliases...) {
+			if resolved, _, found := ResolveOperation(i, name); found {
+				contracts.keys[name] = resolved
+			}
 		}
 	}
 	return contracts, nil
