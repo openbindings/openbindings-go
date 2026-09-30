@@ -3,14 +3,10 @@ package schemacompiler
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"maps"
-	"math"
 	"math/big"
 	"reflect"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -156,15 +152,6 @@ func relativeText(base []string, problem Problem) string {
 	return jsonpointer.Format(problem.Location[len(base):]...) + ": " + problem.Message
 }
 
-// ValueProblem states why v is not a JSON value the validator accepts, or
-// returns "" when it is one: nil, a bool, a string of well-formed UTF-8, a
-// number (a valid json.Number, a finite float, or an integer type), or a
-// []any or map[string]any of JSON values, whose keys are well-formed UTF-8. A value outside that domain has no JSON
-// meaning to validate, so validation reaches no verdict on it.
-func ValueProblem(v any) string {
-	return valueProblem(v, map[container]walk{})
-}
-
 // container identifies a map or a non-empty slice by its backing storage.
 type container struct {
 	at     uintptr
@@ -184,85 +171,9 @@ func containerOf(v any) (container, bool) {
 	return container{}, false
 }
 
-// walk is how far a walk of a value has gone through a container it holds.
-type walk uint8
-
-const (
-	walking walk = iota + 1 // entered and not yet left: met again, it holds itself
-	walked                  // left: a value may hold it more than once
-)
-
-// valueProblem is ValueProblem, with seen recording the containers the walk
-// has entered: a value holding itself is no JSON value, and walking it would
-// never end, while one that holds a container many times is walked through it
-// once, so a value sharing its parts costs no more than it holds.
-func valueProblem(v any, seen map[container]walk) string {
-	if held, isContainer := containerOf(v); isContainer {
-		switch seen[held] {
-		case walking:
-			return "holds itself; a JSON value holds no cycle"
-		case walked:
-			return ""
-		}
-		seen[held] = walking
-		defer func() { seen[held] = walked }()
-	}
-	switch v := v.(type) {
-	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return ""
-	case string:
-		return textProblem(v)
-	case json.Number:
-		if !IsNumber(v) {
-			return fmt.Sprintf("json.Number %q is not a JSON number", string(v))
-		}
-		return ""
-	case float32:
-		return finiteProblem(float64(v))
-	case float64:
-		return finiteProblem(v)
-	case []any:
-		for i, item := range v {
-			if problem := valueProblem(item, seen); problem != "" {
-				return fmt.Sprintf("/%d: %s", i, problem)
-			}
-		}
-		return ""
-	case map[string]any:
-		for _, key := range slices.Sorted(maps.Keys(v)) {
-			if problem := textProblem(key); problem != "" {
-				return "a member name: " + problem
-			}
-			if problem := valueProblem(v[key], seen); problem != "" {
-				return jsonpointer.Format(key) + ": " + problem
-			}
-		}
-		return ""
-	default:
-		return fmt.Sprintf("a Go %T is not a JSON value; decode the value as generic JSON first", v)
-	}
-}
-
 // IsNumber reports whether n holds exactly one JSON number token, which
 // encoding/json does not check of an empty json.Number (it encodes one as 0).
 func IsNumber(n json.Number) bool {
 	s := string(n)
 	return s != "" && (s[0] == '-' || s[0] >= '0' && s[0] <= '9') && strings.TrimSpace(s) == s && json.Valid([]byte(s))
-}
-
-// textProblem states why a Go string is not the text of a JSON string, or
-// returns "" when it is: JSON text is Unicode (RFC 8259 §8.1), and a Go string
-// that is not well-formed UTF-8 has no Unicode reading.
-func textProblem(s string) string {
-	if !utf8.ValidString(s) {
-		return fmt.Sprintf("%q is not well-formed UTF-8", s)
-	}
-	return ""
-}
-
-func finiteProblem(f float64) string {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return fmt.Sprintf("%v is not a JSON number", f)
-	}
-	return ""
 }

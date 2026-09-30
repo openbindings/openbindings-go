@@ -1,7 +1,11 @@
 # Releasing openbindings-go
 
-This repository is a single Go module: the core SDK at the repository root. It
-has no upstream tag prerequisites.
+This repository holds two Go modules: the core SDK at the repository root,
+and `schemaeval`, the project's schema evaluator, which requires the core.
+Neither has an upstream tag prerequisite; `schemaeval` is tagged after the
+core release it requires. Until then its `go.mod` develops against the core
+beside it through a `replace` directive, which a release drops in favor of
+the tagged core version.
 
 The eight `formats/*` modules that used to live here were removed on
 2026-09-24 (preserved on the `legacy/pre-core-rebuild` branch). Their published
@@ -12,6 +16,7 @@ this document gains its tagging and ordering rules again.
 ## Tags
 
 - Core SDK: `vX.Y.Z`
+- Schema evaluator: `schemaeval/vX.Y.Z`, after the core tag it requires
 
 All release tags are annotated (from 0.2.0 on; the 0.1.0 tags predate this
 convention and are lightweight):

@@ -113,7 +113,3 @@ func validateWithTestEvaluator(t *testing.T, iface *Interface, operation, direct
 	}
 	return contract.Validate(context.Background(), value)
 }
-
-// KitTestEvaluator exposes the test evaluator to the external test package
-// that runs the conformance kit against it.
-var KitTestEvaluator SchemaEvaluator = testEvaluator{}

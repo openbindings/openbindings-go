@@ -35,3 +35,12 @@ jobs:
         env:
           OB_SPEC_CORPUS: ${{ github.workspace }}/spec/conformance
           OB_CORPUS_REQUIRED: "1"
+      # schemaeval is its own module, the project's evaluator; its tests run
+      # the conformance kit (openbindingstest) against it, with the core
+      # beside it through its replace directive.
+      - name: vet schemaeval
+        working-directory: schemaeval
+        run: go vet ./...
+      - name: test schemaeval
+        working-directory: schemaeval
+        run: go test -race -short ./...

@@ -42,9 +42,11 @@ import (
 )
 
 // Options exempt named cases, each with a reason the report shows. An entry
-// names a case by its ID, or every case of a group by the group's ID: a
-// suite case's ID up to its group index ("suite/draft2020-12/pattern.json#2"),
-// or "adversarial/" and a group's name.
+// names a case by its ID, or the cases of a group by the group's ID: a suite
+// case's ID up to its group index ("suite/draft2020-12/pattern.json#2"), or
+// "adversarial/" and a group's name. An entry naming a case fails when the
+// case needs no exemption, and one naming a group when none of its cases
+// does.
 type Options struct {
 	// Undecided names cases the evaluator may leave without a verdict: a
 	// pattern feature its engine lacks, a number beyond its arithmetic.
@@ -256,8 +258,8 @@ func (k *kit) runCase(g group, c testCase, contract *openbindings.ValueContract,
 	}
 	entry, reason, excused := exemption(k.o.Undecided, c, g)
 	switch {
-	case got == c.want && excused:
-		t.Errorf("%s: Options.Undecided names it (%s), but it got its verdict", c.id, entry)
+	case got == c.want && excused && entry == c.id:
+		t.Errorf("%s: Options.Undecided names it, but it got its verdict", c.id)
 	case got == c.want:
 		counts.evaluated++
 	case got == noVerdict && excused:
@@ -292,8 +294,8 @@ func (k *kit) checkPaths(g group, c testCase, paths []string, counts *tally) {
 	}
 	entry, reason, excused := exemption(k.o.Unlocated, c, g)
 	switch {
-	case located && excused:
-		k.t.Errorf("%s: Options.Unlocated names it (%s), but its paths are located", c.id, entry)
+	case located && excused && entry == c.id:
+		k.t.Errorf("%s: Options.Unlocated names it, but its paths are located", c.id)
 	case located:
 	case excused:
 		k.usedUnlocated = append(k.usedUnlocated, entry)
@@ -367,26 +369,36 @@ func problemPaths(err error) []string {
 	return out
 }
 
-func compileDirect(e openbindings.SchemaEvaluator, bundle json.RawMessage) (compiled openbindings.CompiledSchema, err error, panicked string) {
+// compileDirect and validateDirect call the evaluator as core would,
+// recovering a panic, which the kit reports as a failure.
+func compileDirect(e openbindings.SchemaEvaluator, bundle json.RawMessage) (openbindings.CompiledSchema, error, string) {
+	return compileWithin(context.Background(), e, bundle)
+}
+
+func compileWithin(ctx context.Context, e openbindings.SchemaEvaluator, bundle json.RawMessage) (compiled openbindings.CompiledSchema, err error, panicked string) {
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = fmt.Sprint(r)
 		}
 	}()
-	compiled, err = e.Compile(context.Background(), openbindings.SchemaBundle{Document: bundle})
+	compiled, err = e.Compile(ctx, openbindings.SchemaBundle{Document: bundle})
 	if err != nil {
 		compiled = nil
 	}
 	return compiled, err, ""
 }
 
-func validateDirect(compiled openbindings.CompiledSchema, value any) (answer error, panicked string) {
+func validateDirect(compiled openbindings.CompiledSchema, value any) (error, string) {
+	return validateWithin(context.Background(), compiled, value)
+}
+
+func validateWithin(ctx context.Context, compiled openbindings.CompiledSchema, value any) (answer error, panicked string) {
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = fmt.Sprint(r)
 		}
 	}()
-	return compiled.Validate(context.Background(), value), ""
+	return compiled.Validate(ctx, value), ""
 }
 
 func mustBundle(contracts *openbindings.ValueContracts, spelling int) json.RawMessage {

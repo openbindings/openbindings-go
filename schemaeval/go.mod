@@ -11,6 +11,8 @@ require (
 	golang.org/x/text v0.39.0
 )
 
+require golang.org/x/sync v0.21.0
+
 // Until the core module is tagged with the API this module implements,
 // develop against the core beside it. RELEASING.md orders the tags.
 replace github.com/openbindings/openbindings-go => ../

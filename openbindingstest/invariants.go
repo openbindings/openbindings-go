@@ -79,9 +79,9 @@ func (k *kit) concurrency() {
 // retention checks that an error the evaluator returned is not changed by
 // later calls.
 func (k *kit) retention() {
-	compiled, err, _ := compileDirect(k.e, k.bundleOf(`{"/operations/op/input":{"properties":{"a":{"type":"string"},"b":{"minimum":3}}}}`, 0))
-	if err != nil {
-		k.t.Errorf("invariant, retention: compiling: %v", err)
+	compiled, err, panicked := compileDirect(k.e, k.bundleOf(`{"/operations/op/input":{"properties":{"a":{"type":"string"},"b":{"minimum":3}}}}`, 0))
+	if err != nil || panicked != "" {
+		k.t.Errorf("invariant, retention: compiling: %v %s", err, panicked)
 		return
 	}
 	first, _ := validateDirect(compiled, decode(`{"a":1}`))
@@ -109,17 +109,23 @@ func (k *kit) cancellation() {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	bundle := k.bundleOf(`{"/operations/op/input":{"type":"string"}}`, 0)
-	compiled, err := k.e.Compile(ctx, openbindings.SchemaBundle{Document: bundle})
-	if err != nil && !errors.Is(err, ctx.Err()) {
+	compiled, err, panicked := compileWithin(ctx, k.e, bundle)
+	switch {
+	case panicked != "":
+		k.t.Errorf("invariant, cancellation: Compile panicked given a done ctx: %s", panicked)
+	case err != nil && !errors.Is(err, ctx.Err()):
 		k.t.Errorf("invariant, cancellation: Compile given a done ctx returned an error not matching ctx.Err(): %v", err)
 	}
 	if compiled == nil {
-		if compiled, err = k.e.Compile(context.Background(), openbindings.SchemaBundle{Document: bundle}); err != nil {
-			k.t.Errorf("invariant, cancellation: compiling: %v", err)
+		if compiled, err, panicked = compileDirect(k.e, bundle); err != nil || panicked != "" {
+			k.t.Errorf("invariant, cancellation: compiling: %v %s", err, panicked)
 			return
 		}
 	}
-	if err := compiled.Validate(ctx, "s"); err != nil && !errors.Is(err, ctx.Err()) {
+	switch err, panicked := validateWithin(ctx, compiled, "s"); {
+	case panicked != "":
+		k.t.Errorf("invariant, cancellation: Validate panicked given a done ctx: %s", panicked)
+	case err != nil && !errors.Is(err, ctx.Err()):
 		k.t.Errorf("invariant, cancellation: Validate given a done ctx returned an error not matching ctx.Err(): %v", err)
 	}
 	compiler, _ := openbindings.NewValueContractCompiler(k.e)
@@ -134,14 +140,15 @@ func (k *kit) cancellation() {
 }
 
 // unresolvable hands the evaluator bundles outside core's guarantees, each
-// holding a reached reference to a URI nothing in it names: whether the
-// library fails to compile or evaluates, it must never give a verdict, valid
-// or mismatch, under not too.
+// holding a reference to a URI nothing in it names: whether the library fails
+// to compile or evaluates, no value whose evaluation reaches the reference
+// may get a verdict, valid or mismatch, under not too (OBI-T-08).
 func (k *kit) unresolvable() {
-	for _, root := range []string{
-		`{"$ref":"https://kit.invalid/missing"}`,
-		`{"not":{"$ref":"https://kit.invalid/missing"}}`,
-		`{"properties":{"a":{"$ref":"https://kit.invalid/missing#/x"}}}`,
+	// Each schema with values whose evaluation reaches the reference.
+	for root, values := range map[string][]string{
+		`{"$ref":"https://kit.invalid/missing"}`:                         {`{"a":1}`, `"s"`, `null`},
+		`{"not":{"$ref":"https://kit.invalid/missing"}}`:                 {`{"a":1}`, `"s"`, `null`},
+		`{"properties":{"a":{"$ref":"https://kit.invalid/missing#/x"}}}`: {`{"a":1}`, `{"a":"s"}`},
 	} {
 		var schema map[string]any
 		_ = json.Unmarshal([]byte(root), &schema)
@@ -157,7 +164,7 @@ func (k *kit) unresolvable() {
 		if compiled == nil {
 			continue
 		}
-		for _, v := range []string{`{"a":1}`, `"s"`, `null`} {
+		for _, v := range values {
 			answer, panicked := validateDirect(compiled, decode(v))
 			if panicked != "" {
 				k.t.Errorf("invariant, unresolved references: Validate panicked on %s: %s", root, panicked)
