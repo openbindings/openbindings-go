@@ -40,6 +40,26 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 	}
 }
 
+// A report names the release whose text it applies and, while that release
+// is a working draft, the source-control revision of the text (OBI-T-09),
+// from Interface.Validate and ValidateDocument alike.
+func TestValidationReport_NamesTheTextApplied(t *testing.T) {
+	document := `{"openbindings":"0.2.0","operations":{}}`
+	fromDocument := mustValidateDocument(t, document)
+	fromInterface, err := mustDecodeInterface(t, document).Validate(ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, report := range []ValidationReport{fromDocument, fromInterface} {
+		if report.Version != "0.2.0" || len(report.Revision) != 40 || strings.Trim(report.Revision, "0123456789abcdef") != "" {
+			t.Errorf("version %q, revision %q: want 0.2.0 and a full commit hash while 0.2.0 is a working draft", report.Version, report.Revision)
+		}
+	}
+	if report := ConcludeConformance(map[string]RuleEvidenceStatus{"OBI-D-01": EvidenceSatisfied}); report.Version != "" || report.Revision != "" {
+		t.Errorf("a report from evidence alone names %q at %q", report.Version, report.Revision)
+	}
+}
+
 // A claim about a value in memory is a claim about its serialization (§10),
 // which the model writes only when it decodes back unchanged, so a host
 // object decides OBI-D-01 and a well-formed one concludes conformant, whether
@@ -177,7 +197,7 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesD01(t *testing.T) {
 // Value validation reaches a verdict only where the document's own schemas
 // decide it (OBI-T-08): a graph reaching a resource the document does not
 // embed, or a reference that resolves nowhere, reaches none.
-func TestValidateOperationInput_Scope(t *testing.T) {
+func TestInputContract_Scope(t *testing.T) {
 	for name, tc := range map[string]struct{ document, want string }{
 		"a graph reaching an external resource": {`{"openbindings":"0.2.0","operations":{"a":{"input":{"$ref":"https://schemas.example.com/task.json"}}}}`, "no verdict"},
 		"an unrelated external reference": {`{"openbindings":"0.2.0",
@@ -356,7 +376,7 @@ func TestValidateDocument_WrongTypedMembersAreJudgedLiterally(t *testing.T) {
 
 // Value validation follows an absolute reference with a fragment into a
 // resource the document embeds.
-func TestValidateOperationInput_ThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
+func TestInputContract_ThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
 	document := `{"openbindings":"0.2.0",
 		"schemas":{"T":{"$id":"https://example.com/t","$defs":{"S":{"type":"string"}}}},
 		"operations":{"a":{"input":{"$ref":"https://example.com/t#/$defs/S"}}}}`
@@ -436,7 +456,7 @@ func TestValidateDocument_ReferenceCyclesTerminate(t *testing.T) {
 // unreferenced definition is not part of it, a plain-name anchor inside an
 // embedded resource resolves, and a graph reaching an $id more than one schema
 // declares reaches no verdict.
-func TestValidateOperationInput_GraphIsWhatEvaluationApplies(t *testing.T) {
+func TestInputContract_GraphIsWhatEvaluationApplies(t *testing.T) {
 	for name, document := range map[string]string{
 		"unreferenced external definition": `{"openbindings":"0.2.0","operations":{"op":{
 			"input":{"type":"string","$defs":{"dead":{"$ref":"https://outside.example/x"}}}}}}`,
@@ -609,7 +629,6 @@ func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
 // A document schema finding about a map key is located at the key, the same
 // way every time.
 func TestValidateDocument_KeyFindingPathsAreDeterministic(t *testing.T) {
-	t.Skip("santhosh-tekuri/jsonschema v6.0.3 records a propertyNames failure's location without copying it, so a later sibling overwrites it; fixed upstream by cloning the location")
 	for range 50 {
 		report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"bad key":{}},"sources":{},"name":"n","description":"d"}`)
 		for _, finding := range report.Findings {
@@ -617,6 +636,22 @@ func TestValidateDocument_KeyFindingPathsAreDeterministic(t *testing.T) {
 				t.Fatalf("OBI-D-02 finding at %q", finding.Path)
 			}
 		}
+	}
+}
+
+// A refused member name is located wherever the document holds it, in every
+// map whose names the document schema constrains.
+func TestValidateDocument_KeyFindingsAtEveryHolder(t *testing.T) {
+	report := mustValidateDocument(t, `{"openbindings":"0.2.0","schemas":{"bad key":{}},"operations":{"bad key":{},"op":{"examples":{"bad key":{}}}}}`)
+	var paths []string
+	for _, finding := range report.Findings {
+		if finding.Rule == "OBI-D-02" {
+			paths = append(paths, finding.Path)
+		}
+	}
+	want := []string{"/operations/bad key", "/operations/op/examples/bad key", "/schemas/bad key"}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("OBI-D-02 findings at %q, want %q", paths, want)
 	}
 }
 

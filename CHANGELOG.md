@@ -4,6 +4,14 @@
 
 > A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
 
+### Added
+
+- **A validation report names the specification revision it applied
+  (OBI-T-09).** `ValidationReport.Revision` is the commit of
+  github.com/openbindings/spec whose text the report applies while
+  `Version` names a working draft; it is empty once that version is
+  released.
+
 ### Changed
 
 - **Value validation takes an evaluator the application supplies (breaking,
@@ -154,6 +162,19 @@
   Documentation uses the current §10.4 conformance conclusion section.
 
 ### Fixed
+
+- **OBI-D-02 findings on a refused member name point at the member.** The
+  JSON Schema library records such a failure's location without copying it,
+  so a later sibling could overwrite it and the finding pointed somewhere
+  else on most runs. Core now locates the finding where the document holds
+  the name, in every map whose names the document schema constrains.
+- **A cycle every evaluation enters is an undefined result.** A value
+  contract whose evaluation must apply a cycle of schemas in place without
+  advancing (a schema that is only a `$ref` to itself, for one) now refuses
+  with `ErrUndefined`, as OBI-T-08 and §7.4 name it; a cycle only some values
+  enter stays core's conservative refusal.
+- **The corpus harness fails a failing fixture whose rule comes back
+  inconclusive,** instead of skipping it.
 
 - **One operation's evidence no longer depends on another's, and the same
   bytes give the same report.** The library shared state across the

@@ -513,7 +513,7 @@ func TestInterfaceValidate_ExamplesAreAuthorClaims(t *testing.T) {
 
 // Value validation reads same-document references from the OBI document
 // root (OBI-T-08, §7.2), however the operation reaches its schemas.
-func TestValidateOperationInput_ResolvesFromTheDocumentRoot(t *testing.T) {
+func TestInputContract_ResolvesFromTheDocumentRoot(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
@@ -584,7 +584,7 @@ func TestParseDocument_RejectsInvalidUTF8_OBI_D_01(t *testing.T) {
 
 // A null value is a value like any other (§5.1), and a graph reaching a
 // resource the document does not embed reaches no verdict (OBI-T-08).
-func TestValidateOperationInput_NullAndExternalReferences(t *testing.T) {
+func TestInputContract_NullAndExternalReferences(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{

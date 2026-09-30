@@ -21,6 +21,8 @@ type schemaKey struct {
 // reached resource, and the scope wrapper for the name.
 type contractReach struct {
 	space *schemaSpace
+	// entry is the value contract's schema.
+	entry schemaKey
 	// inDocument is whether the entry lies in the document resource, whose
 	// $dynamicAnchors are outermost in its evaluations' dynamic scope (§7.2).
 	inDocument bool
@@ -66,6 +68,7 @@ func (s *schemaSpace) reach(entry string) *contractReach {
 		inPlace:   map[schemaKey][]schemaKey{},
 	}
 	start := schemaKey{s.obi, entry}
+	r.entry = start
 	resource, isSchema := s.obi.schemas[entry]
 	if !isSchema {
 		r.fail(start, failure{undefinedResult, "the operation's schema there is not a JSON Schema 2020-12 object or boolean (OBI-D-10)"})
@@ -194,10 +197,15 @@ func declaresDynamicAnchor(target schemaTarget, name string) bool {
 }
 
 // findCycles refuses a reached cycle of in-place applications, which never
-// advances into the value, so no value can be evaluated against it
-// (conservative: OBI-T-08 leaves one that recurses without consuming the
-// instance undefined, and core does not decide which cycles do).
+// advances into the value. Where every evaluation must enter it (certainLoop),
+// the result is undefined (OBI-T-08, §7.4); otherwise an evaluator may never
+// enter it for some values, and the refusal is conservative: core does not
+// decide which values' evaluations do.
 func (r *contractReach) findCycles() {
+	if at, loops := r.certainLoop(); loops {
+		r.fail(at, failure{undefinedResult, "every evaluation applies a cycle of schemas in place without advancing into the value, which JSON Schema leaves undefined (§7.4)"})
+		return
+	}
 	keys := slices.SortedFunc(func(yield func(schemaKey) bool) {
 		for key := range r.reached {
 			if !yield(key) {
@@ -227,6 +235,68 @@ func (r *contractReach) findCycles() {
 			return
 		}
 	}
+}
+
+// evaluatingKeywords are the 2020-12 keywords that affect a schema's result.
+// Any other keyword a schema holds (identifiers, annotations, $defs, and
+// keywords 2020-12 does not define) evaluates nothing.
+var evaluatingKeywords = []string{
+	"$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "dependentSchemas",
+	"prefixItems", "items", "contains", "properties", "patternProperties", "additionalProperties", "propertyNames",
+	"unevaluatedItems", "unevaluatedProperties", "type", "enum", "const", "multipleOf", "maximum", "exclusiveMaximum",
+	"minimum", "exclusiveMinimum", "maxLength", "minLength", "pattern", "maxItems", "minItems", "uniqueItems",
+	"maxContains", "minContains", "maxProperties", "minProperties", "required", "dependentRequired",
+}
+
+// certainLoop reports whether every evaluation of the entry loops: whether,
+// from the entry, the schemas that evaluate nothing but one step onward (a
+// lone $ref, a lone allOf, anyOf, or oneOf of one subschema, or a lone not)
+// lead back to a schema already passed. It returns that schema.
+func (r *contractReach) certainLoop() (schemaKey, bool) {
+	passed := map[schemaKey]bool{}
+	for at := r.entry; ; {
+		if passed[at] {
+			return at, true
+		}
+		passed[at] = true
+		next, only := r.soleStep(at)
+		if !only {
+			return schemaKey{}, false
+		}
+		at = next
+	}
+}
+
+// soleStep returns the one schema a schema's evaluation applies in place,
+// when it evaluates nothing else.
+func (r *contractReach) soleStep(at schemaKey) (schemaKey, bool) {
+	value, _ := jsonpointer.Resolve(at.doc.value, at.location)
+	object, isObject := value.(map[string]any)
+	if !isObject {
+		return schemaKey{}, false
+	}
+	var keyword string
+	for _, candidate := range evaluatingKeywords {
+		if _, present := object[candidate]; present {
+			if keyword != "" {
+				return schemaKey{}, false
+			}
+			keyword = candidate
+		}
+	}
+	switch keyword {
+	case "$ref", "not":
+	case "allOf", "anyOf", "oneOf":
+		if subschemas, _ := object[keyword].([]any); len(subschemas) != 1 {
+			return schemaKey{}, false
+		}
+	default:
+		return schemaKey{}, false
+	}
+	if steps := r.inPlace[at]; len(steps) == 1 {
+		return steps[0], true
+	}
+	return schemaKey{}, false
 }
 
 func compareKeys(a, b schemaKey) int {

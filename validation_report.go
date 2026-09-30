@@ -74,7 +74,13 @@ type ValidationReport struct {
 	// release of the 0.2 line the document declares, since the patch number
 	// a document declares carries no meaning (§8.1). A report
 	// ConcludeConformance builds from evidence alone carries no Version.
-	Version    string
+	Version string
+	// Revision is the source-control revision of the specification text the
+	// report applies, a commit of github.com/openbindings/spec, while Version
+	// names a working draft rather than a release (OBI-T-09); it is empty
+	// when Version names a release, and in a report ConcludeConformance
+	// builds from evidence alone.
+	Revision   string
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per rule considered. Reports from
 	// Interface.Validate and ValidateDocument carry every document rule; a
@@ -174,8 +180,8 @@ func (e *VersionRefusalError) Error() string {
 // ruleChecks collects located evidence while a validator runs. Rules that
 // record no finding are satisfied.
 type ruleChecks struct {
-	version  string
-	findings []Finding
+	version, revision string
+	findings          []Finding
 }
 
 func (c *ruleChecks) violated(rule, path, message string) {
@@ -219,7 +225,7 @@ func (c *ruleChecks) report() ValidationReport {
 		}
 	}
 	report := ConcludeConformance(evidence)
-	report.Version = c.version
+	report.Version, report.Revision = c.version, c.revision
 	report.Findings = append([]Finding(nil), c.findings...)
 	return report
 }

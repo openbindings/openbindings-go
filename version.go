@@ -26,6 +26,13 @@ const AuthoringVersion = "0.2.0"
 // carries no meaning (§8.1).
 const appliedRelease = "0.2.0"
 
+// appliedRevision is the source-control revision of the specification text
+// this SDK applies while appliedRelease names a working draft, which a
+// validation report names with it (OBI-T-09): a commit of
+// github.com/openbindings/spec. It is "" once appliedRelease is released,
+// when the release alone names the text.
+const appliedRevision = "98127021a7e2fa08a8c7b2e6bead1c847c9b6e1f"
+
 // supportedPrereleases lists the prerelease versions this SDK supports, each
 // named explicitly: a prerelease is a draft, and supporting its release does
 // not imply supporting it (§8.1). There are none; naming one means stating it
@@ -58,9 +65,8 @@ func init() {
 // SupportedVersions. A release of the supported line is supported whatever
 // its patch version, a prerelease only when it is named explicitly, and
 // build metadata is ignored (§8.1). Of well-formed versions, ParseDocument,
-// ValidateDocument, Interface.Validate, CompileOperationSchema,
-// ValidateOperationInput, and ValidateOperationOutput refuse exactly those it
-// reports false for.
+// ValidateDocument, Interface.Validate, and ValueContractCompiler.Resolve
+// refuse exactly those it reports false for.
 //
 // A malformed (non-SemVer) v is no version at all: IsSupportedVersion
 // returns false and a parse error, while validation reports such a document

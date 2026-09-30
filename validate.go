@@ -55,7 +55,7 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 	if err != nil {
 		return ValidationReport{}, err
 	}
-	c := ruleChecks{version: appliedRelease}
+	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
 	checkDocument(&c, view, options)
 	return c.conclude()
 }
@@ -81,7 +81,7 @@ func (i Interface) Validate(options ValidateOptions) (ValidationReport, error) {
 // value, however deeply it nests.
 // options configures validation, as for Interface.Validate.
 func ValidateDocument(data []byte, options ValidateOptions) (*Interface, ValidationReport, error) {
-	c := ruleChecks{version: appliedRelease}
+	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
 		if refusal := inputVersionRefusal(data); refusal != nil {
