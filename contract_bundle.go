@@ -284,7 +284,7 @@ func newBundleWriter(s *schemaSpace, r *contractReach, units []unitKey, spelling
 		space: s, reach: r, units: units, spelling: spelling,
 		unitKeys: map[unitKey]string{}, ids: map[unitKey]string{},
 		addresses: map[schemaKey]bundleAddress{}, moved: map[schemaKey]string{}, defsKeys: map[schemaKey]map[string]bool{},
-		movedOut:  map[schemaKey]map[string]any{},
+		movedOut:    map[schemaKey]map[string]any{},
 		wrapperKeys: map[string]string{},
 	}
 	w.root = w.namespace()
