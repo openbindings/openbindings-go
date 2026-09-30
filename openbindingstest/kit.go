@@ -190,7 +190,7 @@ func (k *kit) runGroup(g group) {
 			continue
 		}
 		bundles[spelling] = bundle
-		compiled, err, panicked := compileDirect(k.e, bundle)
+		compiled, panicked, err := compileDirect(k.e, bundle)
 		if panicked != "" {
 			t.Errorf("%s: the evaluator panicked compiling core's bundle: %s", g.id, panicked)
 			continue
@@ -240,7 +240,7 @@ func (k *kit) runCase(g group, c testCase, contract *openbindings.ValueContract,
 		}
 		value := decode(c.value)
 		kept := decode(c.value)
-		answer, panicked := validateDirect(compiled, value)
+		panicked, answer := validateDirect(compiled, value)
 		if panicked != "" {
 			t.Errorf("%s: the evaluator panicked validating %s: %s", c.id, c.value, panicked)
 			answers[spelling] = noVerdict
@@ -371,11 +371,11 @@ func problemPaths(err error) []string {
 
 // compileDirect and validateDirect call the evaluator as core would,
 // recovering a panic, which the kit reports as a failure.
-func compileDirect(e openbindings.SchemaEvaluator, bundle json.RawMessage) (openbindings.CompiledSchema, error, string) {
+func compileDirect(e openbindings.SchemaEvaluator, bundle json.RawMessage) (openbindings.CompiledSchema, string, error) {
 	return compileWithin(context.Background(), e, bundle)
 }
 
-func compileWithin(ctx context.Context, e openbindings.SchemaEvaluator, bundle json.RawMessage) (compiled openbindings.CompiledSchema, err error, panicked string) {
+func compileWithin(ctx context.Context, e openbindings.SchemaEvaluator, bundle json.RawMessage) (compiled openbindings.CompiledSchema, panicked string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = fmt.Sprint(r)
@@ -385,20 +385,20 @@ func compileWithin(ctx context.Context, e openbindings.SchemaEvaluator, bundle j
 	if err != nil {
 		compiled = nil
 	}
-	return compiled, err, ""
+	return compiled, "", err
 }
 
-func validateDirect(compiled openbindings.CompiledSchema, value any) (error, string) {
+func validateDirect(compiled openbindings.CompiledSchema, value any) (string, error) {
 	return validateWithin(context.Background(), compiled, value)
 }
 
-func validateWithin(ctx context.Context, compiled openbindings.CompiledSchema, value any) (answer error, panicked string) {
+func validateWithin(ctx context.Context, compiled openbindings.CompiledSchema, value any) (panicked string, answer error) {
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = fmt.Sprint(r)
 		}
 	}()
-	return compiled.Validate(ctx, value), ""
+	return "", compiled.Validate(ctx, value)
 }
 
 func mustBundle(contracts *openbindings.ValueContracts, spelling int) json.RawMessage {

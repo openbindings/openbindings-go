@@ -33,26 +33,26 @@ type unitKey struct {
 	location string
 }
 
-func (u unitKey) contains(location string) bool {
-	return u.location == "" || covers(u.location, location)
-}
-
-// unitOf returns the copied unit holding a schema.
+// unitOf returns the copied unit holding a schema: in the OBI document, the
+// OBI position its location begins with, which is its first two reference
+// tokens under schemas and its first three under operations.
 func unitOf(key schemaKey) unitKey {
 	if key.doc.kind != obiDocument {
 		return unitKey{key.doc, ""}
 	}
-	for _, unit := range key.doc.units {
-		if covers(unit, key.location) {
-			return unitKey{key.doc, unit}
-		}
+	tokens := 3
+	if strings.HasPrefix(key.location, "/schemas/") {
+		tokens = 2
 	}
-	return unitKey{key.doc, key.location}
-}
-
-// covers reports whether location lies at or below within.
-func covers(within, location string) bool {
-	return location == within || strings.HasPrefix(location, within+"/")
+	end := 0
+	for range tokens {
+		next := strings.IndexByte(key.location[end+1:], '/')
+		if next < 0 {
+			return unitKey(key)
+		}
+		end += 1 + next
+	}
+	return unitKey{key.doc, key.location[:end]}
 }
 
 // unitProblem is what a copied unit holds that refuses any contract copying
@@ -85,12 +85,12 @@ func (s *schemaSpace) unitProblems(unit unitKey) []unitProblem {
 }
 
 func checkUnit(unit unitKey) []unitProblem {
-	d := unit.doc
+	d, held := unit.doc, unit.doc.units[unit.location]
 	value, _ := jsonpointer.Resolve(d.value, unit.location)
 	problem := func(kind failureKind, schema, location, reason string, always bool) unitProblem {
 		return unitProblem{located{failure{kind, reason}, locationOf(d, location)}, schema, always}
 	}
-	if depth := schemaDepth(value); depth > schemaDepthLimit {
+	if held.deep {
 		return []unitProblem{problem(missingCapability, unit.location, unit.location, fmt.Sprintf("it nests subschemas deeper than %d levels, a limit of this SDK", schemaDepthLimit), true)}
 	}
 	var out []unitProblem
@@ -104,10 +104,7 @@ func checkUnit(unit unitKey) []unitProblem {
 			out = append(out, problem(undefinedResult, schemaHolding(d, at), at, "it is not a well-formed JSON Schema 2020-12 schema: "+p.Message, false))
 		}
 	}
-	for _, location := range slices.Sorted(maps.Keys(d.schemas)) {
-		if !unit.contains(location) {
-			continue
-		}
+	for _, location := range held.schemas {
 		object, _ := mustResolve(d.value, location).(map[string]any)
 		patterns := sortedKeys(asObject(object["patternProperties"]))
 		if pattern, ok := object["pattern"].(string); ok {
@@ -125,25 +122,27 @@ func checkUnit(unit unitKey) []unitProblem {
 			out = append(out, problem(missingCapability, location, location, fmt.Sprintf("it declares $schema %s, a dialect this SDK does not read as 2020-12", describeJSON(dialect)), true))
 		}
 	}
-	for _, r := range d.resources {
-		if r.document || !unit.contains(r.location) {
-			continue
-		}
+	for _, r := range held.resources {
 		if r.idProblem != "" {
 			out = append(out, problem(r.idKind, r.location, r.location, r.idProblem, r.idKind != undefinedResult))
 		}
 	}
-	for _, r := range d.resources {
-		for _, name := range slices.Sorted(maps.Keys(r.anchors)) {
-			var within []string
-			for _, at := range r.anchors[name] {
-				if unit.contains(at) {
-					within = append(within, at)
-				}
-			}
-			if len(within) > 1 {
-				out = append(out, problem(conservativePolicy, within[0], within[1], fmt.Sprintf("%s declares the plain name %q more than once", describeResource(r), name), true))
-			}
+	type named struct {
+		resource *docResource
+		name     string
+	}
+	declared := map[named][]string{}
+	var names []named
+	for _, a := range held.anchors {
+		key := named{a.resource, a.name}
+		if declared[key] == nil {
+			names = append(names, key)
+		}
+		declared[key] = append(declared[key], a.location)
+	}
+	for _, key := range names {
+		if within := declared[key]; len(within) > 1 {
+			out = append(out, problem(conservativePolicy, within[0], within[1], fmt.Sprintf("%s declares the plain name %q more than once", describeResource(key.resource), key.name), true))
 		}
 	}
 	return out
@@ -210,10 +209,7 @@ func collisions(units []unitKey) []located {
 	carrier := map[string]*docResource{}
 	var out []located
 	for _, unit := range units {
-		for _, r := range unit.doc.resources {
-			if r.document || !unit.contains(r.location) {
-				continue
-			}
+		for _, r := range unit.doc.units[unit.location].resources {
 			for _, name := range r.names {
 				normal := normalURI(name)
 				if other, taken := carrier[normal]; taken && other != r {
@@ -303,8 +299,18 @@ func newBundleWriter(s *schemaSpace, r *contractReach, units []unitKey, spelling
 
 // namespace returns the root's $id: under a host in .invalid (RFC 2606) no
 // identifier or reference of the OBI document or a supplied resource
-// mentions, compared in normal form.
+// mentions, compared in normal form. It depends only on the space and the
+// spelling, so each space chooses it once per spelling.
 func (w *bundleWriter) namespace() string {
+	if chosen, ok := w.space.namespaces.Load(w.spelling); ok {
+		return chosen.(string)
+	}
+	chosen := w.chooseNamespace()
+	w.space.namespaces.Store(w.spelling, chosen)
+	return chosen
+}
+
+func (w *bundleWriter) chooseNamespace() string {
 	var words []string
 	for _, d := range append([]*schemaDoc{w.space.obi}, w.space.supplied.docs...) {
 		words = append(words, d.words...)
@@ -348,7 +354,7 @@ func (w *bundleWriter) plan(unit unitKey) {
 		base := ""
 		switch {
 		case resource.document:
-			base = w.root + w.generated("unit", slices.Index(w.units, unit))
+			base = w.root + w.unitKeys[unit]
 			w.ids[unit] = base
 		default:
 			base = normalURI(resource.id)
@@ -409,7 +415,7 @@ func (w *bundleWriter) write(entry string) json.RawMessage {
 	defs := map[string]any{}
 	for _, unit := range w.units {
 		value, _ := jsonpointer.Resolve(unit.doc.value, unit.location)
-		root := schemaKey{unit.doc, unit.location}
+		root := schemaKey(unit)
 		written := w.writeSchema(value, root, root)
 		if object, ok := written.(map[string]any); ok && w.ids[unit] != "" {
 			object["$id"] = w.ids[unit]

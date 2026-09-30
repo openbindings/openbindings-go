@@ -39,15 +39,16 @@ type schemaDoc struct {
 	value any
 	// schemas maps the location of every schema the document holds (its
 	// schema positions, the legacy definitions and schema values of
-	// dependencies included) to the resource it lies in.
+	// dependencies included) to the resource it lies in, down to the depth
+	// limit (docUnit.deep).
 	schemas map[string]*docResource
 	// resources are the document's schema resources in walk order; the OBI
 	// document's first is the document resource.
 	resources []*docResource
-	// units are the locations a bundle copies whole: the OBI positions
-	// (an operation's input or output, an entry of schemas) of the OBI
-	// document, and "" for any other document.
-	units []string
+	// units maps the location of each unit a bundle copies whole to what it
+	// holds: the OBI positions (an operation's input or output, an entry of
+	// schemas) of the OBI document, and "" for any other document.
+	units map[string]*docUnit
 	// words holds every $id, $ref, and $dynamicRef string the document's
 	// schemas hold, lowercased, which a bundle's namespace must avoid.
 	words []string
@@ -78,35 +79,63 @@ type docResource struct {
 	anchors, dynamicAnchors map[string][]string
 }
 
+// docUnit is what one unit holds, recorded as the walk passes it, so checking
+// a unit reads only what lies in it.
+type docUnit struct {
+	// schemas are the locations of the schemas it holds, and resources the
+	// resources declared within it, in walk order.
+	schemas   []string
+	resources []*docResource
+	// anchors are its schemas' plain-name declarations, once per $anchor and
+	// per $dynamicAnchor, in walk order.
+	anchors []declaredAnchor
+	// deep marks a unit nesting subschemas deeper than schemaDepthLimit.
+	// What lies below the limit is not indexed, and a contract copying the
+	// unit is refused (checkUnit).
+	deep bool
+}
+
+// declaredAnchor is one declaration of a plain name: the resource it names a
+// schema in, and the schema.
+type declaredAnchor struct {
+	resource       *docResource
+	name, location string
+}
+
 // indexDocument walks a schema document. A supplied resource's or
 // meta-schema's root is a resource named by its URI and its own $id.
 func indexDocument(kind docKind, uri string, value any) *schemaDoc {
-	d := &schemaDoc{kind: kind, uri: uri, value: value, schemas: map[string]*docResource{}}
+	d := &schemaDoc{kind: kind, uri: uri, value: value, schemas: map[string]*docResource{}, units: map[string]*docUnit{}}
 	if kind == obiDocument {
 		document := d.newResource("")
 		document.document = true
 		root, _ := value.(map[string]any)
+		var units []string
 		schemas, _ := root["schemas"].(map[string]any)
 		for _, key := range sortedKeys(schemas) {
-			d.units = append(d.units, jsonpointer.Format("schemas", key))
+			units = append(units, jsonpointer.Format("schemas", key))
 		}
 		operations, _ := root["operations"].(map[string]any)
 		for _, key := range sortedKeys(operations) {
 			operation, _ := operations[key].(map[string]any)
 			for _, direction := range []string{"input", "output"} {
 				if _, present := operation[direction]; present {
-					d.units = append(d.units, jsonpointer.Format("operations", key, direction))
+					units = append(units, jsonpointer.Format("operations", key, direction))
 				}
 			}
 		}
-		for _, unit := range d.units {
-			value, _ := jsonpointer.Resolve(value, unit)
-			d.walk(value, unit, document)
+		for _, location := range units {
+			unit := &docUnit{}
+			d.units[location] = unit
+			value, _ := jsonpointer.Resolve(value, location)
+			d.walk(value, location, document, unit, 0)
 		}
 		return d
 	}
-	d.units = []string{""}
+	unit := &docUnit{}
+	d.units[""] = unit
 	root := d.newResource("")
+	unit.resources = append(unit.resources, root)
 	root.id, root.names = uri, []string{uri}
 	if object, ok := value.(map[string]any); ok {
 		if raw, present := object["$id"]; present {
@@ -118,7 +147,7 @@ func indexDocument(kind docKind, uri string, value any) *schemaDoc {
 			}
 		}
 	}
-	d.walk(value, "", root)
+	d.walk(value, "", root, unit, 0)
 	return d
 }
 
@@ -129,11 +158,19 @@ func (d *schemaDoc) newResource(location string) *docResource {
 }
 
 // walk records the schemas a schema holds, and the resources and names they
-// declare.
-func (d *schemaDoc) walk(value any, location string, resource *docResource) {
+// declare, in the unit holding it. depth is how deeply the unit nests the
+// schema, counted as schemaDepth counts: past schemaDepthLimit, the walk
+// marks the unit deep and records nothing more, so indexing a unit takes
+// space linear in it however deeply it nests.
+func (d *schemaDoc) walk(value any, location string, resource *docResource, unit *docUnit, depth int) {
+	if depth > schemaDepthLimit {
+		unit.deep = true
+		return
+	}
 	switch v := value.(type) {
 	case bool:
 		d.schemas[location] = resource
+		unit.schemas = append(unit.schemas, location)
 	case map[string]any:
 		if raw, present := v["$id"]; present && !(d.kind != obiDocument && location == "") {
 			parent := resource
@@ -142,11 +179,14 @@ func (d *schemaDoc) walk(value any, location string, resource *docResource) {
 			if resource.id != "" {
 				resource.names = []string{resource.id}
 			}
+			unit.resources = append(unit.resources, resource)
 		}
 		d.schemas[location] = resource
+		unit.schemas = append(unit.schemas, location)
 		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
 			if name, ok := v[keyword].(string); ok {
 				resource.anchors[name] = append(resource.anchors[name], location)
+				unit.anchors = append(unit.anchors, declaredAnchor{resource, name, location})
 				if keyword == "$dynamicAnchor" {
 					resource.dynamicAnchors[name] = append(resource.dynamicAnchors[name], location)
 				}
@@ -158,7 +198,7 @@ func (d *schemaDoc) walk(value any, location string, resource *docResource) {
 			}
 		}
 		forEachDescribedSubschema(v, func(child any, tokens ...string) {
-			d.walk(child, location+jsonpointer.Format(tokens...), resource)
+			d.walk(child, location+jsonpointer.Format(tokens...), resource, unit, depth+1)
 		})
 	}
 }
@@ -220,24 +260,26 @@ type schemaTarget struct {
 	name string
 }
 
-func (t schemaTarget) resource() *docResource { return t.doc.schemas[t.location] }
-
 // schemaSpace is the OBI document's schemas and the supplied resources, with
 // the meta-schemas core embeds.
 type schemaSpace struct {
-	obi      *schemaDoc
+	obi *schemaDoc
+	// document is what OBI-D-12 looks same-document references in the
+	// document resource up in.
+	document documentSchemas
 	supplied *suppliedResources
 	// byName maps each exact name to the resources carrying it, and byNormal
 	// each normal-form name, across the OBI document and the supplied
 	// resources.
 	byName, byNormal map[string][]*docResource
 	// checked memoizes what each copied unit holds that can refuse a
-	// contract (unitProblems), keyed by unitKey.
-	checked sync.Map
+	// contract (unitProblems), keyed by unitKey, and namespaces each bundle
+	// spelling's namespace (bundleWriter.namespace).
+	checked, namespaces sync.Map
 }
 
 func newSchemaSpace(view any, supplied *suppliedResources) *schemaSpace {
-	s := &schemaSpace{obi: indexDocument(obiDocument, "", view), supplied: supplied, byName: map[string][]*docResource{}, byNormal: map[string][]*docResource{}}
+	s := &schemaSpace{obi: indexDocument(obiDocument, "", view), document: collectDocumentSchemas(view), supplied: supplied, byName: map[string][]*docResource{}, byNormal: map[string][]*docResource{}}
 	for _, d := range append([]*schemaDoc{s.obi}, supplied.docs...) {
 		for _, r := range d.resources {
 			for _, name := range r.names {
@@ -290,34 +332,20 @@ func (s *schemaSpace) resolve(ref string, holder *docResource) (schemaTarget, *f
 	return schemaTarget{}, &failure{missingCapability, fmt.Sprintf("%q names %s, a resource the document does not embed and the application did not supply (§7.4)", ref, name)}
 }
 
-// resolveInDocument looks up a same-document reference in the document
-// resource as OBI-D-12 does: the empty reference and an empty fragment name
-// the OBI document itself, a fragment beginning with / is a JSON Pointer from
-// the document root to a schema at an OBI position, and any other a plain
-// name the document resource declares.
+// resolveInDocument resolves a same-document reference in the document
+// resource by OBI-D-12's own lookup (§7.2).
 func (s *schemaSpace) resolveInDocument(ref string) (schemaTarget, *failure) {
-	fragment, ok := decodeFragment(strings.TrimPrefix(ref, "#"))
+	found := s.document.lookUpSameDocument(ref, s.obi.value)
 	switch {
-	case !ok:
-		return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q has a fragment that does not decode to UTF-8", ref)}
-	case fragment == "":
-		return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q names the OBI document itself, not a schema (§7.2)", ref)}
-	case strings.HasPrefix(fragment, "/"):
-		tokens, ok := jsonpointer.Parse(fragment)
-		if !ok {
-			return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q is not a JSON Pointer", ref)}
-		}
-		location := jsonpointer.Format(tokens...)
-		resource, found := s.obi.schemas[location]
-		switch {
-		case !found:
-			return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q reaches no schema at an OBI position (§7.3)", ref)}
-		case !resource.document && resource.location != location:
-			return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q reaches inside the schema resource at %s, whose contents a reference reaches through its $id (§7.3)", ref, resource.location)}
-		}
-		return schemaTarget{doc: s.obi, location: location}, nil
+	case found.declaredTwice:
+		return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q names a plain name the document resource declares more than once, which JSON Schema leaves undefined (Core §8.2.2)", ref)}
+	case found.why != "":
+		return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q %s (§7.3)", ref, found.why)}
 	}
-	return s.resolveName(s.obi.resources[0], fragment, ref)
+	if _, indexed := s.obi.schemas[found.location]; !indexed {
+		return schemaTarget{}, s.obi.unindexed(found.location, fmt.Sprintf("%q identifies the schema at %s", ref, found.location))
+	}
+	return schemaTarget{doc: s.obi, location: found.location, name: found.name}, nil
 }
 
 // resolveWithin resolves a decoded fragment within a resource: the resource
@@ -332,8 +360,11 @@ func (s *schemaSpace) resolveWithin(r *docResource, fragment, ref string) (schem
 	if strings.HasPrefix(fragment, "/") {
 		tokens, ok := jsonpointer.Parse(fragment)
 		location := r.location + jsonpointer.Format(tokens...)
-		if _, isSchema := r.doc.schemas[location]; !ok || !isSchema {
-			return schemaTarget{}, r.doc.notSchema(fmt.Sprintf("%q reaches no schema in %s", ref, describeResource(r)))
+		if !ok {
+			return schemaTarget{}, r.doc.notSchema(fmt.Sprintf("%q is not a JSON Pointer", ref))
+		}
+		if _, isSchema := r.doc.schemas[location]; !isSchema {
+			return schemaTarget{}, r.doc.unindexed(location, fmt.Sprintf("%q reaches no schema in %s", ref, describeResource(r)))
 		}
 		return schemaTarget{doc: r.doc, location: location}, nil
 	}
@@ -343,7 +374,7 @@ func (s *schemaSpace) resolveWithin(r *docResource, fragment, ref string) (schem
 func (s *schemaSpace) resolveName(r *docResource, name, ref string) (schemaTarget, *failure) {
 	switch declared := r.anchors[name]; len(declared) {
 	case 0:
-		return schemaTarget{}, r.doc.notSchema(fmt.Sprintf("%q names a plain name %s does not declare", ref, describeResource(r)))
+		return schemaTarget{}, r.doc.unindexed(r.location, fmt.Sprintf("%q names a plain name %s does not declare", ref, describeResource(r)))
 	case 1:
 		return schemaTarget{doc: r.doc, location: declared[0], name: name}, nil
 	}
@@ -359,6 +390,16 @@ func (d *schemaDoc) notSchema(reason string) *failure {
 		return &failure{undefinedResult, reason}
 	}
 	return &failure{missingCapability, reason}
+}
+
+// unindexed labels a lookup that finds no schema at or below a location: in a
+// unit nesting deeper than schemaDepthLimit, below which nothing is indexed,
+// as core's limit met; elsewhere as notSchema does.
+func (d *schemaDoc) unindexed(location, reason string) *failure {
+	if unit := d.units[unitOf(schemaKey{d, location}).location]; unit != nil && unit.deep {
+		return &failure{missingCapability, fmt.Sprintf("%s, in a unit nesting subschemas deeper than %d levels, which this SDK does not index", reason, schemaDepthLimit)}
+	}
+	return d.notSchema(reason)
 }
 
 // decodeFragment percent-decodes a fragment once, reporting false when it

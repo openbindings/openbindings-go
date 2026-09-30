@@ -56,7 +56,7 @@ func (k *kit) concurrency() {
 		go func() {
 			defer wg.Done()
 			which := i % 2
-			compiled, err, panicked := compileDirect(k.e, bundles[which])
+			compiled, panicked, err := compileDirect(k.e, bundles[which])
 			if panicked != "" || err != nil {
 				mu.Lock()
 				k.t.Errorf("invariant, concurrency: compiling: %v %s", err, panicked)
@@ -64,7 +64,7 @@ func (k *kit) concurrency() {
 				return
 			}
 			for j := range 4 {
-				answer, _ := validateDirect(compiled, values[(which+j)%2])
+				_, answer := validateDirect(compiled, values[(which+j)%2])
 				if got, want := classifyAnswer(answer), []outcome{valid, mismatch}[j%2]; got != want {
 					mu.Lock()
 					k.t.Errorf("invariant, concurrency and isolation: a bundle of type %s on %v: %v, want %v", types[which], values[(which+j)%2], got, want)
@@ -79,12 +79,12 @@ func (k *kit) concurrency() {
 // retention checks that an error the evaluator returned is not changed by
 // later calls.
 func (k *kit) retention() {
-	compiled, err, panicked := compileDirect(k.e, k.bundleOf(`{"/operations/op/input":{"properties":{"a":{"type":"string"},"b":{"minimum":3}}}}`, 0))
+	compiled, panicked, err := compileDirect(k.e, k.bundleOf(`{"/operations/op/input":{"properties":{"a":{"type":"string"},"b":{"minimum":3}}}}`, 0))
 	if err != nil || panicked != "" {
 		k.t.Errorf("invariant, retention: compiling: %v %s", err, panicked)
 		return
 	}
-	first, _ := validateDirect(compiled, decode(`{"a":1}`))
+	_, first := validateDirect(compiled, decode(`{"a":1}`))
 	kept := describe(first)
 	for _, v := range []string{`{"a":2,"b":1}`, `{"b":0}`, `{"a":{"b":1}}`} {
 		validateDirect(compiled, decode(v))
@@ -109,7 +109,7 @@ func (k *kit) cancellation() {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	bundle := k.bundleOf(`{"/operations/op/input":{"type":"string"}}`, 0)
-	compiled, err, panicked := compileWithin(ctx, k.e, bundle)
+	compiled, panicked, err := compileWithin(ctx, k.e, bundle)
 	switch {
 	case panicked != "":
 		k.t.Errorf("invariant, cancellation: Compile panicked given a done ctx: %s", panicked)
@@ -117,12 +117,12 @@ func (k *kit) cancellation() {
 		k.t.Errorf("invariant, cancellation: Compile given a done ctx returned an error not matching ctx.Err(): %v", err)
 	}
 	if compiled == nil {
-		if compiled, err, panicked = compileDirect(k.e, bundle); err != nil || panicked != "" {
+		if compiled, panicked, err = compileDirect(k.e, bundle); err != nil || panicked != "" {
 			k.t.Errorf("invariant, cancellation: compiling: %v %s", err, panicked)
 			return
 		}
 	}
-	switch err, panicked := validateWithin(ctx, compiled, "s"); {
+	switch panicked, err := validateWithin(ctx, compiled, "s"); {
 	case panicked != "":
 		k.t.Errorf("invariant, cancellation: Validate panicked given a done ctx: %s", panicked)
 	case err != nil && !errors.Is(err, ctx.Err()):
@@ -155,7 +155,7 @@ func (k *kit) unresolvable() {
 		schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 		schema["$id"] = "https://kit.invalid/root"
 		bundle, _ := json.Marshal(schema)
-		compiled, err, panicked := compileDirect(k.e, bundle)
+		compiled, panicked, err := compileDirect(k.e, bundle)
 		if panicked != "" {
 			k.t.Errorf("invariant, unresolved references: Compile panicked on %s: %s", root, panicked)
 			continue
@@ -165,7 +165,7 @@ func (k *kit) unresolvable() {
 			continue
 		}
 		for _, v := range values {
-			answer, panicked := validateDirect(compiled, decode(v))
+			panicked, answer := validateDirect(compiled, decode(v))
 			if panicked != "" {
 				k.t.Errorf("invariant, unresolved references: Validate panicked on %s: %s", root, panicked)
 				continue

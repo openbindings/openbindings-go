@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -289,6 +291,9 @@ func TestRefusals(t *testing.T) {
 		{"names colliding in normal form", `{"openbindings":"0.2.0","operations":{"op":{"input":{"allOf":[{"$ref":"https://ex.test/a"},{"$ref":"HTTPS://EX.test/a"}]}}},"schemas":{"A":{"$id":"https://ex.test/a"},"B":{"$id":"HTTPS://EX.test/a"}}}`, false, "#/operations/op/input/allOf/0"},
 		{"a dialect other than 2020-12", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/R"}}},"schemas":{"R":{"$id":"https://ex.test/r","$schema":"http://json-schema.org/draft-07/schema#"}}}`, false, "#/schemas/R"},
 		{"nesting past core's limit", `{"openbindings":"0.2.0","operations":{"op":{"input":` + strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300) + `}}}`, false, "#/operations/op/input"},
+		{"a pointer to a resource inside another", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/A/properties/x"}}},"schemas":{"A":{"$id":"https://ex.test/a","properties":{"x":{"$id":"https://ex.test/b","type":"string"}}}}}`, true, "#/operations/op/input"},
+		{"a pointer past core's limit", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/Deep` + strings.Repeat(`/not`, 290) + `"}}},"schemas":{"Deep":` + strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300) + `}}`, false, "#/operations/op/input"},
+		{"a plain name past core's limit", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#deep"}}},"schemas":{"Deep":` + strings.Repeat(`{"not":`, 290) + `{"$anchor":"deep"}` + strings.Repeat(`}`, 290) + `}}`, false, "#/operations/op/input"},
 	}
 	for _, c := range cases {
 		refusal := refusalOf(t, c.document, "op")
@@ -299,6 +304,57 @@ func TestRefusals(t *testing.T) {
 			t.Errorf("%s: located at %q, want %q: %v", c.name, refusal.Location, c.location, refusal)
 		}
 	}
+}
+
+// OBI-D-12 and a value contract look a same-document reference in the
+// document resource up alike (§7.2): a pointer landing on a resource nested
+// inside another resource fails both.
+func TestRefusals_SameDocumentLookupIsShared(t *testing.T) {
+	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/A/properties/x"}}},"schemas":{"A":{"$id":"https://ex.test/a","properties":{"x":{"$id":"https://ex.test/b"}}}}}`
+	if _, report, _ := ValidateDocument([]byte(document), ValidateOptions{}); !slices.Contains(report.Violated, "OBI-D-12") {
+		t.Errorf("OBI-D-12 passes the reference: %+v", report.Findings)
+	}
+	if refusal := refusalOf(t, document, "op"); !errors.Is(refusal, ErrUndefined) {
+		t.Errorf("the value contract resolves the reference: %v", refusal)
+	}
+}
+
+// Value contracts take work linear in the document: indexing a deeply nested
+// schema stops at core's depth limit, and compiling every operation's
+// contract checks each unit apart from the rest of the document.
+func TestValueContracts_WorkIsLinear(t *testing.T) {
+	scaled := func(name string, build func(n int) string, work func(document string, n int)) {
+		t.Helper()
+		small, large := build(250), build(1000)
+		ratio := float64(allocated(func() { work(large, 1000) })) / float64(allocated(func() { work(small, 250) }))
+		if ratio > 6 {
+			t.Errorf("%s: 4 times the input allocated %.1f times the memory", name, ratio)
+		}
+	}
+	resolve := func(document string, _ int) {
+		compiler, _ := NewValueContractCompiler(testEvaluator{})
+		if _, err := compiler.Resolve(context.Background(), mustDecodeInterface(t, document)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scaled("a deeply nested schema", func(n int) string {
+		return `{"openbindings":"0.2.0","operations":{},"schemas":{"A":` + strings.Repeat(`{"not":`, 8*n) + `{}` + strings.Repeat(`}`, 8*n) + `}}`
+	}, resolve)
+	scaled("compiling every operation's contract", func(n int) string {
+		var operations, schemas []string
+		for i := range n {
+			operations = append(operations, fmt.Sprintf(`"o%d":{"input":{"$ref":"#/schemas/S%d"}}`, i, i))
+			schemas = append(schemas, fmt.Sprintf(`"S%d":{"properties":{"a":{"type":"string"},"b":{"items":{"$ref":"#/schemas/S%d"}}}}`, i, i))
+		}
+		return `{"openbindings":"0.2.0","operations":{` + strings.Join(operations, ",") + `},"schemas":{` + strings.Join(schemas, ",") + `}}`
+	}, func(document string, n int) {
+		contracts := contractsFor(t, mustDecodeInterface(t, document))
+		for i := range n {
+			if _, err := contracts.CompileInput(context.Background(), fmt.Sprintf("o%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
 }
 
 // A reference into a part of a supplied resource that is not a schema is a

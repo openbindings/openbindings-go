@@ -9,183 +9,117 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
-// reference is what a schema reference ($ref, or $dynamicRef's static
-// target) names, resolved as §7 and JSON Schema 2020-12 resolve it (OBI-T-06).
-// One resolution serves the reference rule (OBI-D-12), the reach of an
-// operation's schema (OBI-T-08), and the bundle the schema library is given,
-// so they cannot disagree.
-type reference struct {
-	origin origin
-	// location is where in the document the reference points, when origin is
-	// inDocument, as a JSON Pointer from the document root.
+// sameDocumentTarget is what a same-document reference in the document
+// resource identifies, looked up as OBI-D-12 looks it up (§7.3). One lookup
+// serves OBI-D-12 and the value contracts that resolve such a reference
+// (§7.2), so they cannot disagree.
+type sameDocumentTarget struct {
+	// location is the schema the reference identifies, as a JSON Pointer
+	// from the document root.
 	location string
-	// uri is the resource outside the document, the meta-schema, or the URI
-	// more than one resource declares.
-	uri string
-	// exists is whether the location named exists, which is what OBI-D-12
-	// asks of a reference the document resolves.
-	exists existence
-	// within is the resource an absolute reference named, or the resource a
-	// fragment resolved within; nil for the document resource and for a
-	// reference outside the document.
-	within *schemaResource
-	// why states what is wrong with a reference that names no one location.
+	// name is the plain name the reference used, or "".
+	name string
+	// why says why the reference identifies no schema; "" when it
+	// identifies one.
 	why string
+	// declaredTwice marks a plain name the document resource declares more
+	// than once: JSON Schema leaves what it identifies undefined (Core
+	// §8.2.2), and OBI-D-13, not OBI-D-12, reports the declarations.
+	declaredTwice bool
 }
 
-// origin is where a reference points.
-type origin int
-
-const (
-	inDocument origin = iota // a location in the document
-	outside                  // a resource the document does not embed
-	ambiguous                // a URI or anchor more than one schema declares
-	unresolved               // nothing: no base, no such anchor, not a URI
-)
-
-type existence int
-
-const (
-	exists existence = iota
-	missing
-	undecided
-)
-
-// resolve resolves a reference held by the schema at location holder in the
-// document view.
-//
-// The base is the resource holding the reference. In the document resource,
-// which has no URI anything can name, a same-document reference is looked up
-// as OBI-D-12 looks it up (§7.2): the empty reference and an empty fragment
-// name the OBI document itself; any other fragment is percent-decoded once,
-// and then one beginning with / is a JSON Pointer from the document root,
-// which reaches no location inside a schema with an $id member, and any other
-// a plain name the document resource declares. A relative reference there has
-// no base. Inside a resource, a fragment resolves within
-// it, and any other reference against its URI; an absolute URI names the
-// embedded resource declaring it, a carried meta-schema, or a resource
-// outside the document. A reference into a meta-schema's interior is not
-// followed: this SDK does not analyze the meta-schemas the library carries.
-// A reference that is not a URI-reference (RFC 3986 §4.1) resolves to
-// nothing: JSON Schema requires one (Core §8.2.3.1) and leaves any other
-// undefined.
-func (d documentSchemas) resolve(ref, holder string, view any) reference {
-	return d.resolveFrom(ref, d.resourceAt(holder), view)
-}
-
-// resolveFrom resolves a reference held in a resource, or in the document
-// resource when resource is nil, as resolve does.
-func (d documentSchemas) resolveFrom(ref string, resource *schemaResource, view any) reference {
-	if wellFormed, _ := uriReference(ref); !wellFormed {
-		return reference{origin: unresolved, exists: undecided, why: "is not a URI-reference (RFC 3986 §4.1), which JSON Schema leaves undefined"}
+// lookUpSameDocument looks up a same-document reference in the document
+// resource, which has no URI anything can name (§7.2): the empty reference
+// and an empty fragment name the OBI document itself; any other fragment is
+// percent-decoded once, and then one beginning with / is a JSON Pointer from
+// the document root (lookUpPointer), and any other a plain name the document
+// resource declares. A fragment that does not decode is read as written, and
+// one that decodes to a string that is not valid UTF-8 names nothing.
+func (d documentSchemas) lookUpSameDocument(ref string, view any) sameDocumentTarget {
+	fragment := strings.TrimPrefix(ref, "#")
+	if decoded, err := url.PathUnescape(fragment); err == nil {
+		fragment = decoded
 	}
-	if ref == "" {
-		return d.resolveFragment(resource, "", view)
+	switch {
+	case fragment == "":
+		return sameDocumentTarget{why: "names the OBI document itself, which is not a schema"}
+	case strings.HasPrefix(fragment, "/"):
+		return lookUpPointer(fragment, view)
+	case !utf8.ValidString(fragment):
+		return sameDocumentTarget{why: "does not decode to valid UTF-8, so it names nothing"}
 	}
-	parsed, err := url.Parse(ref)
-	if strings.HasPrefix(ref, "#") {
-		// A fragment is read after percent-decoding it once; one that does
-		// not decode is read as written.
-		fragment := ref[1:]
-		if err == nil {
-			fragment = parsed.Fragment
-		}
-		return d.resolveFragment(resource, fragment, view)
-	}
-	if err != nil {
-		return reference{origin: unresolved, exists: undecided, why: "is not a URI reference"}
-	}
-	var base *url.URL
-	if resource != nil {
-		base = resource.uri
-	}
-	if !parsed.IsAbs() && base == nil {
-		return reference{origin: unresolved, exists: undecided, why: "is relative, with no base to resolve against"}
-	}
-	target, resolved := resolveURI(base, parsed)
-	if !resolved {
-		return reference{origin: unresolved, exists: undecided, why: "does not resolve to a URL"}
-	}
-	fragment := target.Fragment
-	target.Fragment, target.RawFragment = "", ""
-	id := target.String()
-	if why, isAmbiguous := d.ambiguous[id]; isAmbiguous {
-		// The reference names no one schema. OBI-D-12 never asks whether it
-		// exists: it judges only same-document references in the document
-		// resource, which name no URI.
-		return reference{origin: ambiguous, uri: id, exists: undecided, why: "names no one embedded schema: " + why}
-	}
-	if embedded, isEmbedded := d.resources[id]; isEmbedded {
-		return d.resolveFragment(embedded, fragment, view)
-	}
-	return reference{origin: outside, uri: id, exists: undecided}
-}
-
-// resolveFragment resolves a decoded fragment within a resource, or within the
-// document resource when resource is nil: the resource itself (the OBI
-// document, for the document resource), a JSON Pointer from it, or a plain
-// name it declares. A fragment that is not valid UTF-8 names nothing
-// (OBI-D-12).
-func (d documentSchemas) resolveFragment(resource *schemaResource, fragment string, view any) reference {
-	root := ""
-	if resource != nil {
-		root = resource.location
-	}
-	if fragment == "" || strings.HasPrefix(fragment, "/") {
-		tokens, ok := jsonpointer.Parse(fragment)
-		if !ok {
-			return reference{origin: unresolved, exists: missing, within: resource, why: "is not a JSON Pointer"}
-		}
-		location := root + jsonpointer.Format(tokens...)
-		if _, ok := jsonpointer.Resolve(view, location); !ok {
-			return reference{origin: unresolved, exists: missing, within: resource, why: "does not resolve within " + describeBase(resource)}
-		}
-		if end := strings.LastIndexByte(location, '/'); resource == nil && end >= 0 {
-			// What a schema with an $id member encloses is reached through
-			// that $id (§7.2).
-			if enclosing := d.resourceAt(location[:end]); enclosing != nil {
-				return reference{origin: unresolved, exists: missing, why: fmt.Sprintf("resolves into the schema resource declared at %s, whose contents a reference reaches through its $id", enclosing.location)}
-			}
-		}
-		return reference{origin: inDocument, location: location, exists: exists, within: resource}
-	}
-	if resource == nil {
-		switch found := d.anchors[fragment]; {
-		case !utf8.ValidString(fragment):
-			return reference{origin: unresolved, exists: missing, why: "does not decode to valid UTF-8, so it names nothing"}
-		case len(found) == 0:
-			return reference{origin: unresolved, exists: missing, why: "names a plain name no schema in the document resource declares"}
-		case len(found) == 1:
-			return reference{origin: inDocument, location: found[0].at.from(nil), exists: exists}
-		default:
-			return reference{origin: ambiguous, exists: undecided, why: "names a plain name the document resource declares more than once"}
-		}
-	}
-	switch found := resource.anchors[fragment]; len(found) {
+	switch found := d.anchors[fragment]; len(found) {
 	case 0:
-		return reference{origin: unresolved, exists: missing, within: resource, why: fmt.Sprintf("names an anchor %s does not declare", resourceName(resource))}
+		return sameDocumentTarget{why: "names a plain name no schema in the document resource declares"}
 	case 1:
-		return reference{origin: inDocument, location: found[0].from(nil), exists: exists, within: resource}
-	default:
-		return reference{origin: ambiguous, exists: undecided, within: resource, why: fmt.Sprintf("names an anchor more than one schema in %s declares", resourceName(resource))}
+		return sameDocumentTarget{location: found[0].at.from(nil), name: fragment}
 	}
+	return sameDocumentTarget{why: "names a plain name the document resource declares more than once", declaredTwice: true}
 }
 
-// describeBase names what a fragment resolves within, for a message.
-func describeBase(resource *schemaResource) string {
-	if resource == nil {
-		return "the document"
+// lookUpPointer follows a JSON Pointer from the document root as OBI-D-12
+// does: it identifies a schema at an OBI position, and never a location
+// inside a schema that declares $id, whose contents a reference reaches
+// through that $id. The pointer is followed step by step through the
+// positions it passes, so a lookup takes time linear in the pointer.
+func lookUpPointer(pointer string, view any) sameDocumentTarget {
+	tokens, ok := jsonpointer.Parse(pointer)
+	if !ok {
+		return sameDocumentTarget{why: "is not a JSON Pointer"}
 	}
-	if resource.uri != nil {
-		return "the schema the document embeds as " + resource.uri.String()
+	location := jsonpointer.Format(tokens...)
+	target, found := jsonpointer.Resolve(view, location)
+	if !found {
+		return sameDocumentTarget{why: "does not resolve within the document"}
 	}
-	return "the schema at " + resource.location
-}
-
-// resourceName names a resource, for a message: its URI, or where it is.
-func resourceName(resource *schemaResource) string {
-	if resource.uri != nil {
-		return resource.uri.String()
+	var rest []string
+	positioned := false
+	switch {
+	case len(tokens) >= 2 && tokens[0] == "schemas":
+		positioned, rest = true, tokens[2:]
+	case len(tokens) >= 3 && tokens[0] == "operations" && (tokens[2] == "input" || tokens[2] == "output"):
+		positioned, rest = true, tokens[3:]
 	}
-	return "the schema at " + resource.location
+	passed := len(tokens) - len(rest)
+	node, _ := jsonpointer.Resolve(view, jsonpointer.Format(tokens[:passed]...))
+	// Each step is read in what the document holds, so a keyword holding a
+	// map or an array of schemas leads to an entry only when its value is an
+	// object or an array: allOf holding an object has no entries.
+	for positioned && len(rest) > 0 {
+		schema, isObject := node.(map[string]any)
+		if !isObject {
+			positioned = false
+			break
+		}
+		if _, declares := schema["$id"]; declares {
+			return sameDocumentTarget{why: fmt.Sprintf("resolves into the schema resource declared at %s, whose contents a reference reaches through its $id", jsonpointer.Format(tokens[:passed]...))}
+		}
+		keyword, value := rest[0], schema[rest[0]]
+		step := 2
+		switch {
+		case singleSchemaKeywords[keyword]:
+			node, step = value, 1
+		case len(rest) < 2:
+			positioned = false
+		case schemaMapKeywords[keyword], describedMapKeywords[keyword]:
+			entries, isMap := value.(map[string]any)
+			node, positioned = entries[rest[1]], isMap
+		case arraySchemaKeywords[keyword]:
+			_, isArray := value.([]any)
+			node, _ = jsonpointer.Resolve(value, jsonpointer.Format(rest[1]))
+			positioned = isArray
+		default:
+			positioned = false
+		}
+		if positioned {
+			rest, passed = rest[step:], passed+step
+		}
+	}
+	switch target.(type) {
+	case map[string]any, bool:
+		if positioned {
+			return sameDocumentTarget{location: location}
+		}
+	}
+	return sameDocumentTarget{why: fmt.Sprintf("resolves to %s, which is not a schema at an OBI position", location)}
 }
