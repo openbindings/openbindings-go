@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -200,16 +201,64 @@ type coreToolScenarioHeader struct {
 	Action      string `json:"action"`
 }
 
-// corpusDefects are scenarios, in the corpus of the specification revision
-// this SDK applies, whose expected outcome the specification text
-// contradicts, keyed by scenario ID: the outcome this SDK reaches instead,
-// and why the text requires it. An entry fails once its scenario expects
-// that outcome, or is gone, so each goes when the corpus is corrected.
-var corpusDefects = map[string]struct{ outcome, why string }{
-	"T09-S-01": {
-		outcome: "conformance-undetermined",
-		why:     "its evidence omits OBI-D-12 and OBI-D-13, and OBI-T-09 permits a conformant conclusion only when every applicable document rule has been established with no violation",
+// corpusDefect is a defect a conclude-conformance scenario can have, which
+// makes its expected conclusion one the specification text contradicts.
+type corpusDefect struct {
+	// condition says what the defect is.
+	condition string
+	// found reports whether a scenario has the defect, and how it has it.
+	found func(evidence map[string]RuleEvidenceStatus, expected string) (how string, has bool)
+	// corrected is the conclusion the text requires while the defect stands.
+	corrected ConformanceConclusion
+}
+
+// expectsConformantWithoutEveryRule is a scenario expecting conformant from
+// evidence that omits a document rule: OBI-T-09 permits a conformant
+// conclusion only when every applicable document rule has been established
+// with no violation, and every document rule applies, so the text requires
+// conformance undetermined.
+var expectsConformantWithoutEveryRule = corpusDefect{
+	condition: "it expects conformant from evidence that omits a document rule",
+	found: func(evidence map[string]RuleEvidenceStatus, expected string) (string, bool) {
+		var missing []string
+		for _, rule := range DocumentRules() {
+			if _, given := evidence[rule]; !given {
+				missing = append(missing, rule)
+			}
+		}
+		if expected != string(ConclusionConformant) || len(missing) == 0 {
+			return "", false
+		}
+		return fmt.Sprintf("it expects conformant, but its evidence omits %s; OBI-T-09 permits a conformant conclusion only when every applicable document rule has been established with no violation", strings.Join(missing, ", ")), true
 	},
+	corrected: ConclusionConformanceUndetermined,
+}
+
+// corpusDefects are the scenarios, in the corpus of the specification
+// revision this SDK applies, whose expected conclusion the specification
+// text contradicts, keyed by scenario ID, each with its defect. While a
+// defect holds, its scenario is held to the corrected conclusion and then
+// reported as a keyed expected failure, a skip, never a pass. An entry fails
+// once its defect no longer holds, telling the reader to remove it, and once
+// its scenario is gone.
+var corpusDefects = map[string]corpusDefect{
+	"T09-S-01": expectsConformantWithoutEveryRule,
+}
+
+// concludeExpectation returns the conclusion a conclude-conformance scenario
+// must reach: the corrected one, with why, for a keyed corpus defect that
+// still holds, and otherwise the scenario's own. It returns an error for a
+// keyed defect that no longer holds.
+func concludeExpectation(id string, evidence map[string]RuleEvidenceStatus, expected string) (want ConformanceConclusion, defect string, err error) {
+	keyed, known := corpusDefects[id]
+	if !known {
+		return ConformanceConclusion(expected), "", nil
+	}
+	how, has := keyed.found(evidence, expected)
+	if !has {
+		return "", "", fmt.Errorf("the keyed corpus defect %s no longer holds (%s): remove its corpusDefects entry", id, keyed.condition)
+	}
+	return keyed.corrected, how, nil
 }
 
 func runCoreToolScenarioDir(t *testing.T, dir string) {
@@ -400,16 +449,15 @@ func testConcludeConformanceScenario(t *testing.T, id string, raw json.RawMessag
 		t.Fatal(err)
 	}
 	report := ConcludeConformance(scenario.Given.Evidence)
-	want := scenario.Expected.Conclusion
-	if defect, known := corpusDefects[id]; known {
-		if want == defect.outcome {
-			t.Fatalf("corpusDefects names %s, whose expected conclusion is now %q: remove the entry", id, want)
-		}
-		t.Logf("the corpus expects %q, which the text contradicts: %s", want, defect.why)
-		want = defect.outcome
+	want, defect, err := concludeExpectation(id, scenario.Given.Evidence, scenario.Expected.Conclusion)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if string(report.Conclusion) != want {
+	if report.Conclusion != want {
 		t.Fatalf("report %#v; expected conclusion=%q", report, want)
+	}
+	if defect != "" {
+		t.Skipf("keyed corpus defect %s: %s; this SDK concludes the corrected %q", id, defect, want)
 	}
 }
 
@@ -570,5 +618,32 @@ func TestContractOutcome(t *testing.T) {
 		if got := contractOutcome(err, "resolver-error"); got != want {
 			t.Errorf("%v: %q, want %q", err, got, want)
 		}
+	}
+}
+
+// A keyed corpus defect holds the scenario to the corrected conclusion while
+// the defect stands, and tells the reader to remove its entry once the corpus
+// is corrected, whatever the corrected scenario expects.
+func TestCorpusDefects_Retire(t *testing.T) {
+	evidence := allRules(EvidenceSatisfied)
+	evidence["OBI-D-11"] = EvidenceNotApplicable
+	defective := maps.Clone(evidence)
+	delete(defective, "OBI-D-12")
+	delete(defective, "OBI-D-13")
+	want, defect, err := concludeExpectation("T09-S-01", defective, "conformant")
+	if err != nil || want != ConclusionConformanceUndetermined || !strings.Contains(defect, "omits OBI-D-12, OBI-D-13") {
+		t.Fatalf("the defect as it stands: %q, %q, %v", want, defect, err)
+	}
+	for _, expected := range []string{"conformant", "conformance-undetermined"} {
+		corrected := evidence
+		if expected != "conformant" {
+			corrected = defective
+		}
+		if _, _, err := concludeExpectation("T09-S-01", corrected, expected); err == nil || !strings.Contains(err.Error(), "remove its corpusDefects entry") {
+			t.Errorf("a corrected scenario expecting %s: %v", expected, err)
+		}
+	}
+	if want, defect, err := concludeExpectation("T09-S-02", defective, "conformance-undetermined"); want != ConclusionConformanceUndetermined || defect != "" || err != nil {
+		t.Errorf("a scenario no entry names: %q, %q, %v", want, defect, err)
 	}
 }

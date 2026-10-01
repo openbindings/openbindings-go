@@ -66,10 +66,12 @@
   identifier leaves its rule missing, so inconclusive. The returned
   `Evidence` holds exactly the document rules, each missing one recorded as
   inconclusive. Its doc states the invariants of amending a report with
-  evidence the SDK cannot produce. The corpus at the applied
-  revision expects T09-S-01, whose evidence omits OBI-D-12 and OBI-D-13, to
-  conclude conformant; the harness pins it as a corpus defect, an entry that
-  fails once the corpus is corrected.
+  evidence the SDK cannot produce. The corpus at the applied revision
+  expects T09-S-01, whose evidence omits OBI-D-12 and OBI-D-13, to conclude
+  conformant. The harness keys it as a corpus defect on that condition: it
+  checks the scenario against the corrected conclusion (undetermined) and
+  reports it as a keyed expected failure, never a pass, and the entry fails,
+  telling the reader to remove it, once the condition no longer holds.
 - **Undecided failures match `ErrInconclusive` (breaking, pre-1.0).**
   `ParseDocument`'s failures to read a document in full, which read
   `parse document: ...`, read `openbindings: inconclusive: ...`; value
