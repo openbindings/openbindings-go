@@ -147,7 +147,13 @@ type SchemaBundle struct {
 	//     the u flag accepts, no resource declares a plain name twice, and no
 	//     reachable cycle applies schemas in place without advancing into
 	//     the value.
-	//   - As written otherwise: every keyword, 2020-12 or not, and every
-	//     number exactly as the document writes it.
+	//   - One dialect: every resource's dialect is 2020-12, assigned by
+	//     resource (§5.2): the document resource's is 2020-12, and a
+	//     resource takes the dialect its root's $schema names or its
+	//     enclosing resource's. A $schema appears only at a resource's root,
+	//     naming 2020-12; core leaves out one that declares no dialect (in
+	//     the document resource, or below a resource's root).
+	//   - As written otherwise: every other keyword, 2020-12 or not, and
+	//     every number exactly as the document writes it.
 	Document json.RawMessage
 }

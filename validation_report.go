@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"fmt"
+	"slices"
 )
 
 // RuleEvidenceStatus records a validator's evidence for one applicable or
@@ -89,11 +90,13 @@ type ValidationReport struct {
 	// Evidence holds one status per document rule (DocumentRules), the
 	// evidence the conclusion was reached from. Reports from
 	// Document.Validate, ValidateDocument, and ConcludeConformance carry
-	// exactly the document rules; a rule with nothing to govern in the
-	// document is vacuously satisfied. A version refusal, or a host object
-	// the caller made unencodable, returns no report, whose Evidence is nil;
-	// a host object beyond this SDK's own limits gets a report whose
-	// Evidence decides at most OBI-D-09.
+	// exactly the document rules. In a validator's report, a rule with
+	// nothing to govern in the document is vacuously satisfied, and on a
+	// text violating OBI-D-01 every other rule is not applicable (§10). A
+	// version refusal, or a host object the caller made unencodable,
+	// returns no report, whose Evidence is nil; a host object beyond this
+	// SDK's own limits gets a report whose Evidence decides at most
+	// OBI-D-09.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
 	// Version, in identifier order. These lists are SDK report fields.
@@ -138,11 +141,13 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 // and returns the report they conclude. It concludes from the document rules
 // alone (DocumentRules), since §10.4 defines each conclusion by the document
 // rules: evidence under any other identifier is dropped and decides nothing.
-// Every document rule applies to every document, so one missing from the
-// evidence is inconclusive: absence is no evidence, and an empty map
-// concludes conformance undetermined. A mistyped identifier, such as
-// "OBI-D-1", is therefore dropped and leaves its rule missing, so it never
-// makes a conclusion conformant or non-conformant.
+// Each document rule applies to every text that holds OBI-D-01; on a text
+// violating it, OBI-D-02 through OBI-D-13 are not applicable and the
+// OBI-D-01 violation alone establishes non-conformance (§10). Absence is no
+// evidence either way, so a rule missing from the evidence is inconclusive,
+// and an empty map concludes conformance undetermined. A mistyped
+// identifier, such as "OBI-D-1", is therefore dropped and leaves its rule
+// missing, so it never makes a conclusion conformant or non-conformant.
 //
 // A violation is decisive even when other rules remain inconclusive. In the
 // absence of a violation, any inconclusive rule makes the conclusion
@@ -219,10 +224,15 @@ func (e *VersionRefusalError) Error() string {
 }
 
 // ruleChecks collects located evidence while a validator runs. Rules that
-// record no finding are satisfied.
+// record no finding are satisfied, or not applicable where notApplicable
+// says so.
 type ruleChecks struct {
 	version, revision string
 	findings          []Finding
+	// notApplicable holds the rules that impose nothing on the document,
+	// which record no finding: every rule but OBI-D-01 for a text violating
+	// OBI-D-01 (§10).
+	notApplicable map[string]bool
 }
 
 func (c *ruleChecks) violated(rule, path, message string) {
@@ -247,13 +257,27 @@ func (c *ruleChecks) inconclusiveExcept(reason string, decided ...string) {
 	}
 }
 
+// notApplicableExcept records every document rule but the decided ones as not
+// applicable, when what was decided leaves the others nothing to require.
+func (c *ruleChecks) notApplicableExcept(decided ...string) {
+	c.notApplicable = map[string]bool{}
+	for _, rule := range documentRules {
+		if !slices.Contains(decided, rule) {
+			c.notApplicable[rule] = true
+		}
+	}
+}
+
 // report concludes over every document rule: violated when any violation was
-// recorded for it, inconclusive when only undecided checks were, satisfied
-// otherwise.
+// recorded for it, inconclusive when only undecided checks were, not
+// applicable when recorded so, and satisfied otherwise.
 func (c *ruleChecks) report() ValidationReport {
 	evidence := make(map[string]RuleEvidenceStatus, len(documentRules))
 	for _, rule := range documentRules {
 		evidence[rule] = EvidenceSatisfied
+		if c.notApplicable[rule] {
+			evidence[rule] = EvidenceNotApplicable
+		}
 	}
 	for _, finding := range c.findings {
 		switch finding.Status {

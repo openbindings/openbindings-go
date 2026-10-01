@@ -204,6 +204,49 @@ func TestBundle_ScopeWrappers(t *testing.T) {
 	}
 }
 
+// An evaluation beginning in the document resource makes it outermost in the
+// dynamic scope (§7.2), so a $dynamicRef whose initial target declares a
+// $dynamicAnchor looks the name up there first (JSON Schema Core §8.2.3.2).
+// A name the document resource declares more than once, by $anchor or
+// $dynamicAnchor, leaves that capture undefined (Core §8.2.2): no verdict,
+// whichever schema would have won. A name declared once captures as before,
+// and one past core's index is core's limit, not a verdict.
+func TestDynamicScope_DuplicateDocumentNames(t *testing.T) {
+	inner := `"Inner":{"$id":"https://e.test/inner","$dynamicAnchor":"node","type":"string"}`
+	entry := `"operations":{"op":{"input":{"$dynamicRef":"https://e.test/inner#node"}}}`
+	for _, c := range []struct {
+		name, schemas string
+		values        []any
+		want          []string
+		undefined     bool
+	}{
+		{"a $dynamicAnchor and an $anchor", `"Outer":{"$dynamicAnchor":"node","type":"integer"},` + inner + `,"AlsoOuter":{"$anchor":"node"}`, []any{json.Number("1")}, []string{"no verdict"}, true},
+		{"two $dynamicAnchors", `"Outer":{"$dynamicAnchor":"node","type":"integer"},` + inner + `,"AlsoOuter":{"$dynamicAnchor":"node"}`, []any{json.Number("1")}, []string{"no verdict"}, true},
+		{"two $anchors", `"Outer":{"$anchor":"node","type":"integer"},` + inner + `,"AlsoOuter":{"$anchor":"node"}`, []any{json.Number("1")}, []string{"no verdict"}, true},
+		{"one $dynamicAnchor captures", `"Outer":{"$dynamicAnchor":"node","type":"integer"},` + inner, []any{json.Number("1"), "s"}, []string{"valid", "mismatch"}, false},
+		{"one $anchor does not capture", `"Outer":{"$anchor":"node","type":"integer"},` + inner, []any{"s", json.Number("1")}, []string{"valid", "mismatch"}, false},
+		{"a name declared outside the grammar twice", `"Outer":{"$dynamicAnchor":"1node"},"AlsoOuter":{"$anchor":"1node"},` + inner, []any{"s", json.Number("1")}, []string{"valid", "mismatch"}, false},
+	} {
+		document := `{"openbindings":"0.2.0",` + entry + `,"schemas":{` + c.schemas + `}}`
+		if got := verdicts(t, document, "op", c.values...); !equalStrings(got, c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+			continue
+		}
+		if c.undefined {
+			if refusal := refusalOf(t, document, "op"); !errors.Is(refusal, ErrUndefined) || refusal.Location != "#/operations/op/input" || !strings.Contains(refusal.Error(), "declares more than once") {
+				t.Errorf("%s: %v at %s", c.name, refusal, refusal.Location)
+			}
+		}
+	}
+	// The only declaration past core's index: its limit, never a verdict
+	// that leaves the capture out.
+	deep := strings.Repeat(`{"not":`, 300) + `{"$dynamicAnchor":"node","type":"integer"}` + strings.Repeat(`}`, 300)
+	refusal := refusalOf(t, `{"openbindings":"0.2.0",`+entry+`,"schemas":{"Deep":`+deep+`,`+inner+`}}`, "op")
+	if errors.Is(refusal, ErrUndefined) || !strings.Contains(refusal.Error(), "does not index") {
+		t.Errorf("a declaration past the index: %v", refusal)
+	}
+}
+
 // A reference to a JSON Schema 2020-12 meta-schema nothing in the space
 // declares is satisfied by embedding it.
 func TestBundle_EmbedsMetaSchemas(t *testing.T) {
@@ -249,6 +292,82 @@ func TestBundle_SuppliedResources(t *testing.T) {
 				t.Errorf("%s: %v: %s, want %s", operation, values[i], got, want)
 			}
 		}
+	}
+}
+
+// Dialects go by resource (§5.2, JSON Schema Core §9.3.2). The document
+// resource's is 2020-12, and a $schema in it declares none, so a schema
+// copied with a foreign $schema and no $id is read as 2020-12 and gets a
+// verdict, though the $schema still violates OBI-D-06; so is one below an
+// $id resource's root, where $schema is misplaced. A resource whose root
+// names another dialect, and a resource inheriting it, get no verdict:
+// this SDK evaluates 2020-12 alone.
+func TestDialects_ByResource(t *testing.T) {
+	const draft07 = `"http://json-schema.org/draft-07/schema#"`
+	for _, c := range []struct {
+		name, document string
+		value          any
+		want           string
+	}{
+		{"misplaced at an operation's input, mismatch", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"type":"string"}}}}`, json.Number("5"), "mismatch"},
+		{"misplaced at an operation's input, valid", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"type":"string"}}}}`, "x", "valid"},
+		{"misplaced, nullable an unknown keyword", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"type":"string","nullable":true}}}}`, nil, "mismatch"},
+		{"misplaced, an https draft-07 spelling", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":"https://json-schema.org/draft-07/schema#","type":"integer"}}}}`, json.Number("1"), "valid"},
+		// Draft-07 would ignore the keywords beside $ref; 2020-12 applies them.
+		{"misplaced beside a $ref", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"$ref":"#/schemas/Any","type":"string"}}},"schemas":{"Any":{}}}`, json.Number("5"), "mismatch"},
+		{"misplaced at a schemas entry", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/S"}}},"schemas":{"S":{"$schema":` + draft07 + `,"type":"string"}}}`, json.Number("5"), "mismatch"},
+		{"misplaced below an $id resource's root", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/a"}}},"schemas":{"A":{"$id":"https://e.example.test/a","properties":{"p":{"$schema":` + draft07 + `,"type":"string"}}}}}`, map[string]any{"p": json.Number("5")}, "mismatch"},
+		{"a 2020-12 resource", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/a"}}},"schemas":{"A":{"$id":"https://e.example.test/a","$schema":"https://json-schema.org/draft/2020-12/schema","type":"string"}}}`, json.Number("5"), "mismatch"},
+		{"a draft-07 resource", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/a"}}},"schemas":{"A":{"$id":"https://e.example.test/a","$schema":` + draft07 + `,"type":"string"}}}`, json.Number("5"), "no verdict"},
+		{"a resource inheriting draft-07", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/inner"}}},"schemas":{"Outer":{"$id":"https://e.example.test/outer","$schema":` + draft07 + `,"definitions":{"inner":{"$id":"https://e.example.test/inner","type":"string"}}}}}`, json.Number("5"), "no verdict"},
+	} {
+		if got := inputVerdict(t, c.document, "op", c.value); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+		if report := mustValidateDocument(t, c.document); report.Evidence["OBI-D-06"] != EvidenceViolated && !strings.Contains(c.name, "2020-12") {
+			t.Errorf("%s: OBI-D-06 is %s, want violated", c.name, report.Evidence["OBI-D-06"])
+		}
+	}
+	// The refusal is located at the root that declares the dialect, also
+	// for a resource inheriting it.
+	refusal := refusalOf(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/inner"}}},"schemas":{"Outer":{"$id":"https://e.example.test/outer","$schema":`+draft07+`,"definitions":{"inner":{"$id":"https://e.example.test/inner","type":"string"}}}}}`, "op")
+	if errors.Is(refusal, ErrUndefined) || refusal.Location != "#/schemas/Outer" || !strings.Contains(refusal.Error(), "does not evaluate") {
+		t.Errorf("an inherited dialect: %v at %s", refusal, refusal.Location)
+	}
+}
+
+// The bundle writes $schema only where it declares a dialect, a resource's
+// root, so core's generated $id at an OBI position of the document resource
+// never makes a misplaced one declare its unit's dialect, and an evaluator
+// never meets a misplaced one.
+func TestBundle_WritesOnlyDeclaringSchemas(t *testing.T) {
+	const draft07 = `"http://json-schema.org/draft-07/schema#"`
+	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"properties":{
+		"a":{"$schema":` + draft07 + `},"r":{"$ref":"https://e.example.test/r"}}}}},
+		"schemas":{"R":{"$id":"https://e.example.test/r","$schema":"https://json-schema.org/draft/2020-12/schema","items":{"$schema":"https://json-schema.org/draft/2020-12/schema"}}}}`
+	bundle := bundleOf(t, document, "/operations/op/input")
+	var declaring []string
+	var walk func(value any, at string)
+	walk = func(value any, at string) {
+		switch v := value.(type) {
+		case map[string]any:
+			if _, present := v["$schema"]; present {
+				declaring = append(declaring, fmt.Sprint(v["$id"]))
+			}
+			for key, member := range v {
+				walk(member, at+"/"+key)
+			}
+		case []any:
+			for _, item := range v {
+				walk(item, at)
+			}
+		}
+	}
+	for _, unit := range bundle["$defs"].(map[string]any) {
+		walk(unit, "")
+	}
+	if !slices.Equal(declaring, []string{"https://e.example.test/r"}) {
+		t.Fatalf("$schema written at %v, want only the resource root https://e.example.test/r", declaring)
 	}
 }
 

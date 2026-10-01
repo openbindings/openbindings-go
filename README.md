@@ -19,12 +19,10 @@ its environment, independently of protocol. See the
 > install this branch until `v0.2.0` is tagged.
 
 This implementation targets the Core 0.2 working draft on the spec's
-`release/0.2` branch, whose conformance corpus it passes but for one keyed
-corpus defect: scenario T09-S-01 expects conformant from evidence that omits
-OBI-D-12 and OBI-D-13, which OBI-T-09 rules out, so the harness holds this
-SDK to the corrected conclusion, undetermined, and reports the case as a
-keyed expected failure until the corpus is corrected. A validation report
-names the revision of the text it applied (`ValidationReport.Revision`).
+`release/0.2` branch, at the revision it names, and passes that revision's
+conformance corpus with no keyed expected failure. A validation report
+names the revision of the text it applied (`ValidationReport.Revision`), and
+CI tests the SDK against the corpus at exactly that revision.
 
 **Conformance:** `ValidateDocument(data)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
@@ -44,7 +42,12 @@ its typed decoding, so a document the typed model cannot carry is still judged
 in full, with two exceptions the SDK cannot read in full: a document holding a
 string that escapes a lone UTF-16 surrogate, and input nested deeper than
 encoding/json reads (10000 levels). For both, OBI-D-01 is decided, and so
-is OBI-D-09, from the declared version. The other rules are inconclusive. Both return a `*ValidationError` beside the
+is OBI-D-09, from the declared version. The other rules are inconclusive.
+A text that violates OBI-D-01 (not UTF-8 JSON, beginning with a byte-order
+mark, or repeating a member name) is non-conformant by that violation
+alone: the other rules govern a JSON value only when OBI-D-01 holds, so the
+report records them as not applicable (§10). `ValidateDocument` and
+`Document.Validate` return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
@@ -90,7 +93,10 @@ evaluation would never reach it (a reference to a resource nobody supplied,
 on a branch the value does not take). A value holding a string with a lone
 UTF-16 surrogate, which a Go string cannot carry, gets no verdict. And
 `schemaeval` gives no verdict where evaluation reaches a Unicode property
-escape in a pattern, since Go's Unicode tables are not ECMA-262's.
+escape in a pattern, since Go's Unicode tables are not ECMA-262's. Core
+evaluates JSON Schema 2020-12 alone, so a value contract copying a schema
+whose resource names another dialect, by its root's `$schema` or by
+inheriting it (§5.2), gets no verdict.
 The Core corpus does not exercise every behavior in OBI-T-01: the exact kind
 comparison has direct Go tests, while Core has no kind-support registry or
 implicit dereferencing path.
@@ -153,9 +159,10 @@ go get github.com/openbindings/openbindings-go
 - **Operation resolution** by key or alias (`Document.ResolveOperation`),
   and an operation's bindings found by its key (`Document.OperationBindings`)
 - **Schema references** (`Document.References`): every `$ref` and
-  `$dynamicRef` in the schemas a document contains, with the schema each
-  one's initial lookup identifies, looked up as OBI-D-12 and value
-  validation look them up
+  `$dynamicRef` in the schemas a document contains whose value is a
+  URI-reference (a string that is not one is no reference of any form,
+  §7.1), with the schema each one's initial lookup identifies, looked up as
+  OBI-D-12 and value validation look them up
 - **Value-contract validation** of values against an operation's input or output contract (§3, OBI-T-08), with a JSON Schema evaluator the application supplies: core resolves the document's schemas (§7), refuses what the specification leaves undefined, and hands the evaluator a closed JSON Schema 2020-12 bundle per value contract; the evaluator evaluates. [`schemaeval`](schemaeval) is the project's evaluator, and [`openbindingstest`](openbindingstest) checks any evaluator against the contract
 
 ## Quick start
@@ -259,7 +266,8 @@ document references but does not embed are supplied as `Resource`s to
 ### List a document's schema references
 
 `Document.References` lists every `$ref` and `$dynamicRef` in the schemas a
-document contains, for a tool that renames, removes, or copies schemas:
+document contains whose value is a URI-reference, for a tool that renames,
+removes, or copies schemas:
 
 ```go
 refs, err := doc.References()

@@ -89,8 +89,10 @@ func TestReferences(t *testing.T) {
 // A same-document reference in the document resource identifies a schema
 // exactly when OBI-D-12, which uses the same lookup, holds for it: it lacks
 // a target exactly where OBI-D-05 or OBI-D-12 reports a violation, or where
-// it names a plain name declared more than once, which OBI-D-13 reports. The
-// documents are the corpus's, when it is found, and a few of the test's own.
+// it names a plain name declared more than once, which OBI-D-13 reports. A
+// string OBI-D-05 reports as no well-formed URI-reference is not listed at
+// all (§7.1). The documents are the corpus's, when it is found, and a few
+// of the test's own.
 func TestReferences_AgreeWithOBID12(t *testing.T) {
 	documents := map[string][]byte{
 		"references": []byte(referencesDocument),
@@ -134,6 +136,15 @@ func TestReferences_AgreeWithOBID12(t *testing.T) {
 				violated[finding.Path] = true
 			}
 		}
+		listed := map[string]bool{}
+		for _, r := range refs {
+			listed[r.Location] = true
+		}
+		for _, finding := range report.Violations() {
+			if finding.Rule == "OBI-D-05" && strings.Contains(finding.Message, "not a well-formed URI-reference") && !strings.HasSuffix(finding.Path, "/$id") && listed[finding.Path] {
+				t.Errorf("%s: %s is no reference of any form, but it is listed", name, finding.Path)
+			}
+		}
 		for _, r := range refs {
 			if r.Base != "" || r.Value != "" && !strings.HasPrefix(r.Value, "#") || inResource(&doc, r.Location) {
 				continue
@@ -149,6 +160,53 @@ func TestReferences_AgreeWithOBID12(t *testing.T) {
 		t.Fatalf("only %d references checked", checked)
 	}
 	t.Logf("%d references in %d documents agree with OBI-D-12", checked, len(documents))
+}
+
+// A $ref or $dynamicRef string that is not a well-formed URI-reference is not
+// a reference of any form (§7.1), so References omits it: in the document
+// resource, where OBI-D-05 reports it and OBI-D-12 does not govern it, and
+// in an $id resource alike. A value whose evaluation depends on one gets no
+// verdict, the result being undefined.
+func TestReferences_OmitMalformedStrings(t *testing.T) {
+	document := `{"openbindings":"0.2.0","schemas":{"T":{"type":"string"},
+	  "R":{"$id":"https://ex.test/r","properties":{"bad":{"$ref":"#%zz"},"good":{"$ref":"#/properties/bad"}}}},
+	  "operations":{"op":{"input":{"anyOf":[{"$ref":"#%zz"},{"$dynamicRef":"#/schemas/T x"},{"$ref":"http://[bad"},{"$ref":"#/schemas/T"}]}},
+	    "inR":{"input":{"$ref":"https://ex.test/r#/properties/bad"}}}}`
+	refs, err := mustDecodeDocument(t, document).References()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ location, target string }
+	var got []row
+	for _, r := range refs {
+		got = append(got, row{r.Location, r.Target})
+	}
+	want := []row{
+		{"/operations/inR/input/$ref", "/schemas/R/properties/bad"},
+		{"/operations/op/input/anyOf/3/$ref", "/schemas/T"},
+		{"/schemas/R/properties/good/$ref", "/schemas/R/properties/bad"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listed %v, want %v", got, want)
+	}
+	report := mustValidateDocument(t, document)
+	var d05 []string
+	for _, finding := range report.Violations() {
+		switch finding.Rule {
+		case "OBI-D-05":
+			d05 = append(d05, finding.Path)
+		case "OBI-D-12":
+			t.Errorf("OBI-D-12 judges %s: %s", finding.Path, finding.Message)
+		}
+	}
+	if want := []string{"/operations/op/input/anyOf/0/$ref", "/operations/op/input/anyOf/1/$dynamicRef", "/operations/op/input/anyOf/2/$ref"}; !slices.Equal(d05, want) {
+		t.Errorf("OBI-D-05 violated at %v, want %v", d05, want)
+	}
+	for _, operation := range []string{"op", "inR"} {
+		if refusal := refusalOf(t, document, operation); !errors.Is(refusal, ErrUndefined) {
+			t.Errorf("%s: %v", operation, refusal)
+		}
+	}
 }
 
 // inResource reports whether a location lies within a schema that declares

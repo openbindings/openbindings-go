@@ -138,15 +138,15 @@ func Example_cliValidate() {
 	}
 	// Output:
 	// tasks.obi.json: conformant
-	//   checked against OpenBindings 0.2.0 (working draft, spec revision 9812702): 13 of 13 rules decided
+	//   checked against OpenBindings 0.2.0 (working draft, spec revision cbc17a6): 13 of 13 rules decided
 	// exit 0
 	// broken.obi.json: non-conformant
-	//   checked against OpenBindings 0.2.0 (working draft, spec revision 9812702): 13 of 13 rules decided
+	//   checked against OpenBindings 0.2.0 (working draft, spec revision cbc17a6): 13 of 13 rules decided
 	//   broken.obi.json:7:23: OBI-D-02: does not validate against the document schema: minLength: got 0, want 1
 	//   broken.obi.json:5:12: OBI-D-07: references unknown operation key "gone"
 	// exit 1
 	// surrogate.obi.json: conformance-undetermined
-	//   checked against OpenBindings 0.2.0 (working draft, spec revision 9812702): 2 of 13 rules decided
+	//   checked against OpenBindings 0.2.0 (working draft, spec revision cbc17a6): 2 of 13 rules decided
 	//   11 checks undecided, the first OBI-D-02 at "": a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry, so this rule was not checked
 	// exit 4
 	// next.obi.json: refused, not judged: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)
@@ -639,7 +639,7 @@ func Example_producerAmendReport() {
 	// conformance-undetermined [OBI-D-10] 1 findings
 	// bare: conformance-undetermined, version "", 0 findings
 	// one rule satisfied: conformance-undetermined 12 inconclusive
-	// <nil> conformant 0.2.0 9812702 0 findings
+	// <nil> conformant 0.2.0 cbc17a6 0 findings
 	// <nil> non-conformant [OBI-D-07] [] OBI-D-07 /bindings/b/operation
 	// <nil> [OBI-D-07 OBI-D-10] 2 violations
 	// OBI-D-10 inconclusive decides nothing
@@ -1267,14 +1267,19 @@ func Example_cliReferenceParity() {
 		if err := json.Unmarshal([]byte(document), &held); err != nil {
 			panic(err)
 		}
-		lookup := "resolves"
+		// A string that is not a URI-reference is no reference of any form
+		// (§7.1), so the lookup does not list it.
+		lookup := "not a reference"
 		refs, err := held.References()
 		if err != nil {
 			panic(err)
 		}
 		for _, r := range refs {
-			if r.Location == at && r.Target == "" {
+			switch {
+			case r.Location == at && r.Target == "":
 				lookup = "no target"
+			case r.Location == at:
+				lookup = "resolves"
 			}
 		}
 		if (lookup == "resolves") == (validator == "resolves") {
@@ -1287,7 +1292,7 @@ func Example_cliReferenceParity() {
 	// #                                                            fails OBI-D-12           no target
 	// #/schemas/Task                                               resolves                 resolves
 	// #/schemas/Task/properties/my%20type                          resolves                 resolves
-	// #/schemas/Task/properties/my type                            fails OBI-D-05           no target
+	// #/schemas/Task/properties/my type                            fails OBI-D-05           not a reference
 	// #/schemas/Task/properties/my%2520type                        fails OBI-D-12           no target
 	// #%2Fschemas%2FTask                                           resolves                 resolves
 	// #/schemas/Task/type                                          fails OBI-D-12           no target

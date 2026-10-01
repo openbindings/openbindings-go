@@ -64,10 +64,12 @@
 //	bindings := doc.OperationBindings(key) // binding keys, sorted
 //
 // [Document.References] lists every $ref and $dynamicRef in the schemas the
-// document contains, with the schema each one's initial lookup identifies,
-// looked up as OBI-D-12 and value validation look them up (§7). Its doc says
-// what a caller may conclude from it, and what not: a schema no reference
-// targets is not thereby unused, and a $dynamicRef may land elsewhere.
+// document contains whose value is a URI-reference (a string that is not
+// one is no reference of any form, §7.1), with the schema each one's
+// initial lookup identifies, looked up as OBI-D-12 and value validation
+// look them up (§7). Its doc says what a caller may conclude from it, and
+// what not: a schema no reference targets is not thereby unused, and a
+// $dynamicRef may land elsewhere.
 //
 // # Value Contracts
 //
@@ -106,6 +108,9 @@
 //   - The schemaeval evaluator does not match a Unicode property escape in
 //     a pattern, since Go's Unicode tables are not ECMA-262's, so evaluation
 //     that reaches one gives no verdict.
+//   - Core evaluates JSON Schema 2020-12 alone: a value contract copying a
+//     schema whose resource names another dialect, by its root's $schema or
+//     by inheriting it (§5.2), gets no verdict.
 //
 // # An Exact Document Model
 //
@@ -133,10 +138,12 @@
 // required string member, or a binding preference that is not an integer
 // number in range. ValidateDocument still judges such a document in full,
 // except input OBI-D-01 refuses (not UTF-8, or repeating a member name),
-// where which values the document holds is not established; and a document
-// holding a lone surrogate, or input nested deeper than encoding/json reads
-// (10000 levels), where it decides OBI-D-01, and OBI-D-09 on the version it
-// reads from the bytes, and leaves the other rules inconclusive.
+// which that violation alone makes non-conformant: the other rules govern a
+// JSON value only when OBI-D-01 holds, so they are not applicable (§10);
+// and a document holding a lone surrogate, or input nested deeper than
+// encoding/json reads (10000 levels), where it decides OBI-D-01, and
+// OBI-D-09 on the version it reads from the bytes, and leaves the other
+// rules inconclusive.
 //
 // Encoding refuses the same inexact bytes in the members the model carries as
 // raw JSON (example values, source and binding content, and kept members),

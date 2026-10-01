@@ -8,10 +8,9 @@
 // schema evaluator, and schemaeval's tests execute the value actions under
 // the project's ECMA-262 evaluator.
 //
-// It reads both scenario formats while the corpus moves from one to the
-// other: openbindings.core-tool-scenarios@1, the format of the corpus this
-// SDK's text revision carries, and @2. Validity fixtures are read in the one
-// format both share.
+// It reads the validity fixtures and the scenarios, in format
+// openbindings.core-tool-scenarios@2, the format of the corpus of the text
+// this SDK applies; a scenario file in any other format is refused.
 package corpus
 
 import (
@@ -29,7 +28,6 @@ import (
 // Formats of a case.
 const (
 	FormatFixture = "fixture"
-	FormatV1      = "openbindings.core-tool-scenarios@1"
 	FormatV2      = "openbindings.core-tool-scenarios@2"
 )
 
@@ -182,7 +180,7 @@ func Load(dir string) (*Corpus, error) {
 		if err := json.Unmarshal(data, &f); err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", rel, err)
 		}
-		if f.Format != FormatV1 && f.Format != FormatV2 {
+		if f.Format != FormatV2 {
 			return nil, fmt.Errorf("%s: unknown format %q", rel, f.Format)
 		}
 		for i, raw := range f.Scenarios {
@@ -248,7 +246,6 @@ var designations = map[string]struct{ module, reason string }{
 	"check-dependency-kind":     {ModuleRoot, ""},
 	"validate-operation-values": {ModuleSchemaeval, "value validation runs in the schemaeval module, under the project's ECMA-262 evaluator"},
 	"check-examples":            {ModuleSchemaeval, "example checking composes value validation, which runs in the schemaeval module"},
-	"resolve-schema-cycle":      {ModuleSchemaeval, "value validation runs in the schemaeval module, under the project's ECMA-262 evaluator"},
 	"derive-form":               {ModuleNone, "this SDK derives no forms from a schema (OBI-T-05 has no executor here)"},
 }
 
@@ -362,13 +359,9 @@ type Observed struct {
 }
 
 // JudgeValues judges a value case's observed answers against its expected
-// object, for either format. refused and exclusive say whether the answer was
-// a version refusal and whether it came with nothing else.
-func JudgeValues(format string, expected json.RawMessage, refused, exclusive bool, observed []Observed, p Profile) Judgment {
-	switch format {
-	case FormatV1:
-		return judgeV1(expected, refused, observed)
-	}
+// object. refused and exclusive say whether the answer was a version refusal
+// and whether it came with nothing else.
+func JudgeValues(expected json.RawMessage, refused, exclusive bool, observed []Observed, p Profile) Judgment {
 	var e struct {
 		Outcome       string            `json:"outcome"`
 		Results       []json.RawMessage `json:"results"`
@@ -447,46 +440,6 @@ func JudgeValues(format string, expected json.RawMessage, refused, exclusive boo
 		return Judgment{Shortfall, fmt.Sprintf("%s %v", shortfall, got)}
 	case omission != "":
 		return Judgment{Omitted, fmt.Sprintf("%s %v", omission, got)}
-	}
-	return Judgment{Pass, fmt.Sprint(got)}
-}
-
-// judgeV1 reads format @1's value expectations: results (exact, with
-// graph-unavailable for no verdict) or allowedOutcomes (resolver-error for no
-// verdict).
-func judgeV1(expected json.RawMessage, refused bool, observed []Observed) Judgment {
-	var e struct {
-		Results         []string `json:"results"`
-		AllowedOutcomes []string `json:"allowedOutcomes"`
-	}
-	if err := json.Unmarshal(expected, &e); err != nil {
-		return Judgment{Fail, "unreadable expectation: " + err.Error()}
-	}
-	if refused {
-		return Judgment{Fail, "version-refusal; format @1 expects value results"}
-	}
-	old := func(o Observed, noVerdict string) string {
-		if o.Verdict == "no-verdict" {
-			return noVerdict
-		}
-		return o.Verdict
-	}
-	if e.AllowedOutcomes != nil {
-		if len(observed) != 1 {
-			return Judgment{Fail, fmt.Sprintf("%d results for one value", len(observed))}
-		}
-		got := old(observed[0], "resolver-error")
-		if !slices.Contains(e.AllowedOutcomes, got) {
-			return Judgment{Fail, fmt.Sprintf("outcome %s not in the permitted set %v", got, e.AllowedOutcomes)}
-		}
-		return Judgment{Pass, got}
-	}
-	var got []string
-	for _, o := range observed {
-		got = append(got, old(o, "graph-unavailable"))
-	}
-	if !slices.Equal(got, e.Results) {
-		return Judgment{Fail, fmt.Sprintf("results %v; expected %v", got, e.Results)}
 	}
 	return Judgment{Pass, fmt.Sprint(got)}
 }

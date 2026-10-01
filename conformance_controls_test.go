@@ -3,6 +3,7 @@ package openbindings
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -81,7 +82,7 @@ func TestAppliedTextControls(t *testing.T) {
 // The name a conclusion gives is compared always, before verification: a
 // wrong name fails even when the pinned bytes are verified.
 func TestJudgeNamingControls(t *testing.T) {
-	const rev = "98127021a7e2fa08a8c7b2e6bead1c847c9b6e1f"
+	const rev = appliedRevision
 	report := func(version, revision string) ValidationReport {
 		return ValidationReport{Conclusion: ConclusionConformant, Version: version, Revision: revision}
 	}
@@ -107,22 +108,45 @@ func TestJudgeNamingControls(t *testing.T) {
 }
 
 // The core declares it continues with every non-conformant document the
-// model carries, so no document back for one fails unless the case is keyed.
-func TestUncarriedOmission(t *testing.T) {
+// model carries, so no document back fails, for a non-conformant document as
+// for a conformant one.
+func TestNoDocument(t *testing.T) {
 	cause := errors.New("cause")
-	if j := uncarriedOmission("T02-S-01", []string{"OBI-D-02"}, cause); j.Category != corpus.Fail || !strings.Contains(j.Detail, "key the case in uncarried") {
-		t.Errorf("an unkeyed non-conformant case: %+v", j)
+	if j := noDocument([]string{"OBI-D-02"}, cause); j.Category != corpus.Fail || !strings.Contains(j.Detail, "continues with every non-conformant document") {
+		t.Errorf("a non-conformant case: %+v", j)
 	}
-	if j := uncarriedOmission("T02-S-01", nil, cause); j.Category != corpus.Fail || !strings.Contains(j.Detail, "conformant document") {
+	if j := noDocument(nil, cause); j.Category != corpus.Fail || !strings.Contains(j.Detail, "conformant document") {
 		t.Errorf("a conformant case: %+v", j)
 	}
-	uncarried["T02-S-01"] = "a control"
-	defer delete(uncarried, "T02-S-01")
-	if j := uncarriedOmission("T02-S-01", []string{"OBI-D-02"}, cause); j.Category != corpus.Omitted {
-		t.Errorf("a keyed case: %+v", j)
+}
+
+// conclude-conformance's conformant admits conformance-undetermined, as
+// validate-document's does (OBI-T-09 only prohibits), and every other
+// conclusion is expected exactly: non-conformant from evidence that
+// establishes no violation fails.
+func TestJudgeConcludeControls(t *testing.T) {
+	satisfied := allRules(EvidenceSatisfied)
+	partial := allRules(EvidenceSatisfied)
+	delete(partial, "OBI-D-12")
+	scenario := func(evidence map[string]RuleEvidenceStatus, expected string) corpus.Case {
+		raw, _ := json.Marshal(map[string]any{"given": map[string]any{"evidence": evidence}, "expected": map[string]any{"conclusion": expected}})
+		return corpus.Case{ID: "SYNTHETIC-01", Format: corpus.FormatV2, Action: "conclude-conformance", Raw: raw}
 	}
-	if j, stale := staleUncarried("T02-S-01"); !stale || j.Category != corpus.Fail {
-		t.Errorf("a keyed case whose document comes back: %+v, %v", j, stale)
+	for _, c := range []struct {
+		name     string
+		evidence map[string]RuleEvidenceStatus
+		expected string
+		category string
+	}{
+		{"conformant, concluded conformant", satisfied, "conformant", corpus.Pass},
+		{"conformant, concluded undetermined", partial, "conformant", corpus.Pass},
+		{"undetermined, concluded undetermined", partial, "conformance-undetermined", corpus.Pass},
+		{"undetermined, concluded conformant", satisfied, "conformance-undetermined", corpus.Fail},
+		{"non-conformant without a violation", partial, "non-conformant", corpus.Fail},
+	} {
+		if j := judgeConclude(scenario(c.evidence, c.expected)); j.Category != c.category {
+			t.Errorf("%s: %+v", c.name, j)
+		}
 	}
 }
 

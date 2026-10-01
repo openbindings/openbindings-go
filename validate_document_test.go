@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"runtime"
 	"slices"
@@ -208,8 +209,15 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesD01(t *testing.T) {
 			if report.Conclusion != ConclusionNonConformant || !reflect.DeepEqual(report.Violated, []string{"OBI-D-01"}) {
 				t.Fatalf("conclusion %s violated %v, want non-conformant on OBI-D-01 alone", report.Conclusion, report.Violated)
 			}
-			if len(report.Inconclusive) != len(documentRules)-1 {
-				t.Fatalf("inconclusive = %v, want every other rule", report.Inconclusive)
+			// The other rules govern the JSON value only when OBI-D-01
+			// holds, so they are not applicable (§10), never inconclusive.
+			if len(report.Inconclusive) != 0 {
+				t.Fatalf("inconclusive = %v, want none", report.Inconclusive)
+			}
+			for _, rule := range documentRules[1:] {
+				if report.Evidence[rule] != EvidenceNotApplicable {
+					t.Fatalf("%s is %q, want not applicable", rule, report.Evidence[rule])
+				}
 			}
 		})
 	}
@@ -787,6 +795,101 @@ func TestValidateDocument_RepeatedVersionIsNotRead(t *testing.T) {
 	}
 }
 
+// Only an $anchor or $dynamicAnchor whose value matches JSON Schema Core
+// §8.2.2's grammar as a whole declares a plain name (§7.3), and the grammar
+// core applies is the one the 2020-12 meta-schema checks: a value declares a
+// name exactly when OBI-D-10 holds for it.
+func TestPlainNames_TheGrammarIsTheMetaSchemas(t *testing.T) {
+	values := []string{`"a"`, `"_"`, `"A9"`, `"a-b.c_9"`, `"Z."`, `"1bad"`, `"bad/name"`, `"a\n"`, `"\u00e9"`, `""`, `"-a"`, `".a"`, `"a b"`, `"a#"`, `"\uff41"`, `"a\u0000"`, `5`, `null`}
+	for _, value := range values {
+		var decoded any
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		_, declares := plainName(decoded)
+		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+			report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"A":{"`+keyword+`":`+value+`}}}`)
+			if metaValid := report.Evidence["OBI-D-10"] == EvidenceSatisfied; metaValid != declares {
+				t.Errorf("%s %s: declares a name %v, but OBI-D-10 is %s", keyword, value, declares, report.Evidence["OBI-D-10"])
+			}
+		}
+	}
+}
+
+// Both indexes of plain names, OBI-D-12's and OBI-D-13's (documentSchemas)
+// and the schema space's, declare only what the grammar admits, in the
+// document resource and in an $id resource alike: "#1bad" targets no
+// "$anchor": "1bad" for OBI-D-12, Document.References, or a value contract;
+// two such declarations are no repeated name for OBI-D-13; and OBI-D-10
+// still reports each value. A name in the grammar resolves in all of them.
+func TestPlainNames_OnlyTheGrammarDeclaresInEitherIndex(t *testing.T) {
+	document := `{"openbindings":"0.2.0","schemas":{
+	  "A":{"$anchor":"1bad","type":"string"},"B":{"$dynamicAnchor":"1bad"},"C":{"$anchor":"bad/name"},"G":{"$anchor":"good","type":"string"},
+	  "R":{"$id":"https://ex.test/r","$defs":{"x":{"$anchor":"1bad"},"y":{"$anchor":"fine"}}}},
+	  "operations":{
+	    "bad":{"input":{"$ref":"#1bad"}},"slash":{"input":{"$ref":"#bad/name"}},"good":{"input":{"$ref":"#good"}},
+	    "inR":{"input":{"$ref":"https://ex.test/r#1bad"}},"fineR":{"input":{"$ref":"https://ex.test/r#fine"}}}}`
+
+	view := mustUnmarshalToMap(t, []byte(document))
+	space := newSchemaSpace(view, nil)
+	byOBID12 := slices.Sorted(maps.Keys(collectDocumentSchemas(view).anchors))
+	bySpace := slices.Sorted(maps.Keys(space.obi.resources[0].anchors))
+	if !slices.Equal(byOBID12, []string{"good"}) || !slices.Equal(bySpace, byOBID12) {
+		t.Fatalf("the document resource declares %v to OBI-D-12 and %v to the schema space; want [good] in both", byOBID12, bySpace)
+	}
+	for _, r := range space.obi.resources[1:] {
+		if names := slices.Sorted(maps.Keys(r.anchors)); !slices.Equal(names, []string{"fine"}) {
+			t.Fatalf("the resource %s declares %v; want [fine]", r.id, names)
+		}
+	}
+
+	report := mustValidateDocument(t, document)
+	violatedAt := map[string]bool{}
+	for _, finding := range report.Violations() {
+		violatedAt[finding.Rule+" "+finding.Path] = true
+	}
+	for _, want := range []string{
+		"OBI-D-12 /operations/bad/input/$ref", "OBI-D-12 /operations/slash/input/$ref",
+		"OBI-D-10 /schemas/A/$anchor", "OBI-D-10 /schemas/B/$dynamicAnchor", "OBI-D-10 /schemas/C/$anchor", "OBI-D-10 /schemas/R/$defs/x/$anchor",
+	} {
+		if !violatedAt[want] {
+			t.Errorf("want %s violated; violations %v", want, report.Violations())
+		}
+	}
+	if report.Evidence["OBI-D-13"] != EvidenceSatisfied || violatedAt["OBI-D-12 /operations/good/input/$ref"] {
+		t.Errorf("OBI-D-13 %s, and #good violated %v", report.Evidence["OBI-D-13"], violatedAt["OBI-D-12 /operations/good/input/$ref"])
+	}
+
+	refs, err := mustDecodeDocument(t, document).References()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := map[string]string{}
+	for _, r := range refs {
+		targets[r.Location] = r.Target
+	}
+	for location, want := range map[string]string{
+		"/operations/bad/input/$ref":   "",
+		"/operations/slash/input/$ref": "",
+		"/operations/inR/input/$ref":   "",
+		"/operations/good/input/$ref":  "/schemas/G",
+		"/operations/fineR/input/$ref": "/schemas/R/$defs/y",
+	} {
+		if got, listed := targets[location]; !listed || got != want {
+			t.Errorf("References: %s targets %q (listed %v), want %q", location, got, listed, want)
+		}
+	}
+
+	for operation, want := range map[string]string{"bad": "no verdict", "slash": "no verdict", "inR": "no verdict", "good": "mismatch"} {
+		if got := inputVerdict(t, document, operation, 5); got != want {
+			t.Errorf("value contract %s: %s, want %s", operation, got, want)
+		}
+	}
+	if refusal := refusalOf(t, document, "bad"); !errors.Is(refusal, ErrUndefined) || !strings.Contains(refusal.Error(), "no schema in the document resource declares") {
+		t.Errorf("#1bad: %v", refusal)
+	}
+}
+
 // OBI-D-12 judges every same-document fragment after percent-decoding it once,
 // and a plain name the document resource declares twice still qualifies,
 // though OBI-D-13 reports the repetition.
@@ -1257,24 +1360,29 @@ func FuzzDeepInput(f *testing.F) {
 	})
 }
 
-// ValidateDocument's results take the five shapes its doc lists.
+// ValidateDocument's results take the five shapes its doc lists: each rule
+// decided, not applicable, or inconclusive as the shape says.
 func TestValidateDocument_ResultShapes(t *testing.T) {
 	deep := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
+	afterD01 := DocumentRules()[1:]
 	for _, tc := range []struct {
 		name, input string
 		document    bool
 		report      ConformanceConclusion // "" for the zero report
 		err         string                // "refusal", "violation", or ""
 		decided     []string              // the rules decided, when not all are
+		// notApplicable are the rules recorded not applicable; the rules
+		// neither decided nor not applicable are inconclusive.
+		notApplicable []string
 	}{
-		{"refused", `{"openbindings":"0.3.0","operations":{}}`, false, "", "refusal", nil},
-		{"OBI-D-01 refuses it", `{"openbindings":"0.2.0","operations":{},"operations":{}}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01"}},
-		{"a lone surrogate", `{"openbindings":"0.2.0","operations":{},"x-note":"\ud800"}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}},
-		{"a lone surrogate, no valid version", `{"openbindings":"0.2","operations":{},"x-note":"\ud800"}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01", "OBI-D-09"}},
-		{"nested past the decoder", `{"openbindings":"0.2.0","operations":{},"x-deep":` + deep + `}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}},
-		{"a null the model does not carry", `{"openbindings":"0.2.0","operations":{"a":{"tags":null}}}`, false, ConclusionNonConformant, "violation", nil},
-		{"carried, conformant", `{"openbindings":"0.2.0","operations":{}}`, true, ConclusionConformant, "", nil},
-		{"carried, violated", `{"openbindings":"0.2.0","operations":{},"bindings":{"b":{"operation":"x","source":"y"}}}`, true, ConclusionNonConformant, "violation", nil},
+		{"refused", `{"openbindings":"0.3.0","operations":{}}`, false, "", "refusal", nil, nil},
+		{"OBI-D-01 refuses it", `{"openbindings":"0.2.0","operations":{},"operations":{}}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01"}, afterD01},
+		{"a lone surrogate", `{"openbindings":"0.2.0","operations":{},"x-note":"\ud800"}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}, nil},
+		{"a lone surrogate, no valid version", `{"openbindings":"0.2","operations":{},"x-note":"\ud800"}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01", "OBI-D-09"}, nil},
+		{"nested past the decoder", `{"openbindings":"0.2.0","operations":{},"x-deep":` + deep + `}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}, nil},
+		{"a null the model does not carry", `{"openbindings":"0.2.0","operations":{"a":{"tags":null}}}`, false, ConclusionNonConformant, "violation", nil, nil},
+		{"carried, conformant", `{"openbindings":"0.2.0","operations":{}}`, true, ConclusionConformant, "", nil, nil},
+		{"carried, violated", `{"openbindings":"0.2.0","operations":{},"bindings":{"b":{"operation":"x","source":"y"}}}`, true, ConclusionNonConformant, "violation", nil, nil},
 	} {
 		doc, report, err := ValidateDocument([]byte(tc.input))
 		got := ""
@@ -1295,14 +1403,61 @@ func TestValidateDocument_ResultShapes(t *testing.T) {
 			}
 			continue
 		}
-		var decided []string
+		var decided, notApplicable []string
 		for _, rule := range DocumentRules() {
-			if report.Evidence[rule] != EvidenceInconclusive {
+			switch report.Evidence[rule] {
+			case EvidenceNotApplicable:
+				notApplicable = append(notApplicable, rule)
+			case EvidenceSatisfied, EvidenceViolated:
 				decided = append(decided, rule)
 			}
 		}
 		if want := tc.decided; want == nil && len(decided) != len(documentRules) || want != nil && !slices.Equal(decided, want) {
 			t.Errorf("%s: decided %v, want %v", tc.name, decided, want)
+		}
+		if !slices.Equal(notApplicable, tc.notApplicable) {
+			t.Errorf("%s: not applicable %v, want %v", tc.name, notApplicable, tc.notApplicable)
+		}
+	}
+}
+
+// On a text violating OBI-D-01, OBI-D-02 through OBI-D-13 impose no further
+// requirements and are not applicable in the vacuous sense of §10.4; the
+// OBI-D-01 violation alone establishes non-conformance (§10). Each way of
+// violating it gives the same report: OBI-D-01 violated with its one
+// finding, every other rule not applicable with none, nothing inconclusive,
+// and no document. ParseDocument reports the same violation.
+func TestValidateDocument_OBID01ViolationLeavesTheOtherRulesNotApplicable(t *testing.T) {
+	for name, input := range map[string][]byte{
+		"a repeated member name":    []byte(`{"openbindings":"0.2.0","operations":{"a":{},"a":{}}}`),
+		"a repeated version":        []byte(`{"openbindings":"0.2.0","openbindings":"0.2.0","operations":{}}`),
+		"a byte-order mark":         append([]byte{0xef, 0xbb, 0xbf}, `{"openbindings":"0.2.0","operations":{}}`...),
+		"not UTF-8":                 []byte("{\"openbindings\":\"0.2.0\",\"operations\":{},\"x-note\":\"\xff\"}"),
+		"not JSON":                  []byte(`{"openbindings":"0.2.0","operations":{}`),
+		"a violation elsewhere too": []byte(`{"openbindings":"0.2","operations":{},"bindings":{"b":{"operation":"x","source":"y"}},"x":1,"x":2}`),
+	} {
+		doc, report, err := ValidateDocument(input)
+		if doc != nil || !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant {
+			t.Errorf("%s: document %v, conclusion %s, error %v", name, doc != nil, report.Conclusion, err)
+		}
+		for _, rule := range DocumentRules() {
+			want := EvidenceNotApplicable
+			if rule == "OBI-D-01" {
+				want = EvidenceViolated
+			}
+			if report.Evidence[rule] != want {
+				t.Errorf("%s: %s %q, want %q", name, rule, report.Evidence[rule], want)
+			}
+		}
+		if !slices.Equal(report.Violated, []string{"OBI-D-01"}) || len(report.Inconclusive) != 0 {
+			t.Errorf("%s: violated %v, inconclusive %v", name, report.Violated, report.Inconclusive)
+		}
+		if len(report.Findings) != 1 || report.Findings[0].Rule != "OBI-D-01" || report.Findings[0].Status != EvidenceViolated {
+			t.Errorf("%s: findings %+v", name, report.Findings)
+		}
+		var violation *ValidationError
+		if _, err := ParseDocument(input); !errors.As(err, &violation) || len(violation.Findings) != 1 || violation.Findings[0].Rule != "OBI-D-01" {
+			t.Errorf("%s: ParseDocument: %v", name, err)
 		}
 	}
 }

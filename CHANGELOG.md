@@ -11,14 +11,15 @@
   presentation. An alias, a key no operation has, and a nil `Document` find
   nothing: a name is resolved first (OBI-T-07).
 - **A document's schema references.** `Document.References()` lists every
-  `$ref` and `$dynamicRef` keyword in the schemas a document contains, as a
-  `Reference`: its location, keyword, and value, the base it resolves
-  against, and the schema its initial lookup identifies or why there is
-  none, looked up by the resolution OBI-D-12 and value validation use. It
-  refuses an unsupported version, does not interpret a document declaring no
-  valid version, and returns what it found with `ErrInconclusive` where a
-  schema nests past the index's 256 levels. Its doc states what a caller may
-  and may not conclude, `$dynamicRef` included.
+  `$ref` and `$dynamicRef` keyword in the schemas a document contains whose
+  value is a well-formed URI-reference, as a `Reference`: its location,
+  keyword, and value, the base it resolves against, and the schema its
+  initial lookup identifies or why there is none, looked up by the
+  resolution OBI-D-12 and value validation use. It refuses an unsupported
+  version, does not interpret a document declaring no valid version, and
+  returns what it found with `ErrInconclusive` where a schema nests past the
+  index's 256 levels. Its doc states what a caller may and may not
+  conclude, `$dynamicRef` included.
 - **`ErrInconclusive`** marks a call that decided nothing because the SDK
   could not read or interpret its input in full: `ParseDocument`'s errors
   other than a version refusal and a violation, `Resolve`'s and
@@ -45,6 +46,73 @@
 
 ### Changed
 
+- **The SDK applies the revised 0.2 working draft.** The text it applies,
+  which a report names (`ValidationReport.Revision`) and Go CI checks the
+  spec repository out at, moves from `98127021` to `cbc17a6f`, whose
+  `openbindings.md` (sha256 `95846137…0198`) is the one the spec's
+  CHANGELOG describes in its 0.2.0 working-draft entries under "Changed",
+  from "OBI-T-09 forbids an unestablished non-conformance claim" to
+  "OBI-D-01's note cites RFC 7493 for duplicate names only". The corpus
+  adapter pins that revision's hash beside it. The document schema is
+  unchanged; it was synced from that revision and compared byte for byte.
+  The entries below that cite one of those spec entries are the behavior
+  the revised text changes.
+- **A text violating OBI-D-01 leaves the other rules not applicable
+  (§10; spec CHANGELOG, "What the other document rules say about a text
+  OBI-D-01 rejects"; pre-1.0).** `ValidateDocument` records OBI-D-02 through
+  OBI-D-13 as `not-applicable`, with no finding, where it recorded each
+  inconclusive with a finding: they govern a JSON value only when OBI-D-01
+  holds, impose no further requirements on a text that violates it, and the
+  OBI-D-01 violation alone establishes non-conformance. The conclusion is
+  still non-conformant, and the report's `Inconclusive` list is now empty.
+  `Document.Validate`, whose report on a host object beyond the SDK's own
+  limits leaves OBI-D-01 undecided and decides OBI-D-09, now quotes why a
+  failed OBI-D-09 check there establishes non-conformance (the paragraph's
+  second half: either rule may be the one violated). `ConcludeConformance`
+  states the applicability the same way; its behavior is unchanged.
+- **Only a name in JSON Schema's grammar is declared (§7.3; spec
+  CHANGELOG, "Only a grammatical anchor declares a plain name";
+  pre-1.0).** An `$anchor` or `$dynamicAnchor` declares a plain name only
+  when its value matches, as a whole, the grammar of JSON Schema Core
+  §8.2.2 (a letter or underscore, then letters, digits, hyphens,
+  underscores, and periods). Any other value, such as `"1bad"`,
+  `"bad/name"`, `"a\n"`, or a non-ASCII letter, declares no name for
+  OBI-D-12, OBI-D-13, or §7.2's resolution, where any string used to: a
+  same-document reference naming it violates OBI-D-12 and identifies
+  nothing for `Document.References` and value contracts, and two such
+  values are no repeated name for OBI-D-13. OBI-D-10 still reports each.
+  The same holds in an `$id` resource and a supplied resource, whose plain
+  names the schema space indexes by the same grammar. The corpus adapter's
+  two keyed expected failures for this (the OBI-D-10 and OBI-D-12 fixtures
+  that needed it) are removed: the stale check reported both passing.
+- **Dialects go by resource (§5.2; spec CHANGELOG, "A schema resource
+  without `$schema` inherits its dialect"; pre-1.0 for evaluator
+  authors).** The document resource's dialect is 2020-12 and a `$schema` in
+  it declares none; a resource an `$id` declares takes the dialect its
+  `$schema` names, or its enclosing resource's (JSON Schema Core §9.3.2);
+  and a `$schema` below a resource's root never selects one. A value
+  contract copying a schema with a foreign `$schema` and no `$id` (an
+  operation's `input`, a `schemas` entry, or below an `$id` resource's
+  root) now gets a verdict under 2020-12, where core refused it as a
+  dialect it lacks; a resource whose root names another dialect, and one
+  inheriting it, are still refused, located at the root that names it.
+  Such a `$schema` still violates OBI-D-06. The bundle writes `$schema`
+  only at a resource's root, where it declares a dialect, and leaves out
+  one that declares none: core gives each OBI position of the document
+  resource an `$id` of its own, which would otherwise make a misplaced one
+  declare its unit's dialect. `SchemaBundle` states this ("One dialect").
+- **`Document.References` leaves out a string that is not a URI-reference
+  (§7.1; spec CHANGELOG, "A malformed reference string is not a reference";
+  pre-1.0).** A `$ref` or `$dynamicRef` string that is not a well-formed
+  URI-reference is not a reference of any form, so `References` no longer
+  lists it, where it listed it with that as the reason it identified
+  nothing. OBI-D-05 still reports it in the document resource, OBI-D-12
+  does not govern it, and a value whose evaluation depends on it still gets
+  no verdict.
+- **The 2020-12-only dialect limit is a declared capability limit.** The
+  package doc and the README now list it beside the others: a value
+  contract copying a schema whose resource names a dialect other than
+  2020-12 gets no verdict. This documents existing behavior.
 - **The model's types and lookups take the spec's names (breaking,
   pre-1.0).** `Interface` is `Document`, `BindingEntry` is `Binding`, and
   `DependencyEntry` is `Dependency`, the spec's terms (§3);
@@ -68,12 +136,10 @@
   identifier leaves its rule missing, so inconclusive. The returned
   `Evidence` holds exactly the document rules, each missing one recorded as
   inconclusive. Its doc states the invariants of amending a report with
-  evidence the SDK cannot produce. The corpus at the applied revision
-  expects T09-S-01, whose evidence omits OBI-D-12 and OBI-D-13, to conclude
-  conformant. The harness keys it as a corpus defect on that condition: it
-  checks the scenario against the corrected conclusion (undetermined) and
-  reports it as a keyed expected failure, never a pass, and the entry fails,
-  telling the reader to remove it, once the condition no longer holds.
+  evidence the SDK cannot produce. The corpus of the revised text corrects
+  scenario T09-S-01, which expected conformant from evidence omitting
+  OBI-D-12 and OBI-D-13, so the corpus adapter no longer keys it as a
+  corpus defect.
 - **Undecided failures match `ErrInconclusive` (breaking, pre-1.0).**
   `ParseDocument`'s failures to read a document in full, which read
   `parse document: ...`, read `openbindings: inconclusive: ...`; value
@@ -305,8 +371,8 @@
   `ccfe0b6` spec draft, including the distinct-string kind cases, the
   OBI-D-10 unreferenced `$defs` case, and version-scoped rule identifiers.
   Documentation uses the current §10.4 conformance conclusion section.
-- **The corpus adapter executes every action of scenario format @2, and
-  still reads @1.** It runs the specification corpus's validity fixtures and
+- **The corpus adapter executes every action of scenario format @2, the
+  only format it reads.** It runs the specification corpus's validity fixtures and
   every scenario action: `check-dependency-kind`, `resolve-operation`,
   `validate-document`, `validate-operation-values`, `conclude-conformance`,
   and `check-examples`; `derive-form` is omitted, as this SDK derives no
@@ -327,25 +393,37 @@
   unverified, as no verification against a release snapshot exists.
   A SHORTFALL against the capability profile the adapter declares fails, and
   so does an omission because no document came back for a non-conformant
-  document the model carries: the adapter declares that the core continues
-  with every such document, and keys any case it cannot carry. The cases the
-  core is expected to fail are keyed with their signatures, so the module is
-  green at the baseline, a regression fails it, and a keyed case that passes
-  fails as stale: two fixtures of the revised corpus, which need an anchor
-  to declare a plain name only when it matches JSON Schema's grammar (the
-  spec CHANGELOG's "Only a grammatical anchor declares a plain name", §7.3),
-  until the core applies the revised text.
+  document: the adapter declares that the core continues with every
+  non-conformant document the model carries, and the model carries every
+  document of the corpus. A case the core is expected to fail can be keyed
+  with its signature, so the module stays green, a regression fails it, and
+  a keyed case that passes fails as stale; none is keyed.
   Kind retrieval is observed through a local TCP listener whose address the
   kind names, so a connection from any client counts; a case whose
   sentinels cannot start fails rather than being skipped. Each module records
   every case executed or omitted with a reason and checks the counts
-  against the corpus manifest. Format @1, the corpus at the applied
-  revision, reads as before, its keyed corpus defect included; format @2's
-  `conformant` conclusion admits `conformance-undetermined`. CI checks out
-  the spec repository's full history for the applied-text check.
+  against the corpus manifest. A `conformant` conclusion admits
+  `conformance-undetermined`. Format @1, the corpus's format before the
+  revised text, is no longer read: a scenario file in it is refused, with
+  its `resolve-schema-cycle` action, its keyed corpus defect (T09-S-01),
+  and its version-refusal fixtures listing OBI-T-04, which made a refusal a
+  violating fixture's expected result. CI checks out the spec repository's
+  full history for the applied-text check.
 
 ### Fixed
 
+- **A dynamic capture into a name the document resource declares twice
+  gets no verdict (§7.2; JSON Schema Core §8.2.2, §8.2.3.2).** An
+  evaluation beginning in the document resource makes it outermost in the
+  dynamic scope (§7.2), so a `$dynamicRef` whose initial target declares a
+  `$dynamicAnchor` looks the name up there first (JSON Schema Core
+  §8.2.3.2). Where the document resource declares that name more than
+  once, by `$anchor` or `$dynamicAnchor`, the capture is undefined (Core
+  §8.2.2), so the value contract is refused as `ErrUndefined`; it counted
+  only `$dynamicAnchor` declarations, so one beside an `$anchor` of the
+  same name, in another OBI position, gave a verdict. The names counted are OBI-D-12's (§7.3),
+  and a capturing declaration past the 256 levels core indexes is now
+  core's limit, where the capture was left out.
 - **OBI-D-02 findings on a refused member name point at the member.** The
   JSON Schema library records such a failure's location without copying it,
   so a later sibling could overwrite it and the finding pointed somewhere

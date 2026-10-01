@@ -68,9 +68,9 @@ type unitProblem struct {
 
 // unitProblems returns, once per unit, what it holds that refuses a contract
 // copying it: nesting past core's limit; a schema invalid against the 2020-12
-// meta-schemas; a pattern that is not ECMA-262 with the u flag; a dialect
-// other than 2020-12; a resource whose $id gives it no identifier; and a
-// plain name one resource of it declares more than once.
+// meta-schemas; a pattern that is not ECMA-262 with the u flag; a resource
+// whose dialect is other than 2020-12; a resource whose $id gives it no
+// identifier; and a plain name one resource of it declares more than once.
 func (s *schemaSpace) unitProblems(unit unitKey) []unitProblem {
 	type memoKey struct {
 		doc      *schemaDoc
@@ -118,13 +118,21 @@ func checkUnit(unit unitKey) []unitProblem {
 				out = append(out, problem(undefinedResult, location, location, fmt.Sprintf("its pattern %q is not an ECMA-262 regular expression with the u flag (OBI-T-08): %v", pattern, err), false))
 			}
 		}
-		if dialect, present := object["$schema"]; present && dialect != draft202012URI && dialect != draft202012URI+"#" {
-			out = append(out, problem(missingCapability, location, location, fmt.Sprintf("it declares $schema %s, a dialect this SDK does not read as 2020-12", describeJSON(dialect)), true))
-		}
 	}
 	for _, r := range held.resources {
 		if r.idProblem != "" {
 			out = append(out, problem(r.idKind, r.location, r.location, r.idProblem, r.idKind != undefinedResult))
+		}
+		// Dialects go by resource (§5.2, JSON Schema Core §9.3.2): only the
+		// $schema at a resource's root declares one, and a resource without
+		// one takes its enclosing resource's, which lies in the same unit
+		// unless it is the document resource, whose dialect is 2020-12. A
+		// supplied document's root without one is read as 2020-12, the
+		// choice JSON Schema leaves to the implementation (§5.2). So a root
+		// naming another dialect is the only way a unit holds one.
+		root, _ := mustResolve(d.value, r.location).(map[string]any)
+		if dialect, present := root["$schema"]; present && dialect != draft202012URI && dialect != draft202012URI+"#" {
+			out = append(out, problem(missingCapability, r.location, r.location, fmt.Sprintf("it declares the dialect %s, which this SDK does not evaluate, for its resource and every resource inheriting it (§5.2)", describeJSON(dialect)), true))
 		}
 	}
 	type named struct {
@@ -455,7 +463,8 @@ func (w *bundleWriter) write(entry string) json.RawMessage {
 }
 
 // writeSchema writes a copied schema: identities and references canonical,
-// legacy positions moved, everything else as written.
+// legacy positions moved, a $schema that declares no dialect left out, and
+// everything else as written.
 func (w *bundleWriter) writeSchema(value any, at, resourceRoot schemaKey) any {
 	object, isObject := value.(map[string]any)
 	if !isObject {
@@ -475,6 +484,11 @@ func (w *bundleWriter) writeSchema(value any, at, resourceRoot schemaKey) any {
 		switch {
 		case keyword == "$id" && at == resourceRoot && !resource.document:
 			out[keyword] = normalURI(resource.id)
+		case keyword == "$schema" && (at != resourceRoot || resource.document):
+			// A $schema in the document resource, or below a resource's
+			// root, declares no dialect (§5.2). Core gives each OBI position
+			// of the document resource an $id, which would make one at such
+			// a position declare its unit's dialect, so it writes none.
 		case (keyword == "$ref" || keyword == "$dynamicRef") && isString(member):
 			out[keyword] = w.reference(member.(string), resource, keyword)
 		case keyword == "definitions":

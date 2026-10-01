@@ -176,13 +176,22 @@ func (r *contractReach) lookUp(holder schemaKey, name string) {
 	if !first || !r.inDocument {
 		return
 	}
-	document := r.space.obi.resources[0]
-	switch declared := document.dynamicAnchors[name]; len(declared) {
-	case 0:
-	case 1:
-		r.wrappers[name] = declared[0]
-	default:
+	// The document resource is outermost in the dynamic scope (§7.2), so the
+	// lookup consults its plain name first, and the name captures the
+	// $dynamicRef when its declaration there is a $dynamicAnchor (JSON
+	// Schema Core §8.2.3.2). Its plain names are OBI-D-12's (§7.2, §7.3):
+	// one it declares more than once, by either keyword, leaves the capture
+	// undefined (Core §8.2.2), and one past core's index is its limit.
+	switch declarations := r.space.document.anchors[name]; {
+	case len(declarations) > 1:
 		r.fail(holder, failure{undefinedResult, fmt.Sprintf("its $dynamicRef looks up %q, which the document resource declares more than once, which JSON Schema leaves undefined (Core §8.2.2)", name)})
+	case len(declarations) == 1 && declarations[0].keyword == "$dynamicAnchor":
+		location := declarations[0].at.from(nil)
+		if _, indexed := r.space.obi.schemas[location]; !indexed {
+			r.fail(holder, *r.space.obi.unindexed(location, fmt.Sprintf("its $dynamicRef looks up %q, which the schema at %s declares", name, location)))
+			return
+		}
+		r.wrappers[name] = location
 	}
 }
 

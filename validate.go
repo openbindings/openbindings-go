@@ -55,7 +55,16 @@ import (
 //     Validate's report leaves OBI-D-01 inconclusive, decides OBI-D-09 on
 //     the declared version when that is valid UTF-8, and leaves every other
 //     rule inconclusive; References and Resolve return an error matching
-//     ErrInconclusive.
+//     ErrInconclusive. Deciding OBI-D-09 with OBI-D-01 undecided follows
+//     §10: "A validator that has not decided OBI-D-01 may check the value it
+//     parsed, provided the data used by the check would be exact if
+//     OBI-D-01 held. A failed check then establishes that either OBI-D-01 is
+//     violated or the checked rule is violated, and therefore establishes
+//     non-conformance. It does not necessarily establish which rule is
+//     violated." The declared version is a Go string the model holds
+//     exactly, so the report records a failed check as OBI-D-09 violated
+//     and concludes non-conformant, which does not establish that OBI-D-01
+//     holds.
 //   - A failure to encode at all is an encoding failure: an error matching
 //     no category, and no report, whatever the error carries. It can come
 //     from a value encoding/json does not write as held (a NaN, a channel, a
@@ -122,8 +131,12 @@ func (d Document) Validate() (ValidationReport, error) {
 //     is not interpreted (OBI-T-04).
 //   - OBI-D-01 refuses the input (not JSON, not UTF-8, beginning with a
 //     byte-order mark, or repeating a member name): no document, a report
-//     with OBI-D-01 violated and every other rule inconclusive, since which
-//     values the document holds is not established, and a *ValidationError.
+//     with OBI-D-01 violated and every other rule not applicable, and a
+//     *ValidationError. OBI-D-02 through OBI-D-13 govern the JSON value only
+//     when OBI-D-01 holds; on a text violating it they impose no further
+//     requirements and are not applicable in the vacuous sense of §10.4, and
+//     the OBI-D-01 violation alone establishes non-conformance (§10). The
+//     report has no finding for them.
 //   - The input holds a string escaping a lone UTF-16 surrogate, or nests
 //     deeper than encoding/json reads (10000 levels): no document, a report
 //     with OBI-D-01 decided, OBI-D-09 decided on the version the input
@@ -162,8 +175,11 @@ func ValidateDocument(data []byte) (*Document, ValidationReport, error) {
 			c.inconclusiveExcept(fmt.Sprintf("%v, so this rule was not checked", err), "OBI-D-01", "OBI-D-09")
 			checkDeclaredVersion(&c, versionView(data))
 		default:
+			// OBI-D-02 through OBI-D-13 govern the JSON value only when
+			// OBI-D-01 holds: on a text violating it they impose nothing,
+			// and the violation alone establishes non-conformance (§10).
 			c.findings = append(c.findings, d01Violation(data, err))
-			c.inconclusiveExcept("OBI-D-01 refuses the input, so this rule was not checked", "OBI-D-01")
+			c.notApplicableExcept("OBI-D-01")
 		}
 		report, verr := c.conclude()
 		return nil, report, verr
