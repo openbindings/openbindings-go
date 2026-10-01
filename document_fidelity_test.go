@@ -498,6 +498,8 @@ func TestDocumentModel_MemberOrder(t *testing.T) {
 // writes them as held, in typed members, schemas, raw members, and kept
 // members alike. Text a member holds already escaped stays as written.
 func TestDocumentModel_HTMLEscapingFollowsTheEncoder(t *testing.T) {
+	backslash := string(rune(92))
+	alreadyEscaped := `"` + backslash + `u003cx` + backslash + `u003e"`
 	doc := Document{
 		OpenBindings: "0.2.0",
 		Description:  Present("a<b&c>"),
@@ -505,7 +507,7 @@ func TestDocumentModel_HTMLEscapingFollowsTheEncoder(t *testing.T) {
 			Input:    map[string]any{"title": "<op>"},
 			Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"<p>"`)}},
 		}},
-		Sources:        map[string]Source{"s": {Kind: "k", Content: json.RawMessage(`{"held":"<x>"}`)}},
+		Sources:        map[string]Source{"s": {Kind: "k", Content: json.RawMessage(`{"held":` + alreadyEscaped + `}`)}},
 		LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-note": json.RawMessage(`"<x>"`)}},
 	}
 	escaped, err := json.Marshal(doc)
@@ -530,7 +532,7 @@ func TestDocumentModel_HTMLEscapingFollowsTheEncoder(t *testing.T) {
 			t.Errorf("%s is not written as held:\n%s\n%s", held, unescaped.String(), direct)
 		}
 	}
-	if !strings.Contains(unescaped.String(), `"<x>"`) {
+	if !strings.Contains(unescaped.String(), alreadyEscaped) || !strings.Contains(string(direct), alreadyEscaped) {
 		t.Errorf("an escape held in content was not kept: %s", unescaped.String())
 	}
 	// Both spellings decode to the same document.
