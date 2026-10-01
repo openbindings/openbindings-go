@@ -122,12 +122,10 @@
   identifier leaves its rule missing, so inconclusive. The returned
   `Evidence` holds exactly the document rules, each missing one recorded as
   inconclusive. Its doc states the invariants of amending a report with
-  evidence the SDK cannot produce. The corpus at the applied revision
-  expects T09-S-01, whose evidence omits OBI-D-12 and OBI-D-13, to conclude
-  conformant. The harness keys it as a corpus defect on that condition: it
-  checks the scenario against the corrected conclusion (undetermined) and
-  reports it as a keyed expected failure, never a pass, and the entry fails,
-  telling the reader to remove it, once the condition no longer holds.
+  evidence the SDK cannot produce. The corpus of the revised text corrects
+  scenario T09-S-01, which expected conformant from evidence omitting
+  OBI-D-12 and OBI-D-13, so the corpus adapter no longer keys it as a
+  corpus defect.
 - **Undecided failures match `ErrInconclusive` (breaking, pre-1.0).**
   `ParseDocument`'s failures to read a document in full, which read
   `parse document: ...`, read `openbindings: inconclusive: ...`; value
@@ -359,8 +357,8 @@
   `ccfe0b6` spec draft, including the distinct-string kind cases, the
   OBI-D-10 unreferenced `$defs` case, and version-scoped rule identifiers.
   Documentation uses the current §10.4 conformance conclusion section.
-- **The corpus adapter executes every action of scenario format @2, and
-  still reads @1.** It runs the specification corpus's validity fixtures and
+- **The corpus adapter executes every action of scenario format @2, the
+  only format it reads.** It runs the specification corpus's validity fixtures and
   every scenario action: `check-dependency-kind`, `resolve-operation`,
   `validate-document`, `validate-operation-values`, `conclude-conformance`,
   and `check-examples`; `derive-form` is omitted, as this SDK derives no
@@ -381,22 +379,22 @@
   unverified, as no verification against a release snapshot exists.
   A SHORTFALL against the capability profile the adapter declares fails, and
   so does an omission because no document came back for a non-conformant
-  document the model carries: the adapter declares that the core continues
-  with every such document, and keys any case it cannot carry. The cases the
-  core is expected to fail are keyed with their signatures, so the module is
-  green at the baseline, a regression fails it, and a keyed case that passes
-  fails as stale: two fixtures of the revised corpus, which need an anchor
-  to declare a plain name only when it matches JSON Schema's grammar (the
-  spec CHANGELOG's "Only a grammatical anchor declares a plain name", §7.3),
-  until the core applies the revised text.
+  document: the adapter declares that the core continues with every
+  non-conformant document the model carries, and the model carries every
+  document of the corpus. A case the core is expected to fail can be keyed
+  with its signature, so the module stays green, a regression fails it, and
+  a keyed case that passes fails as stale; none is keyed.
   Kind retrieval is observed through a local TCP listener whose address the
   kind names, so a connection from any client counts; a case whose
   sentinels cannot start fails rather than being skipped. Each module records
   every case executed or omitted with a reason and checks the counts
-  against the corpus manifest. Format @1, the corpus at the applied
-  revision, reads as before, its keyed corpus defect included; format @2's
-  `conformant` conclusion admits `conformance-undetermined`. CI checks out
-  the spec repository's full history for the applied-text check.
+  against the corpus manifest. A `conformant` conclusion admits
+  `conformance-undetermined`. Format @1, the corpus's format before the
+  revised text, is no longer read: a scenario file in it is refused, with
+  its `resolve-schema-cycle` action, its keyed corpus defect (T09-S-01),
+  and its version-refusal fixtures listing OBI-T-04, which made a refusal a
+  violating fixture's expected result. CI checks out the spec repository's
+  full history for the applied-text check.
 
 ### Fixed
 

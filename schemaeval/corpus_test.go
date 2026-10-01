@@ -16,9 +16,8 @@ import (
 )
 
 // This file is the schemaeval module's corpus adapter. It executes the
-// corpus's value actions, validate-operation-values and check-examples (and
-// format @1's resolve-schema-cycle), with the core's value contracts under
-// this module's evaluator, which reads patterns as ECMA-262 regular
+// corpus's value actions, validate-operation-values and check-examples, with
+// the core's value contracts under this module's evaluator, which reads patterns as ECMA-262 regular
 // expressions with Unicode semantics (OBI-T-08). The core module's adapter
 // executes every other action; core's tests cannot import this module.
 
@@ -101,7 +100,7 @@ func fail(format string, a ...any) corpus.Judgment {
 
 func judgeValueCase(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment {
 	switch cs.Action {
-	case "validate-operation-values", "resolve-schema-cycle":
+	case "validate-operation-values":
 		return judgeValues(cs, e)
 	case "check-examples":
 		return judgeExamples(cs, e)
@@ -116,7 +115,6 @@ type valueScenario struct {
 		Operation     string            `json:"operation"`
 		Side          string            `json:"side"`
 		Values        []json.RawMessage `json:"values"`
-		Value         json.RawMessage   `json:"value"` // format @1's resolve-schema-cycle
 		Resources     []struct {
 			URI      string          `json:"uri"`
 			Document json.RawMessage `json:"document"`
@@ -124,10 +122,6 @@ type valueScenario struct {
 	} `json:"given"`
 	Expected json.RawMessage `json:"expected"`
 }
-
-// uncarried keys the value cases whose non-conformant document the model
-// cannot carry, each with why. None does.
-var uncarried = map[string]string{}
 
 // contractsOf decodes the document into the model and resolves its value
 // contracts, so ValueContractCompiler.Resolve's own version decision is the
@@ -176,10 +170,6 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
 		return fail("unreadable scenario: %v", err)
 	}
-	values := s.Given.Values
-	if cs.Action == "resolve-schema-cycle" {
-		values = []json.RawMessage{s.Given.Value}
-	}
 	var resources []openbindings.Resource
 	for _, r := range s.Given.Resources {
 		resources = append(resources, openbindings.Resource{URI: r.URI, Document: r.Document})
@@ -188,18 +178,15 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 	switch {
 	case !carried && len(s.Given.NonConformant) == 0:
 		return fail("the model does not carry a conformant document: %v", err)
-	case !carried && uncarried[cs.ID] != "":
-		return corpus.Judgment{Category: corpus.Omitted, Detail: "the model cannot carry this non-conformant document, so this SDK does not continue with it: " + uncarried[cs.ID]}
 	case !carried:
 		// The model's decoding is the core's own: it continues with every
-		// non-conformant document the model carries, so a document it cannot
-		// carry is a case to key, never a silent omission.
-		return fail("the model does not carry this non-conformant document (key the case in uncarried if it cannot): %v", err)
-	case uncarried[cs.ID] != "":
-		return fail("the keyed uncarried case %s is now carried: remove its uncarried entry", cs.ID)
+		// non-conformant document the model carries, and the model carries
+		// every document of the corpus, so this is a failure, never a
+		// silent omission.
+		return fail("the model does not carry this non-conformant document: %v", err)
 	case errors.As(err, new(*openbindings.VersionRefusalError)):
 		exclusive := contracts == nil && !errors.As(err, new(*openbindings.ValidationError))
-		return corpus.JudgeValues(cs.Format, s.Expected, true, exclusive, nil, valueProfile)
+		return corpus.JudgeValues(s.Expected, true, exclusive, nil, valueProfile)
 	case err != nil:
 		return fail("Resolve: %v", err)
 	}
@@ -214,14 +201,14 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 		return fail("compiling %s's %s contract: %v", s.Given.Operation, s.Given.Side, err)
 	}
 	var observed []corpus.Observed
-	for i, v := range values {
+	for i, v := range s.Given.Values {
 		o, err := observe(contract.ValidateJSON(ctx, v))
 		if err != nil {
 			return fail("value %d: %v", i, err)
 		}
 		observed = append(observed, o)
 	}
-	return corpus.JudgeValues(cs.Format, s.Expected, false, false, observed, valueProfile)
+	return corpus.JudgeValues(s.Expected, false, false, observed, valueProfile)
 }
 
 // judgeExamples checks an operation's examples by composing value

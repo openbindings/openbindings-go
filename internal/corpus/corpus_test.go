@@ -2,6 +2,9 @@ package corpus
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -43,35 +46,31 @@ func TestJudgeValues(t *testing.T) {
 	p := Profile{Features: map[string]bool{"exact-numbers": true, "draft-07-dialect": false}}
 	v, m, n := Observed{Verdict: "valid"}, Observed{Verdict: "instance-mismatch"}, Observed{Verdict: "no-verdict"}
 	cases := []struct {
-		format, expected   string
+		expected           string
 		refused, exclusive bool
 		observed           []Observed
 		want               string
 	}{
-		{FormatV2, `{"results":["valid","instance-mismatch"]}`, false, false, []Observed{v, m}, Pass},
-		{FormatV2, `{"results":["valid"]}`, false, false, []Observed{m}, Fail},
-		{FormatV2, `{"results":["valid"]}`, false, false, []Observed{n}, Shortfall},
-		{FormatV2, `{"results":["no-verdict"]}`, false, false, []Observed{v}, Fail},
-		{FormatV2, `{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, false, []Observed{n}, Pass},
-		{FormatV2, `{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, false, []Observed{m}, Fail},
-		{FormatV2, `{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{n}, Pass},
-		{FormatV2, `{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{v}, Fail},
-		{FormatV2, `{"results":[{"verdict":"valid","dependsOn":[]}],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{v}, Pass},
-		{FormatV2, `{"results":["valid"],"dependsOn":["undeclared"]}`, false, false, []Observed{v}, Fail},
-		{FormatV2, `{"results":["no-verdict"],"forbidReasons":["no-contract"]}`, false, false, []Observed{{Verdict: "no-verdict", Reason: "no-contract"}}, Fail},
-		{FormatV2, `{"results":["valid"]}`, false, false, []Observed{{Verdict: "no-verdict", Reason: "resource-limit"}}, Omitted},
-		{FormatV2, `{"outcome":"version-refusal"}`, true, true, nil, Pass},
-		{FormatV2, `{"outcome":"version-refusal"}`, true, false, nil, Fail},
-		{FormatV2, `{"results":["valid"]}`, true, true, nil, Fail},
-		{FormatV2, `{"outcome":"version-refusal"}`, false, false, []Observed{v}, Fail},
-		{FormatV2, `{"results":["valid","valid"]}`, false, false, []Observed{v}, Fail},
-		{FormatV1, `{"results":["valid","graph-unavailable"]}`, false, false, []Observed{v, n}, Pass},
-		{FormatV1, `{"results":["valid","instance-mismatch"]}`, false, false, []Observed{v, n}, Fail},
-		{FormatV1, `{"allowedOutcomes":["valid","resolver-error"]}`, false, false, []Observed{n}, Pass},
-		{FormatV1, `{"allowedOutcomes":["valid","resolver-error"]}`, false, false, []Observed{m}, Fail},
+		{`{"results":["valid","instance-mismatch"]}`, false, false, []Observed{v, m}, Pass},
+		{`{"results":["valid"]}`, false, false, []Observed{m}, Fail},
+		{`{"results":["valid"]}`, false, false, []Observed{n}, Shortfall},
+		{`{"results":["no-verdict"]}`, false, false, []Observed{v}, Fail},
+		{`{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, false, []Observed{n}, Pass},
+		{`{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, false, []Observed{m}, Fail},
+		{`{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{n}, Pass},
+		{`{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{v}, Fail},
+		{`{"results":[{"verdict":"valid","dependsOn":[]}],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{v}, Pass},
+		{`{"results":["valid"],"dependsOn":["undeclared"]}`, false, false, []Observed{v}, Fail},
+		{`{"results":["no-verdict"],"forbidReasons":["no-contract"]}`, false, false, []Observed{{Verdict: "no-verdict", Reason: "no-contract"}}, Fail},
+		{`{"results":["valid"]}`, false, false, []Observed{{Verdict: "no-verdict", Reason: "resource-limit"}}, Omitted},
+		{`{"outcome":"version-refusal"}`, true, true, nil, Pass},
+		{`{"outcome":"version-refusal"}`, true, false, nil, Fail},
+		{`{"results":["valid"]}`, true, true, nil, Fail},
+		{`{"outcome":"version-refusal"}`, false, false, []Observed{v}, Fail},
+		{`{"results":["valid","valid"]}`, false, false, []Observed{v}, Fail},
 	}
 	for i, c := range cases {
-		if got := JudgeValues(c.format, json.RawMessage(c.expected), c.refused, c.exclusive, c.observed, p); got.Category != c.want {
+		if got := JudgeValues(json.RawMessage(c.expected), c.refused, c.exclusive, c.observed, p); got.Category != c.want {
 			t.Errorf("case %d (%s): %s (%s), want %s", i, c.expected, got.Category, got.Detail, c.want)
 		}
 	}
@@ -95,5 +94,27 @@ func TestReconcile(t *testing.T) {
 	l.Record("a", Judgment{Category: Pass})
 	if j, _ := l.Outcome("a"); j.Category != Fail {
 		t.Errorf("a case recorded twice: %v", j)
+	}
+}
+
+// Load reads scenario format @2 alone: a scenario file in format @1, the
+// format the corpus used before the revised text, is refused.
+func TestLoad_ReadsFormatV2Alone(t *testing.T) {
+	for format, refused := range map[string]bool{FormatV2: false, "openbindings.core-tool-scenarios@1": true} {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "scenarios"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		scenarios := `{"format": "` + format + `", "rule": "OBI-T-09", "scenarios": [{"id": "T09-S-01", "action": "conclude-conformance", "given": {"evidence": {}}, "expected": {"conclusion": "conformance-undetermined"}}]}`
+		manifest := `{"files": [], "scenarioFiles": [{"path": "scenarios/OBI-T-09.json", "scenarios": 1}]}`
+		for name, content := range map[string]string{"scenarios/OBI-T-09.json": scenarios, "manifest.json": manifest} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := Load(dir)
+		if got := err != nil && strings.Contains(err.Error(), "unknown format"); got != refused {
+			t.Errorf("%s: refused %v, want %v (%v)", format, got, refused, err)
+		}
 	}
 }

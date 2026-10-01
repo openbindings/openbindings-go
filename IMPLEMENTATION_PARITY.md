@@ -88,6 +88,16 @@ pending for each of these, each marked by its ruling:
   the dynamic scope gets no verdict when the document resource declares
   that name more than once, by either keyword (JSON Schema Core §8.2.2,
   §8.2.3.2; §7.2).
+- **Corpus format @2.** The revised text's corpus holds scenarios in
+  format `openbindings.core-tool-scenarios@2` alone; `resolve-schema-cycle`,
+  the old outcome tokens (`graph-unavailable`, `resolver-error`), and the
+  validity fixtures that listed OBI-T-04 as a version refusal are gone. A
+  corpus runner reads @2's actions and expectations: value results as
+  `valid`, `instance-mismatch`, or `no-verdict` (bare or in object form
+  with `orNoVerdict` and `dependsOn`), `notViolated` beside `violates`,
+  conclusions where `conformant` admits `conformance-undetermined`, and a
+  conclusion naming the applied text, verified against the revision's
+  pinned hash. Go's adapter reads @2 only.
 
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable
