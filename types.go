@@ -220,12 +220,15 @@ func (d Dependency) MarshalJSON() ([]byte, error) {
 	return encodeObject(dependencyMembers(d), d.LosslessFields)
 }
 
-// AllowsKind reports whether a source kind meets this dependency's declared
-// kind constraint (§5.5). An omitted Kinds list imposes no constraint.
-// Comparison is exact and independent of whether a processor supports the
-// kind. This only checks the kind constraint; it says nothing about operation
-// compatibility, provider selection, or whether a binding can be used.
-func (d Dependency) AllowsKind(kind string) bool {
+// AcceptsKind reports whether kind is acceptable at this consumption point:
+// whether a binding whose source has that kind meets the dependency's any-of
+// kind constraint (§5.5). A nil Kinds list declares no constraint and accepts
+// every kind; a present empty list, which OBI-D-02 forbids, accepts none.
+// Comparison is exact string equality, independent of whether a processor
+// supports the kind (OBI-T-01). It checks the kind constraint alone: it says
+// nothing about operation compatibility, provider selection, or whether a
+// binding can be used.
+func (d Dependency) AcceptsKind(kind string) bool {
 	if d.Kinds == nil {
 		return true
 	}

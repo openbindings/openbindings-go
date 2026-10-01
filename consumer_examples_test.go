@@ -490,7 +490,7 @@ func Example_cliDependencyKinds() {
 		}
 		var meets []string
 		for _, b := range bindingsOf(provider, providerKey) {
-			if dependency.AllowsKind(provider.Sources[provider.Bindings[b].Source].Kind) {
+			if dependency.AcceptsKind(provider.Sources[provider.Bindings[b].Source].Kind) {
 				meets = append(meets, b)
 			}
 		}
