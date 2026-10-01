@@ -16,10 +16,10 @@
   keyword, and value, the base it resolves against, and the schema its
   initial lookup identifies or why there is none, looked up by the
   resolution OBI-D-12 and value validation use. It refuses an unsupported
-  version, does not interpret a document declaring no
-  valid version, and returns what it found with `ErrInconclusive` where a
-  schema nests past the index's 256 levels. Its doc states what a caller may
-  and may not conclude, `$dynamicRef` included.
+  version, does not interpret a document declaring no valid version, and
+  returns what it found with `ErrInconclusive` where a schema nests past the
+  index's 256 levels. Its doc states what a caller may and may not
+  conclude, `$dynamicRef` included.
 - **`ErrInconclusive`** marks a call that decided nothing because the SDK
   could not read or interpret its input in full: `ParseDocument`'s errors
   other than a version refusal and a violation, `Resolve`'s and
@@ -71,7 +71,8 @@
   second half: either rule may be the one violated). `ConcludeConformance`
   states the applicability the same way; its behavior is unchanged.
 - **Only a name in JSON Schema's grammar is declared (§7.3; spec
-  CHANGELOG, "Only a grammatical anchor declares a plain name"; pre-1.0).** An `$anchor` or `$dynamicAnchor` declares a plain name only
+  CHANGELOG, "Only a grammatical anchor declares a plain name";
+  pre-1.0).** An `$anchor` or `$dynamicAnchor` declares a plain name only
   when its value matches, as a whole, the grammar of JSON Schema Core
   §8.2.2 (a letter or underscore, then letters, digits, hyphens,
   underscores, and periods). Any other value, such as `"1bad"`,
