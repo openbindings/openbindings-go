@@ -69,9 +69,9 @@ func inputVerdict(t *testing.T, document, operation string, value any) string {
 	return verdictOf(t, validateWithTestEvaluator(t, mustDecodeInterface(t, document), operation, "input", value))
 }
 
-func mustDecodeInterface(t *testing.T, document string) *Interface {
+func mustDecodeInterface(t *testing.T, document string) *Document {
 	t.Helper()
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(document), &iface); err != nil {
 		t.Fatal(err)
 	}

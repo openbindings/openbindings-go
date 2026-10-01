@@ -28,7 +28,7 @@ import (
 // ValidateDocument.
 //
 // The error is a *ValidationError listing every established violation, so
-// `if _, err := iface.Validate(); err != nil`
+// `if _, err := doc.Validate(); err != nil`
 // gates on violations. A nil error
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
@@ -43,11 +43,11 @@ import (
 // object that cannot be encoded returns that error and no report, as does
 // one holding, in a member the model carries as raw JSON, bytes decoding
 // would refuse: the model encodes only what it would decode back unchanged.
-func (i Interface) Validate() (ValidationReport, error) {
-	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
+func (d Document) Validate() (ValidationReport, error) {
+	if refusal := versionRefusalOf(d.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
 	}
-	view, err := documentView(i)
+	view, err := documentView(d)
 	if err != nil {
 		return ValidationReport{}, err
 	}
@@ -60,7 +60,7 @@ func (i Interface) Validate() (ValidationReport, error) {
 // the bytes themselves, then every other document rule this SDK can decide on
 // the JSON they hold. It returns the decoded document when the document model
 // can carry it exactly (see LosslessFields), the report, and the same
-// violation error Interface.Validate returns. The rules never depend on that
+// violation error Document.Validate returns. The rules never depend on that
 // decoding: a document the model cannot carry is still judged in full, except
 // where the SDK cannot read it in full. Input that OBI-D-01 refuses (not JSON,
 // not UTF-8, beginning with a byte-order mark, or repeating a member name) is
@@ -75,7 +75,7 @@ func (i Interface) Validate() (ValidationReport, error) {
 // interpreted: ValidateDocument returns a *VersionRefusalError and no report
 // (OBI-T-04). The version is read first, from any input that is one JSON
 // value, however deeply it nests.
-func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
+func ValidateDocument(data []byte) (*Document, ValidationReport, error) {
 	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
@@ -111,11 +111,11 @@ func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 	checkDocument(&c, view)
 	positionFindings(data, c.findings)
 	report, verr := c.conclude()
-	var iface Interface
-	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
+	var doc Document
+	if err := doc.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
 		return nil, report, verr
 	}
-	return &iface, report, verr
+	return &doc, report, verr
 }
 
 // d01Violation is the OBI-D-01 finding for input verifyExactJSON refuses,
@@ -129,14 +129,14 @@ func d01Violation(data []byte, err error) Finding {
 
 // documentView encodes a host document and decodes the generic JSON view the
 // document rules judge.
-func documentView(i Interface) (any, error) {
-	data, err := json.Marshal(i)
+func documentView(d Document) (any, error) {
+	data, err := json.Marshal(d)
 	if err != nil {
-		return nil, fmt.Errorf("openbindings: encode interface: %w", err)
+		return nil, fmt.Errorf("openbindings: encode document: %w", err)
 	}
 	var view any
 	if err := unmarshalJSON(data, &view); err != nil {
-		return nil, fmt.Errorf("openbindings: decode encoded interface: %w", err)
+		return nil, fmt.Errorf("openbindings: decode encoded document: %w", err)
 	}
 	return view, nil
 }

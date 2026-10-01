@@ -42,7 +42,7 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 
 // A report names the release whose text it applies and, while that release
 // is a working draft, the source-control revision of the text (OBI-T-09),
-// from Interface.Validate and ValidateDocument alike.
+// from Document.Validate and ValidateDocument alike.
 func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{}}`
 	fromDocument := mustValidateDocument(t, document)
@@ -69,8 +69,8 @@ func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	built := Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"tasks.create": {}}}
-	for name, iface := range map[string]Interface{"decoded": *decoded, "built": built} {
+	built := Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"tasks.create": {}}}
+	for name, iface := range map[string]Document{"decoded": *decoded, "built": built} {
 		report, err := iface.Validate()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -80,7 +80,7 @@ func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
 		}
 	}
 	// A value with no JSON serialization gets no report.
-	broken := Interface{OpenBindings: "0.2.0", Name: Present("\xff"), Operations: map[string]Operation{}}
+	broken := Document{OpenBindings: "0.2.0", Name: Present("\xff"), Operations: map[string]Operation{}}
 	if report, err := broken.Validate(); err == nil || report.Evidence != nil {
 		t.Fatalf("a string that is not UTF-8: report %+v, err %v", report, err)
 	}
@@ -122,7 +122,7 @@ func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
 // serialization.
 func hostReport(t *testing.T, document string) (ValidationReport, error) {
 	t.Helper()
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(document), &iface); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestValidate_VersionRefusalIsNotAConclusion(t *testing.T) {
 		t.Fatalf("a refused document has no interpretation and no conclusion: %v %+v", iface, report)
 	}
 
-	host := Interface{OpenBindings: "9.0.0", Operations: map[string]Operation{}}
+	host := Document{OpenBindings: "9.0.0", Operations: map[string]Operation{}}
 	hostReport, err := host.Validate()
 	if !errors.As(err, &refusal) || hostReport.Evidence != nil {
 		t.Fatalf("Validate = %+v, %v; want a version refusal and no report", hostReport, err)
@@ -312,7 +312,7 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 func TestValidate_GatesOnTheDocumentSchema(t *testing.T) {
 	// A present empty version violates only the document schema; the model
 	// carries it, so Validate sees it.
-	iface := &Interface{
+	iface := &Document{
 		OpenBindings: "0.2.0",
 		Version:      Present(""),
 		Operations:   map[string]Operation{"op": {}},
@@ -331,7 +331,7 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 		"bindings":{"b":{"operation":"missing","source":"s"}}}`))
 
 	if iface != nil {
-		t.Fatal("the model cannot carry a null input; no Interface is returned")
+		t.Fatal("the model cannot carry a null input; no Document is returned")
 	}
 	for rule, want := range map[string]RuleEvidenceStatus{
 		"OBI-D-02": EvidenceViolated,

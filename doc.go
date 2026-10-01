@@ -10,15 +10,15 @@
 //
 // # Documents
 //
-//	iface, err := openbindings.ParseDocument(data) // rejects duplicate keys (OBI-D-01)
+//	doc, err := openbindings.ParseDocument(data) // rejects duplicate keys (OBI-D-01)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	if _, err := iface.Validate(); err != nil {
+//	if _, err := doc.Validate(); err != nil {
 //	    log.Fatal(err)
 //	}
 //
-// (json.Unmarshal into Interface also decodes a document exactly; ParseDocument
+// (json.Unmarshal into Document also decodes a document exactly; ParseDocument
 // additionally refuses an unsupported version (OBI-T-04) and applies the
 // document schema (OBI-D-02).)
 //
@@ -31,7 +31,7 @@
 // decide is inconclusive, not violated. The report beside the error carries
 // the conclusion:
 //
-//	iface, report, err := openbindings.ValidateDocument(data)
+//	doc, report, err := openbindings.ValidateDocument(data)
 //	// report.Conclusion is conformant, non-conformant, or
 //	// conformance-undetermined (§10.4); err is a *ValidationError when a
 //	// violation was established, and a *VersionRefusalError when the declared
@@ -51,7 +51,7 @@
 // openbindings-go/schemaeval module is the project's:
 //
 //	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
-//	contracts, err := compiler.Resolve(ctx, iface)
+//	contracts, err := compiler.Resolve(ctx, doc)
 //	input, err := contracts.CompileInput(ctx, "tasks.create")
 //	err = input.ValidateJSON(ctx, body) // nil, a *MismatchError, a *NoVerdictError, or body is not JSON
 //
@@ -114,7 +114,7 @@
 //
 // All types in this package are safe for concurrent read access. Concurrent
 // writes to the same value require external synchronization. The Validate
-// method is safe for concurrent use on the same Interface value (read-only).
+// method is safe for concurrent use on the same Document value (read-only).
 //
 // JSON marshaling and unmarshaling follow standard library semantics:
 // concurrent calls on different values are safe; concurrent calls on the

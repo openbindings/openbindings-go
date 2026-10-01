@@ -16,7 +16,7 @@ const SupportedVersions = "0.2.x"
 // AuthoringVersion is the specification version to declare in a document
 // written with this SDK: the lowest version sufficient for everything the
 // document model carries, as §8.1 asks of documents. No function here writes
-// it; a producer sets Interface.OpenBindings to it.
+// it; a producer sets Document.OpenBindings to it.
 const AuthoringVersion = "0.2.0"
 
 // appliedRelease is the release of the specification whose text this SDK
@@ -65,7 +65,7 @@ func init() {
 // SupportedVersions. A release of the supported line is supported whatever
 // its patch version, a prerelease only when it is named explicitly, and
 // build metadata is ignored (§8.1). Of well-formed versions, ParseDocument,
-// ValidateDocument, Interface.Validate, and ValueContractCompiler.Resolve
+// ValidateDocument, Document.Validate, and ValueContractCompiler.Resolve
 // refuse exactly those it reports false for.
 //
 // A malformed (non-SemVer) v is no version at all: IsSupportedVersion

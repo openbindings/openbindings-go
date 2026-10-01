@@ -36,7 +36,7 @@ var documentRules = []string{
 
 // DocumentRules returns the identifiers of every document rule the core
 // specification defines, in identifier order. Every ValidationReport
-// Interface.Validate or ValidateDocument returns carries evidence for each of
+// Document.Validate or ValidateDocument returns carries evidence for each of
 // them; a version refusal, or a host object that cannot be encoded, returns
 // no report.
 func DocumentRules() []string {
@@ -86,7 +86,7 @@ type ValidationReport struct {
 	Revision   string
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per rule considered. Reports from
-	// Interface.Validate and ValidateDocument carry every document rule; a
+	// Document.Validate and ValidateDocument carry every document rule; a
 	// rule with nothing to govern in the document is vacuously satisfied. A
 	// version refusal, or a host object that cannot be encoded, returns no
 	// report, whose Evidence is nil.
@@ -127,7 +127,7 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 // rule evidence. The caller supplies every rule applicable to the validation;
 // absence is not itself an evidence status. It concludes from exactly the
 // evidence given, as the core conformance corpus's OBI-T-09 scenarios do, so
-// an empty map concludes conformant: a report from Interface.Validate or
+// an empty map concludes conformant: a report from Document.Validate or
 // ValidateDocument always carries every document rule. A violation is decisive even when
 // other rules remain inconclusive. In the absence of a violation, any
 // inconclusive applicable rule makes the conclusion undetermined; otherwise

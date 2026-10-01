@@ -193,12 +193,12 @@ func (k *kit) runGroup(g group) {
 		t.Errorf("%s: the kit's resources: %v", g.id, err)
 		return
 	}
-	var iface openbindings.Interface
-	if err := json.Unmarshal([]byte(g.document), &iface); err != nil {
+	var doc openbindings.Document
+	if err := json.Unmarshal([]byte(g.document), &doc); err != nil {
 		t.Errorf("%s: the kit's document: %v", g.id, err)
 		return
 	}
-	contracts, err := compiler.Resolve(context.Background(), &iface)
+	contracts, err := compiler.Resolve(context.Background(), &doc)
 	if err != nil {
 		t.Errorf("%s: resolving the kit's document: %v", g.id, err)
 		return

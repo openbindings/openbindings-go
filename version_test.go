@@ -98,7 +98,7 @@ func TestVersionRefusal_SaysWhy(t *testing.T) {
 }
 
 // TestIsSupportedVersion_MatchesValidateAndParseRefusal pins IsSupportedVersion
-// to the ACTUAL accept/refuse outcome of ParseDocument and Interface.Validate
+// to the ACTUAL accept/refuse outcome of ParseDocument and Document.Validate
 // for the same versions, so the acceptance oracle can never drift from the
 // paths it is promoted to predict (README, `ob create`). The minimal document
 // is otherwise schema-valid, so on a well-formed version any refusal is the
@@ -128,9 +128,9 @@ func TestIsSupportedVersion_MatchesValidateAndParseRefusal(t *testing.T) {
 				t.Errorf("drift: IsSupportedVersion(%q)=%v but ParseDocument refuses=%v", v, accepted, parseRefuses)
 			}
 
-			// Interface.Validate path: only the version decision is tagged
+			// Document.Validate path: only the version decision is tagged
 			// "(OBI-T-04)", so it is isolable from any other shape problems.
-			_, verr := (Interface{OpenBindings: v, Operations: map[string]Operation{}}).Validate()
+			_, verr := (Document{OpenBindings: v, Operations: map[string]Operation{}}).Validate()
 			validateVersionRefuses := verr != nil && strings.Contains(verr.Error(), "(OBI-T-04)")
 			if accepted == validateVersionRefuses {
 				t.Errorf("drift: IsSupportedVersion(%q)=%v but Validate version-refuses=%v (%v)", v, accepted, validateVersionRefuses, verr)

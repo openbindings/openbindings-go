@@ -159,7 +159,7 @@ func Example_cliValidate() {
 
 // cliRead is how a command that interprets a document (invoke, mcp, codegen)
 // reads one: ParseDocument, then an exit status for each way it can fail.
-func cliRead(data []byte) (*openbindings.Interface, int, string) {
+func cliRead(data []byte) (*openbindings.Document, int, string) {
 	iface, err := openbindings.ParseDocument(data)
 	var refusal *openbindings.VersionRefusalError
 	var violation *openbindings.ValidationError
@@ -209,7 +209,7 @@ func Example_cliRead() {
 func Example_cliVersionDecision() {
 	fmt.Println("this ob interprets OpenBindings", openbindings.SupportedVersions)
 	for _, declared := range []string{`"0.2.0"`, `"0.2.7"`, `"0.2.0+build.5"`, `"0.3.0"`, `"0.2.0-rc.1"`, `"0.2"`, `""`} {
-		var held openbindings.Interface
+		var held openbindings.Document
 		if err := json.Unmarshal([]byte(`{"openbindings":`+declared+`,"operations":{}}`), &held); err != nil {
 			panic(err)
 		}
@@ -255,7 +255,7 @@ func memberOrder(data []byte) []string {
 // cliEdit is an in-place edit (`ob operation add <obi> <name> ...`): read the
 // document as it is, conformant or not, apply the change, and write it only
 // when the result breaks no rule the document did not already break.
-func cliEdit(data []byte, edit func(*openbindings.Interface)) ([]byte, error) {
+func cliEdit(data []byte, edit func(*openbindings.Document)) ([]byte, error) {
 	// ParseDocument refuses a document violating the document schema, which
 	// an editor must still open, so the editor reads with ValidateDocument:
 	// the decoded document and the rules it already breaks.
@@ -267,7 +267,7 @@ func cliEdit(data []byte, edit func(*openbindings.Interface)) ([]byte, error) {
 	case iface == nil:
 		// C1 item F6 (nil document): the model cannot carry the document (or
 		// OBI-D-01 refuses it), and the only sign of it is a nil
-		// *Interface beside a nil error for a lone surrogate.
+		// *Document beside a nil error for a lone surrogate.
 		return nil, fmt.Errorf("cannot edit: %s", before.Conclusion)
 	}
 	had := map[string]bool{}
@@ -305,8 +305,8 @@ func cliEdit(data []byte, edit func(*openbindings.Interface)) ([]byte, error) {
 }
 
 func Example_cliEdit() {
-	addOperation := func(key string, input openbindings.JSONSchema) func(*openbindings.Interface) {
-		return func(i *openbindings.Interface) {
+	addOperation := func(key string, input openbindings.JSONSchema) func(*openbindings.Document) {
+		return func(i *openbindings.Document) {
 			i.Operations[key] = openbindings.Operation{Input: input}
 		}
 	}
@@ -318,9 +318,9 @@ func Example_cliEdit() {
 
 	// An edit that declares a version this SDK does not interpret, and one
 	// that holds bytes the model cannot write, end at the post-edit check.
-	_, err = cliEdit([]byte(tasksOBI), func(i *openbindings.Interface) { i.OpenBindings = "0.3.0" })
+	_, err = cliEdit([]byte(tasksOBI), func(i *openbindings.Document) { i.OpenBindings = "0.3.0" })
 	fmt.Println(err)
-	_, err = cliEdit([]byte(tasksOBI), func(i *openbindings.Interface) {
+	_, err = cliEdit([]byte(tasksOBI), func(i *openbindings.Document) {
 		i.Extensions = map[string]json.RawMessage{"x-owner": json.RawMessage(`{"team":`)}
 	})
 	fmt.Println(err)
@@ -338,7 +338,7 @@ func Example_cliEdit() {
 	written, _ = cliEdit([]byte(withMarkup), addOperation("archiveTask", true))
 	escaped := `"a` + `\` + `u003cb"`
 	fmt.Println(bytes.Contains(written, []byte(`"a<b"`)), bytes.Contains(written, []byte(escaped)))
-	var held openbindings.Interface
+	var held openbindings.Document
 	if err := json.Unmarshal([]byte(withMarkup), &held); err != nil {
 		panic(err)
 	}
@@ -353,7 +353,7 @@ func Example_cliEdit() {
 	// <nil> [openbindings name version schemas operations dependencies sources bindings]
 	// refused: the change would add OBI-D-10 at /operations/x/input/type
 	// refused: the edit declares a version this ob does not interpret: openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)
-	// refused: the edited document cannot be written: openbindings: encode interface: json: error calling MarshalJSON for type openbindings.Interface: member "x-owner": unexpected end of JSON input
+	// refused: the edited document cannot be written: openbindings: encode document: json: error calling MarshalJSON for type openbindings.Document: member "x-owner": unexpected end of JSON input
 	// <nil> [bindings dependencies name openbindings operations schemas sources version x-owner]
 	// false true
 	// false true
@@ -363,7 +363,7 @@ func Example_cliEdit() {
 // key order. C1 item K3 (bindings by key): the core has no helper for it, so the
 // CLI (invoke, show, operation list, mcp), Loop A's adapter, and the spec's
 // Go runner (tool_scenarios.go, resolve-operation) each write this loop.
-func bindingsOf(iface *openbindings.Interface, key string) []string {
+func bindingsOf(iface *openbindings.Document, key string) []string {
 	var keys []string
 	for bindingKey, binding := range iface.Bindings {
 		if binding.Operation == key {
@@ -380,7 +380,7 @@ func bindingsOf(iface *openbindings.Interface, key string) []string {
 // named binding ob can invoke, or the sole one; otherwise refuse, listing
 // the candidates with preference and deprecation, which are shown and never
 // used to choose.
-func cliInvokeChoice(iface *openbindings.Interface, name string, canInvoke map[string]bool, named ...string) string {
+func cliInvokeChoice(iface *openbindings.Document, name string, canInvoke map[string]bool, named ...string) string {
 	key, _, found := openbindings.ResolveOperation(iface, name)
 	if !found {
 		return fmt.Sprintf("refused: no operation named %q", name)
@@ -506,7 +506,7 @@ func Example_cliDependencyKinds() {
 // A producer builds a document in code, gates it before writing, writes it,
 // and reads it back.
 func Example_producer() {
-	doc := openbindings.Interface{
+	doc := openbindings.Document{
 		OpenBindings: openbindings.AuthoringVersion,
 		Name:         openbindings.Present("Tasks"),
 		// A promoted field cannot be named in a composite literal, so an
@@ -535,11 +535,11 @@ func Example_producer() {
 		Sources: map[string]openbindings.Source{
 			"httpApi": {Kind: "example.openapi@1", Content: json.RawMessage(`{"location":"https://api.example.com/openapi.json"}`)},
 		},
-		Bindings: map[string]openbindings.BindingEntry{
+		Bindings: map[string]openbindings.Binding{
 			// Present(10) would be a *int: the preference member is *int64.
 			"createTask.http": {Operation: "createTask", Source: "httpApi", Preference: openbindings.Present[int64](10), Idempotent: openbindings.Present(false)},
 		},
-		Dependencies: map[string]openbindings.DependencyEntry{
+		Dependencies: map[string]openbindings.Dependency{
 			"notifier": {Operation: "ping", Kinds: []string{"example.mcp@1"}},
 		},
 	}
@@ -678,7 +678,7 @@ func Example_producerAmendReport() {
 // inside a schema that declares $id, which resolves against that resource's
 // base, not the document (§7.2). C1 item F4 (references): the references
 // section below writes the lookup that gets these right.
-func naiveReferrers(iface *openbindings.Interface, name string) []string {
+func naiveReferrers(iface *openbindings.Document, name string) []string {
 	target := "#/schemas/" + name
 	var found []string
 	var walk func(at string, v any)
@@ -936,7 +936,7 @@ func Example_producerSchemaEdit() {
 	// typed nil held there (a nil json.RawMessage or a nil map) is a present
 	// null, which OBI-D-02 and OBI-D-10 then report.
 	for _, held := range []openbindings.JSONSchema{nil, json.RawMessage(nil), map[string]any(nil)} {
-		doc := openbindings.Interface{OpenBindings: openbindings.AuthoringVersion, Operations: map[string]openbindings.Operation{"o": {Input: held}}}
+		doc := openbindings.Document{OpenBindings: openbindings.AuthoringVersion, Operations: map[string]openbindings.Operation{"o": {Input: held}}}
 		out, _ := json.Marshal(doc)
 		report, _ := doc.Validate()
 		fmt.Printf("%T: %s %s\n", held, out, report.Conclusion)
@@ -1069,7 +1069,7 @@ func pointerOf(tokens ...string) string {
 	return b.String()
 }
 
-func genericView(doc *openbindings.Interface) (map[string]any, error) {
+func genericView(doc *openbindings.Document) (map[string]any, error) {
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
@@ -1094,7 +1094,7 @@ var errIncomplete = errors.New("the reference index is incomplete")
 // errIncomplete. A nil error means the index is complete, so an empty
 // result with a nil error means the document holds no reference; a nil
 // document is such a result.
-func referencesOf(doc *openbindings.Interface) ([]docRef, *refIndex, error) {
+func referencesOf(doc *openbindings.Document) ([]docRef, *refIndex, error) {
 	if doc == nil {
 		return nil, nil, nil // no document holds no reference
 	}
@@ -1364,12 +1364,12 @@ func retarget(view map[string]any, refs []docRef, from, to string) []string {
 	return rewritten
 }
 
-func fromView(view map[string]any) *openbindings.Interface {
+func fromView(view map[string]any) *openbindings.Document {
 	data, err := json.Marshal(view)
 	if err != nil {
 		panic(err)
 	}
-	var doc openbindings.Interface
+	var doc openbindings.Document
 	if err := json.Unmarshal(data, &doc); err != nil {
 		panic(err)
 	}
@@ -1433,7 +1433,7 @@ const dynamicOBI = `{"openbindings":"0.2.0","operations":{
   "List":{"$id":"https://ex.test/list","type":"array","items":{"$dynamicRef":"#item"},"$defs":{"item":{"$dynamicAnchor":"item","type":"string"}}},
   "Override":{"$dynamicAnchor":"item","type":"number"}}}`
 
-func lookUp(document string) (*openbindings.Interface, map[string]any, []docRef, *refIndex) {
+func lookUp(document string) (*openbindings.Document, map[string]any, []docRef, *refIndex) {
 	doc, err := openbindings.ParseDocument([]byte(document))
 	if err != nil {
 		panic(err)
@@ -1538,7 +1538,7 @@ func Example_cliReferenceParity() {
 				sdk = "no target (" + map[bool]string{true: "undefined", false: "core refuses"}[errors.Is(noVerdict, openbindings.ErrUndefined)] + ")"
 			}
 		}
-		var iface2 openbindings.Interface
+		var iface2 openbindings.Document
 		if err := json.Unmarshal([]byte(document), &iface2); err != nil {
 			panic(err)
 		}
@@ -1749,7 +1749,7 @@ func Example_cliMergeClosure() {
 // at the nesting limit, which returns what it found and an error. Only a nil
 // error makes an empty result mean "no references", as for a nil document.
 func Example_cliReferenceFailures() {
-	report := func(name string, doc *openbindings.Interface) {
+	report := func(name string, doc *openbindings.Document) {
 		refs, _, err := referencesOf(doc)
 		var refusal *openbindings.VersionRefusalError
 		switch {
@@ -1763,21 +1763,21 @@ func Example_cliReferenceFailures() {
 			fmt.Println(name+":", len(refs), "references, complete")
 		}
 	}
-	report("next version", &openbindings.Interface{OpenBindings: "0.3.0", Operations: map[string]openbindings.Operation{}})
-	report("no version", &openbindings.Interface{OpenBindings: "0.2", Operations: map[string]openbindings.Operation{}})
-	report("unencodable", &openbindings.Interface{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: map[string]any{"maximum": math.NaN()}}}})
+	report("next version", &openbindings.Document{OpenBindings: "0.3.0", Operations: map[string]openbindings.Operation{}})
+	report("no version", &openbindings.Document{OpenBindings: "0.2", Operations: map[string]openbindings.Operation{}})
+	report("unencodable", &openbindings.Document{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: map[string]any{"maximum": math.NaN()}}}})
 	deep := strings.Repeat(`{"not":`, 300) + `{"$ref":"#/schemas/S"}` + strings.Repeat(`}`, 300)
-	var deepDoc openbindings.Interface
+	var deepDoc openbindings.Document
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","schemas":{"S":{"type":"string"}},"operations":{"op":{"input":`+deep+`,"output":{"$ref":"#/schemas/S"}}}}`), &deepDoc); err != nil {
 		panic(err)
 	}
 	report("deep", &deepDoc)
-	report("no references", &openbindings.Interface{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: true}}})
+	report("no references", &openbindings.Document{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: true}}})
 	report("nil document", nil)
 	// Output:
 	// next version: refused, version 0.3.0
 	// no version: the document declares no valid version ("0.2"), so it is not interpreted
-	// unencodable: the document cannot be encoded: json: error calling MarshalJSON for type *openbindings.Interface: json: error calling MarshalJSON for type openbindings.Operation: json: unsupported value: NaN
+	// unencodable: the document cannot be encoded: json: error calling MarshalJSON for type *openbindings.Document: json: error calling MarshalJSON for type openbindings.Operation: json: unsupported value: NaN
 	// deep: 1 references found, and incomplete
 	// no references: 0 references, complete
 	// nil document: 0 references, complete

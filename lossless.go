@@ -431,7 +431,7 @@ func invalidUTF8(v reflect.Value, open map[heldValue]bool) ([]string, string) {
 }
 
 // modelPackage is this package's import path.
-var modelPackage = reflect.TypeFor[Interface]().PkgPath()
+var modelPackage = reflect.TypeFor[Document]().PkgPath()
 
 // ownType reports whether a type, or the type it points to, is defined by this
 // package.

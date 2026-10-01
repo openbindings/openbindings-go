@@ -15,8 +15,8 @@ import (
 // json.Number, so a number keeps its exact text.
 //
 // As an operation's Input or Output, a nil JSONSchema means the member is
-// absent, which states no value contract in that direction (§5.1). As an entry of Interface.Schemas, where
-// the entry itself says the member is present, nil is a JSON null, which is
+// absent, which states no value contract in that direction (§5.1). As an
+// entry of Document.Schemas, where the entry itself says the member is present, nil is a JSON null, which is
 // not a schema: OBI-D-10 reports it. Well-formedness of a present value is a
 // document rule enforced by Validate rather than by this type.
 type JSONSchema any
@@ -150,9 +150,9 @@ func (s Source) MarshalJSON() ([]byte, error) {
 	return encodeObject(sourceMembers(s), s.LosslessFields)
 }
 
-// BindingEntry is an author-declared realization of an operation through a
+// Binding is an author-declared realization of an operation through a
 // source (§5.3).
-type BindingEntry struct {
+type Binding struct {
 	Operation string `json:"operation"`
 	Source    string `json:"source"`
 	// Content is what the binding carries under its source's kind: any JSON
@@ -179,28 +179,28 @@ type BindingEntry struct {
 	LosslessFields
 }
 
-type bindingEntryMembers BindingEntry
+type bindingMembers Binding
 
 // maxPreference bounds a binding preference: the exactly representable
 // interoperable integer range of §5.3.
 const maxPreference = 9007199254740991
 
-func (be *BindingEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "binding", be) }
+func (b *Binding) UnmarshalJSON(data []byte) error { return decodeExact(data, "binding", b) }
 
-func (be *BindingEntry) decodeVerified(b []byte) error {
-	return decodeObject(b, "binding", (*bindingEntryMembers)(be))
+func (b *Binding) decodeVerified(data []byte) error {
+	return decodeObject(data, "binding", (*bindingMembers)(b))
 }
 
-func (be BindingEntry) MarshalJSON() ([]byte, error) {
-	return encodeObject(bindingEntryMembers(be), be.LosslessFields)
+func (b Binding) MarshalJSON() ([]byte, error) {
+	return encodeObject(bindingMembers(b), b.LosslessFields)
 }
 
-// DependencyEntry names an operation contract consumed at a local
-// consumption point (§5.5). Kinds, when present, is an unordered any-of list
-// of exact, opaque kind strings accepted at that point. A nil slice leaves
-// the dependency unconstrained by kind. Operation is
-// the canonical key of an operation in the same document.
-type DependencyEntry struct {
+// Dependency names an operation contract consumed at a local consumption
+// point (§5.5). Kinds, when present, is an unordered any-of list of exact,
+// opaque kind strings accepted at that point. A nil slice leaves the
+// dependency unconstrained by kind. Operation is the canonical key of an
+// operation in the same document.
+type Dependency struct {
 	Operation   string   `json:"operation"`
 	Kinds       []string `json:"kinds,omitzero"`
 	Description *string  `json:"description,omitempty"`
@@ -208,16 +208,16 @@ type DependencyEntry struct {
 	LosslessFields
 }
 
-type dependencyEntryMembers DependencyEntry
+type dependencyMembers Dependency
 
-func (d *DependencyEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "dependency", d) }
+func (d *Dependency) UnmarshalJSON(b []byte) error { return decodeExact(b, "dependency", d) }
 
-func (d *DependencyEntry) decodeVerified(b []byte) error {
-	return decodeObject(b, "dependency", (*dependencyEntryMembers)(d))
+func (d *Dependency) decodeVerified(b []byte) error {
+	return decodeObject(b, "dependency", (*dependencyMembers)(d))
 }
 
-func (d DependencyEntry) MarshalJSON() ([]byte, error) {
-	return encodeObject(dependencyEntryMembers(d), d.LosslessFields)
+func (d Dependency) MarshalJSON() ([]byte, error) {
+	return encodeObject(dependencyMembers(d), d.LosslessFields)
 }
 
 // AllowsKind reports whether a source kind meets this dependency's declared
@@ -225,7 +225,7 @@ func (d DependencyEntry) MarshalJSON() ([]byte, error) {
 // Comparison is exact and independent of whether a processor supports the
 // kind. This only checks the kind constraint; it says nothing about operation
 // compatibility, provider selection, or whether a binding can be used.
-func (d DependencyEntry) AllowsKind(kind string) bool {
+func (d Dependency) AllowsKind(kind string) bool {
 	if d.Kinds == nil {
 		return true
 	}
@@ -237,12 +237,20 @@ func (d DependencyEntry) AllowsKind(kind string) bool {
 	return false
 }
 
-// Interface is the OpenBindings document shape (§5). OpenBindings is the
-// declared specification version. Every other member is absent exactly when
-// its Go value is nil. That includes Operations, which §5 requires: the model
-// carries a document that omits it, so Validate can report the omission
-// (OBI-D-02) and re-encoding leaves it omitted.
-type Interface struct {
+// Document is an OBI, an OpenBindings interface document (§3, §5), as the
+// values its members hold: it models the document's meaning, not the text it
+// was decoded from. Re-encoding a decoded Document writes every member it
+// holds, but not the text's whitespace, member order, or string escapes, nor
+// the spelling of a number the model types (a binding's preference, an
+// int64); numbers in schemas, example values, content, and kept members keep
+// their spelling. A claim about a text is a claim about its bytes:
+// ValidateDocument judges those.
+//
+// OpenBindings is the declared specification version. Every other member is
+// absent exactly when its Go value is nil. That includes Operations, which §5
+// requires: the model carries a document that omits it, so Validate can report
+// the omission (OBI-D-02) and re-encoding leaves it omitted.
+type Document struct {
 	OpenBindings string  `json:"openbindings"`
 	Name         *string `json:"name,omitempty"`
 	Version      *string `json:"version,omitempty"`
@@ -252,22 +260,22 @@ type Interface struct {
 	Operations map[string]Operation  `json:"operations,omitzero"`
 	// Dependencies contains named consumption points. A dependency declaration
 	// does not assert that a realization is installed, selected, or live.
-	Dependencies map[string]DependencyEntry `json:"dependencies,omitzero"`
+	Dependencies map[string]Dependency `json:"dependencies,omitzero"`
 
-	Sources  map[string]Source       `json:"sources,omitzero"`
-	Bindings map[string]BindingEntry `json:"bindings,omitzero"`
+	Sources  map[string]Source  `json:"sources,omitzero"`
+	Bindings map[string]Binding `json:"bindings,omitzero"`
 
 	LosslessFields
 }
 
-type interfaceMembers Interface
+type documentMembers Document
 
-func (i *Interface) UnmarshalJSON(b []byte) error { return decodeExact(b, "document", i) }
+func (d *Document) UnmarshalJSON(data []byte) error { return decodeExact(data, "document", d) }
 
-func (i *Interface) decodeVerified(b []byte) error {
-	return decodeObject(b, "document", (*interfaceMembers)(i))
+func (d *Document) decodeVerified(data []byte) error {
+	return decodeObject(data, "document", (*documentMembers)(d))
 }
 
-func (i Interface) MarshalJSON() ([]byte, error) {
-	return encodeObject(interfaceMembers(i), i.LosslessFields)
+func (d Document) MarshalJSON() ([]byte, error) {
+	return encodeObject(documentMembers(d), d.LosslessFields)
 }

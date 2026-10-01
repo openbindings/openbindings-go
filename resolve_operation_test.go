@@ -5,7 +5,7 @@ import (
 )
 
 func TestResolveOperation_DirectKey(t *testing.T) {
-	iface := &Interface{
+	iface := &Document{
 		Operations: map[string]Operation{
 			"createTask": {Description: Present("native")},
 		},
@@ -17,7 +17,7 @@ func TestResolveOperation_DirectKey(t *testing.T) {
 }
 
 func TestResolveOperation_Alias(t *testing.T) {
-	iface := &Interface{
+	iface := &Document{
 		Operations: map[string]Operation{
 			"createTask": {Aliases: []string{"tasks.create"}},
 		},
@@ -31,7 +31,7 @@ func TestResolveOperation_Alias(t *testing.T) {
 }
 
 func TestResolveOperation_NotFound(t *testing.T) {
-	iface := &Interface{
+	iface := &Document{
 		Operations: map[string]Operation{
 			"createTask": {Aliases: []string{"tasks.create"}},
 		},
@@ -45,7 +45,7 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 	// A name that is one operation's native key, and a different name that is
 	// another operation's alias, both resolve to their own operation. Key
 	// matches are not privileged: OBI-D-04 guarantees a name belongs to one op.
-	iface := &Interface{
+	iface := &Document{
 		Operations: map[string]Operation{
 			"nativeThing": {Description: Present("native")},
 			"otherThing":  {Aliases: []string{"sharedContract.do"}},
@@ -62,7 +62,7 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 // A name that several operations carry, in a document that violates
 // OBI-D-04, resolves to none of them: no match is privileged (OBI-T-07).
 func TestResolveOperation_AmbiguousNamesDoNotResolve(t *testing.T) {
-	iface := &Interface{Operations: map[string]Operation{
+	iface := &Document{Operations: map[string]Operation{
 		"a": {Aliases: []string{"shared"}},
 		"b": {Aliases: []string{"shared"}},
 		"c": {Aliases: []string{"d"}},

@@ -6,7 +6,7 @@ import (
 )
 
 func TestDependencyAllowsKind_ExactAndSupportIndependent(t *testing.T) {
-	d := DependencyEntry{Kinds: []string{"example.openapi@1", "É", "https://example.test/kind"}}
+	d := Dependency{Kinds: []string{"example.openapi@1", "É", "https://example.test/kind"}}
 	for _, tc := range []struct {
 		kind string
 		want bool
@@ -25,10 +25,10 @@ func TestDependencyAllowsKind_ExactAndSupportIndependent(t *testing.T) {
 			t.Errorf("AllowsKind(%q) = %v, want %v", tc.kind, got, tc.want)
 		}
 	}
-	if !(DependencyEntry{}).AllowsKind("unknown@9") {
+	if !(Dependency{}).AllowsKind("unknown@9") {
 		t.Fatal("omitted kinds must impose no constraint")
 	}
-	if (DependencyEntry{Kinds: []string{}}).AllowsKind("unknown@9") {
+	if (Dependency{Kinds: []string{}}).AllowsKind("unknown@9") {
 		t.Fatal("present empty kinds must not behave as omitted")
 	}
 }

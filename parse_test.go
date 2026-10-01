@@ -7,7 +7,7 @@ import (
 )
 
 // TestParseDocument_VersionRefusalBothDirections pins OBI-T-04 on the PARSE
-// path (not only Interface.Validate): downward refusal and undeclared
+// path (not only Document.Validate): downward refusal and undeclared
 // prereleases refuse at every entry point, with the messages Validate uses.
 func TestParseDocument_VersionRefusalBothDirections(t *testing.T) {
 	doc := func(v string) []byte {

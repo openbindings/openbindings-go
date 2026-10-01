@@ -57,7 +57,7 @@ func TestDocumentModel_RoundTripsEveryMember(t *testing.T) {
 	}
 	for name, document := range documents {
 		t.Run(name, func(t *testing.T) {
-			var iface Interface
+			var iface Document
 			if err := json.Unmarshal([]byte(document), &iface); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -95,7 +95,7 @@ func TestDocumentModel_RefusesWhatItCannotCarry(t *testing.T) {
 	}
 	for name, document := range documents {
 		t.Run(name, func(t *testing.T) {
-			var iface Interface
+			var iface Document
 			if err := json.Unmarshal([]byte(document), &iface); err == nil {
 				encoded, _ := json.Marshal(iface)
 				t.Fatalf("decoded a document the model cannot carry; it would re-encode as %s", encoded)
@@ -106,7 +106,7 @@ func TestDocumentModel_RefusesWhatItCannotCarry(t *testing.T) {
 
 func TestDocumentModel_PreferenceIsAnExactInteger(t *testing.T) {
 	for spelling, want := range map[string]int64{"1": 1, "1.0": 1, "1e3": 1000, "-0": 0, "9007199254740991": 9007199254740991} {
-		var binding BindingEntry
+		var binding Binding
 		if err := json.Unmarshal([]byte(`{"operation":"a","source":"s","preference":`+spelling+`}`), &binding); err != nil {
 			t.Fatalf("%s: %v", spelling, err)
 		}
@@ -167,7 +167,7 @@ func FuzzPreferenceValue(f *testing.F) {
 // Programs state presence through the typed fields alone: set a member with
 // Present, remove it with nil.
 func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
-	binding := BindingEntry{Operation: "a", Source: "s", Content: json.RawMessage(`null`)}
+	binding := Binding{Operation: "a", Source: "s", Content: json.RawMessage(`null`)}
 	encoded, err := json.Marshal(binding)
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
 		}
 	}
 
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","version":"","operations":{"a":{"tags":[]}}}`), &iface); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
 	}
 }
 
-// Interface.Validate and ValidateDocument agree about every document the
+// Document.Validate and ValidateDocument agree about every document the
 // model decodes: the host object carries what the bytes carried.
 func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 	documents := []string{
@@ -214,7 +214,7 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 	}
 	for _, document := range documents {
 		_, fromBytes, _ := ValidateDocument([]byte(document))
-		var iface Interface
+		var iface Document
 		if err := json.Unmarshal([]byte(document), &iface); err != nil {
 			t.Fatalf("%s: decode: %v", document, err)
 		}
@@ -230,7 +230,7 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 }
 
 func TestDocumentModel_BindingContentPresenceIsKept(t *testing.T) {
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","operations":{"a":{}},
 		"sources":{"s":{"kind":"x@1"}},
 		"bindings":{"absent":{"operation":"a","source":"s"},"empty":{"operation":"a","source":"s","content":""},
@@ -248,7 +248,7 @@ func TestDocumentModel_BindingContentPresenceIsKept(t *testing.T) {
 // Members are matched by exact name. A case variant of a typed member is an
 // unknown member and never changes the typed one.
 func TestDocumentModel_MemberNamesAreExact(t *testing.T) {
-	var binding BindingEntry
+	var binding Binding
 	if err := json.Unmarshal([]byte(`{"operation":"a","source":"s","OPERATION":"b","Content":"x","Preference":1.5}`), &binding); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestDocumentModel_MemberNamesAreExact(t *testing.T) {
 	if len(binding.Unknown) != 3 {
 		t.Fatalf("case variants must be carried as unknown members, got %v", binding.Unknown)
 	}
-	var iface Interface
+	var iface Document
 	document := `{"openbindings":"0.2.0","OpenBindings":"9.9.9","operations":{}}`
 	if err := json.Unmarshal([]byte(document), &iface); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -282,7 +282,7 @@ func TestDocumentModel_RefusesDuplicatesAndQuotedPreferences(t *testing.T) {
 		"quoted preference":        `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":"7"}}}`,
 		"invalid UTF-8 in a value": "{\"openbindings\":\"0.2.0\",\"name\":\"\xff\",\"operations\":{}}",
 	} {
-		var iface Interface
+		var iface Document
 		if err := json.Unmarshal([]byte(document), &iface); err == nil {
 			t.Errorf("%s: decoded a document the model cannot carry", name)
 		}
@@ -311,7 +311,7 @@ func TestDocumentModel_DecodeErrorsAreDeterministic(t *testing.T) {
 // A typed field alone states its member: a nil field is absent even when the
 // lossless maps carry an entry of the same name.
 func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
-	binding := BindingEntry{Operation: "a", Source: "s", LosslessFields: LosslessFields{
+	binding := Binding{Operation: "a", Source: "s", LosslessFields: LosslessFields{
 		Unknown:    map[string]json.RawMessage{"content": json.RawMessage(`"x"`), "later": json.RawMessage(`1`)},
 		Extensions: map[string]json.RawMessage{"operation": json.RawMessage(`"b"`)},
 	}}
@@ -327,7 +327,7 @@ func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
 // A host object whose encoding violates the document rules is refused with a
 // *ValidationError.
 func TestValidate_RefusesAHostObjectWhoseEncodingViolatesTheRules(t *testing.T) {
-	iface := &Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
+	iface := &Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
 	var violation *ValidationError
 	if _, err := iface.Validate(); !errors.As(err, &violation) {
 		t.Fatalf("want a *ValidationError, got %T %v", err, err)
@@ -377,7 +377,7 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 			"example input":     OperationExample{Input: raw},
 			"source content":    Source{Kind: "x@1", Content: raw},
 			"an extension":      Operation{LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": raw}}},
-			"an unknown member": BindingEntry{Operation: "a", Source: "s", LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"extra": raw}}},
+			"an unknown member": Binding{Operation: "a", Source: "s", LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"extra": raw}}},
 		} {
 			if encoded, err := json.Marshal(value); err == nil {
 				t.Errorf("%s in %s encoded as %s", name, position, encoded)
@@ -395,7 +395,7 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 // the encoding would have replaced with U+FFFD no longer passes a const of
 // U+FFFD.
 func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
-	iface := Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
+	iface := Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
 		Input:    map[string]any{"const": "\ufffd"},
 		Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"\ud800"`)}},
 	}}}
@@ -423,7 +423,7 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 		Type  string `json:"type"`
 		Title string `json:"title"`
 	}
-	for name, iface := range map[string]Interface{
+	for name, iface := range map[string]Document{
 		"an operation holding itself": {OpenBindings: "0.2.0", Operations: map[string]Operation{"op": selfHolding}},
 		"invalid UTF-8 in a schema held as a struct": {OpenBindings: "0.2.0", Operations: map[string]Operation{
 			"op": {Input: schemaStruct{Type: "string", Title: "caf\xff"}}}},
@@ -451,14 +451,14 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 		}
 	}
 
-	held := Interface{OpenBindings: "0.2.0", Description: text("café �"), Operations: map[string]Operation{
+	held := Document{OpenBindings: "0.2.0", Description: text("café �"), Operations: map[string]Operation{
 		"op": {Input: json.RawMessage(`{"type":"string","const":"�"}`)}},
 		LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": json.RawMessage(`1`)}, Unknown: map[string]json.RawMessage{"other": json.RawMessage(`2`)}}}
 	data, err := json.Marshal(held)
 	if err != nil {
 		t.Fatalf("a model holding valid UTF-8 encodes: %v", err)
 	}
-	var back Interface
+	var back Document
 	if err := json.Unmarshal(data, &back); err != nil {
 		t.Fatalf("and decodes back: %v", err)
 	}

@@ -17,12 +17,12 @@ const tasksDocument = `{"openbindings":"0.2.0","operations":{
 	"tasks.list":{"output":{"type":"array","items":{"$ref":"#/schemas/Task"}}}},
 	"schemas":{"Task":{"type":"object","required":["title"]}}}`
 
-func mustInterface(document string) *openbindings.Interface {
-	iface, err := openbindings.ParseDocument([]byte(document))
+func mustDocument(document string) *openbindings.Document {
+	doc, err := openbindings.ParseDocument([]byte(document))
 	if err != nil {
 		panic(err)
 	}
-	return iface
+	return doc
 }
 
 // A service compiles the value contracts it serves at startup and keeps
@@ -33,7 +33,7 @@ func Example_startup() {
 	if err != nil {
 		panic(err)
 	}
-	contracts, err := compiler.Resolve(ctx, mustInterface(tasksDocument))
+	contracts, err := compiler.Resolve(ctx, mustDocument(tasksDocument))
 	if err != nil {
 		panic(err)
 	}
@@ -114,7 +114,7 @@ func (d *onDemand) kept(operation string) *openbindings.ValueContract {
 // when the request that started the compile has left.
 func Example_onDemand() {
 	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
-	contracts, _ := compiler.Resolve(context.Background(), mustInterface(tasksDocument))
+	contracts, _ := compiler.Resolve(context.Background(), mustDocument(tasksDocument))
 	service := &onDemand{lifetime: context.Background(), contracts: contracts, inputs: map[string]*openbindings.ValueContract{}}
 
 	contract, err := service.input(context.Background(), "tasks.create")
@@ -144,7 +144,7 @@ func (g gatedEvaluator) Compile(ctx context.Context, bundle openbindings.SchemaB
 func TestOnDemand_FirstRequestLeaves(t *testing.T) {
 	gate := gatedEvaluator{schemaeval.New(schemaeval.Options{}), make(chan struct{}, 1), make(chan struct{})}
 	compiler, _ := openbindings.NewValueContractCompiler(gate)
-	contracts, _ := compiler.Resolve(context.Background(), mustInterface(tasksDocument))
+	contracts, _ := compiler.Resolve(context.Background(), mustDocument(tasksDocument))
 	service := &onDemand{lifetime: context.Background(), contracts: contracts, inputs: map[string]*openbindings.ValueContract{}}
 
 	first, leave := context.WithCancel(context.Background())

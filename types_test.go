@@ -13,7 +13,7 @@ func TestInterface_LosslessRoundTrip_PreservesExtensionsAndUnknownTopLevel(t *te
   "unknownField": {"value": "unknownFieldValue"}
 }`)
 
-	var i Interface
+	var i Document
 	if err := json.Unmarshal(in, &i); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestInterface_LosslessRoundTrip_PreservesExtensionsAndUnknownTopLevel(t *te
 }
 
 func TestInterface_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.1.0",
 		Name:         Present("Good Example"),
 		Operations:   map[string]Operation{},
@@ -249,7 +249,7 @@ func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing
   "unknownField": {"value": "unknownFieldValue"}
 }`)
 
-	var be BindingEntry
+	var be Binding
 	outMap := mustRoundTripToMap(t, in, &be)
 	assertPreservedExtensionAndUnknown(t, outMap)
 
@@ -265,7 +265,7 @@ func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing
 }
 
 func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
-	be := BindingEntry{
+	be := Binding{
 		Operation:   "typed.op",
 		Source:      "typedSource",
 		Content:     json.RawMessage(`"#/typed/content"`),
@@ -331,7 +331,7 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *te
   }
 }`)
 
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal(in, &iface); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestOperation_EmptySchemaRoundTrip(t *testing.T) {
 	// The spec distinguishes an empty {} schema (any value) from an absent
 	// schema (unspecified contract); omitempty alone would drop {}.
 	in := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":{},"output":{}}}}`)
-	var i Interface
+	var i Document
 	if err := json.Unmarshal(in, &i); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestOperation_EmptySchemaRoundTrip(t *testing.T) {
 
 func TestOperation_AbsentSchemaStaysAbsent(t *testing.T) {
 	in := []byte(`{"openbindings":"0.2.0","operations":{"op":{}}}`)
-	var i Interface
+	var i Document
 	if err := json.Unmarshal(in, &i); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestOperation_BooleanSchemaRoundTrip(t *testing.T) {
 	// especially: an interface-typed field holding false is present, not
 	// empty).
 	in := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":true,"output":false}},"schemas":{"Anything":true}}`)
-	var i Interface
+	var i Document
 	if err := json.Unmarshal(in, &i); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -608,7 +608,7 @@ func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
     }
   }
 }`)
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal(in, &iface); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -642,7 +642,7 @@ func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
 
 func TestDependencyEntry_PresentEmptyKindsSurvivesRoundTrip(t *testing.T) {
 	in := []byte(`{"operation":"deliver","kinds":[]}`)
-	var dependency DependencyEntry
+	var dependency Dependency
 	if err := json.Unmarshal(in, &dependency); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

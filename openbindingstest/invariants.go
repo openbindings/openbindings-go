@@ -27,11 +27,11 @@ func (k *kit) bundleOf(positions string, spelling int) json.RawMessage {
 	if err != nil {
 		panic(err)
 	}
-	var iface openbindings.Interface
-	if err := json.Unmarshal([]byte(documentAt(positions)), &iface); err != nil {
+	var doc openbindings.Document
+	if err := json.Unmarshal([]byte(documentAt(positions)), &doc); err != nil {
 		panic(err)
 	}
-	contracts, err := compiler.Resolve(context.Background(), &iface)
+	contracts, err := compiler.Resolve(context.Background(), &doc)
 	if err != nil {
 		panic(err)
 	}
@@ -152,9 +152,9 @@ func (k *kit) cancellation() {
 		k.checkAnswer("invariant, cancellation (Validate)", err, false, ctx)
 	}
 	compiler, _ := openbindings.NewValueContractCompiler(k.e)
-	var iface openbindings.Interface
-	_ = json.Unmarshal([]byte(documentAt(`{"/operations/op/input":{"type":"string"}}`)), &iface)
-	contracts, _ := compiler.Resolve(context.Background(), &iface)
+	var doc openbindings.Document
+	_ = json.Unmarshal([]byte(documentAt(`{"/operations/op/input":{"type":"string"}}`)), &doc)
+	contracts, _ := compiler.Resolve(context.Background(), &doc)
 	contract, _ := contracts.CompileInput(context.Background(), "op")
 	if err := contract.Validate(ctx, "s"); !errors.Is(err, openbindings.ErrNoVerdict) || !errors.Is(err, context.Canceled) {
 		t := k.t

@@ -46,27 +46,27 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 	return &ValueContractCompiler{evaluator: e, resources: supplied}, nil
 }
 
-// Resolve resolves an interface's schemas once (§7), calling no evaluator,
-// and returns a snapshot: later changes to the Interface do not affect it.
+// Resolve resolves a document's schemas once (§7), calling no evaluator,
+// and returns a snapshot: later changes to the Document do not affect it.
 //
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (OBI-T-04), and one declaring no valid
-// version an error (OBI-D-09); either way it is not interpreted. An
-// interface that cannot be encoded returns an error, as does a done ctx.
-func (c *ValueContractCompiler) Resolve(ctx context.Context, i *Interface) (*ValueContracts, error) {
+// version an error (OBI-D-09); either way it is not interpreted. A
+// document that cannot be encoded returns an error, as does a done ctx.
+func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*ValueContracts, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if i == nil {
-		return nil, errors.New("openbindings: interface is nil")
+	if doc == nil {
+		return nil, errors.New("openbindings: the document is nil")
 	}
-	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
+	if refusal := versionRefusalOf(doc.OpenBindings); refusal != nil {
 		return nil, refusal
 	}
-	if !IsValidSemver(i.OpenBindings) {
-		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", i.OpenBindings)
+	if !IsValidSemver(doc.OpenBindings) {
+		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", doc.OpenBindings)
 	}
-	view, err := documentView(*i)
+	view, err := documentView(*doc)
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +76,11 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, i *Interface) (*Val
 		keys:     map[string]string{},
 		states:   map[string][2]bool{},
 	}
-	for key, operation := range i.Operations {
+	for key, operation := range doc.Operations {
 		contracts.states[key] = [2]bool{operation.Input != nil, operation.Output != nil}
 		// A name more than one operation carries resolves to none.
 		for _, name := range append([]string{key}, operation.Aliases...) {
-			if resolved, _, found := ResolveOperation(i, name); found {
+			if resolved, _, found := ResolveOperation(doc, name); found {
 				contracts.keys[name] = resolved
 			}
 		}
@@ -88,7 +88,7 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, i *Interface) (*Val
 	return contracts, nil
 }
 
-// ValueContracts is an interface's value contracts, resolved. It is safe for
+// ValueContracts is a document's value contracts, resolved. It is safe for
 // concurrent use.
 type ValueContracts struct {
 	compiler *ValueContractCompiler

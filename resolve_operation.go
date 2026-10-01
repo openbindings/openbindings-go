@@ -20,7 +20,7 @@ import "slices"
 // caller interpreting a document it has not validated or parsed refuses an
 // unsupported version itself (OBI-T-04), as ParseDocument, Validate, and
 // ValueContractCompiler.Resolve do.
-func ResolveOperation(iface *Interface, name string) (string, Operation, bool) {
+func ResolveOperation(iface *Document, name string) (string, Operation, bool) {
 	if iface == nil {
 		return "", Operation{}, false
 	}

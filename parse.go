@@ -7,20 +7,20 @@ import (
 
 // ParseDocument decodes a document for use: it checks the exact input bytes
 // (OBI-D-01), refuses an unsupported version (OBI-T-04), checks the embedded
-// document schema (OBI-D-02), and unmarshals into an Interface. It is not a
+// document schema (OBI-D-02), and unmarshals into a Document. It is not a
 // conformance check; ValidateDocument reports every document rule.
 //
 // The version decision comes first because the embedded schema is this
 // version's: a document declaring an unsupported version is refused, not
 // judged against rules it does not claim (§10.1). A refusal is a
 // *VersionRefusalError, and violations of OBI-D-01 or the document schema are
-// a *ValidationError, as from Interface.Validate and ValidateDocument. A
+// a *ValidationError, as from Document.Validate and ValidateDocument. A
 // document the model does not carry is not parsed, and returns another error:
 // input nested deeper than the decoder reads, or holding an escape of a lone
 // UTF-16 surrogate. So is one on which the schema library reaches no verdict
 // against the document schema, should it ever. OBI-D-01 and the declared version are read
 // however deep the input nests.
-func ParseDocument(data []byte) (*Interface, error) {
+func ParseDocument(data []byte) (*Document, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
 		if refusal := inputVersionRefusal(data); refusal != nil {
@@ -48,11 +48,11 @@ func ParseDocument(data []byte) (*Interface, error) {
 			return nil, fmt.Errorf("parse document: the document schema could not be applied at %q: %s (OBI-D-02)", finding.Path, finding.Message)
 		}
 	}
-	var iface Interface
-	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
+	var doc Document
+	if err := doc.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
 		return nil, fmt.Errorf("parse document: the document model cannot carry it: %w", err)
 	}
-	return &iface, nil
+	return &doc, nil
 }
 
 // decodeDocumentBytes applies OBI-D-01 to the exact input bytes: valid UTF-8,

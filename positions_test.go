@@ -49,10 +49,10 @@ func TestFindings_Positions(t *testing.T) {
 		}
 	}
 
-	// Interface.Validate reads no bytes, so its findings carry none.
+	// Document.Validate reads no bytes, so its findings carry none.
 	iface := mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"aliases":["no good"]}}}`)
 	if _, err := iface.Validate(); !errors.As(err, &violation) || violation.Findings[0].Position.IsValid() {
-		t.Errorf("Interface.Validate: %v", err)
+		t.Errorf("Document.Validate: %v", err)
 	}
 }
 
