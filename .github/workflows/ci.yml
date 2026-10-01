@@ -10,19 +10,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # The conformance corpora are normative and live in the sibling spec
-      # repo; without this checkout the corpus gates skip silently. This
-      # pre-release integration branch tracks the matching non-default spec
-      # working branch.
-      - uses: actions/checkout@v7
-        with:
-          repository: openbindings/spec
-          ref: release/0.2
-          path: spec
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
+      # The conformance corpora are normative and live in the sibling spec
+      # repo; without this checkout the corpus gates skip silently. CI tests
+      # the SDK against exactly the text it declares it applies, so no corpus
+      # change can turn it red before the Go change that adopts it: the spec
+      # revision appliedRevision names while appliedRelease is a working
+      # draft, or the release tag v<appliedRelease> once appliedRevision is
+      # "". The constants are read by parsing version.go, and each guard below
+      # is fatal on its own.
+      - name: Name the spec text this SDK applies
+        id: applied
+        run: |
+          ref="$(go run .github/ci/appliedtext.go .)"
+          [ -n "$ref" ] || { echo "version.go names no applied spec text"; exit 1; }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: openbindings/spec
+          ref: ${{ steps.applied.outputs.ref }}
+          path: spec
+          fetch-depth: 0
+      - name: Check the spec checkout is the text named
+        env:
+          REF: ${{ steps.applied.outputs.ref }}
+        run: |
+          head="$(git -C spec rev-parse --verify HEAD^{commit})"
+          case "$REF" in
+            v*) named="$(git -C spec rev-parse --verify "refs/tags/$REF^{commit}")" ;;
+            *) named="$(git -C spec rev-parse --verify "$REF^{commit}")" ;;
+          esac
+          [ -n "$named" ] || { echo "the spec history has no $REF"; exit 1; }
+          [ "$head" = "$named" ] || { echo "the spec checkout is $head, not $REF ($named)"; exit 1; }
       - name: vet
         run: go vet ./...
       - name: test
