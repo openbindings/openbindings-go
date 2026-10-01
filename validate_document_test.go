@@ -46,7 +46,7 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{}}`
 	fromDocument := mustValidateDocument(t, document)
-	fromInterface, err := mustDecodeInterface(t, document).Validate()
+	fromInterface, err := mustDecodeDocument(t, document).Validate()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,8 +754,8 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 			t.Errorf("%s: OBI-D-01 %q, err %v", name, report.Evidence["OBI-D-01"], err)
 		}
 	}
-	if _, err := ParseDocument([]byte(deep)); err == nil || errors.As(err, new(*ValidationError)) {
-		t.Fatalf("want a refusal that is not a violation, got %v", err)
+	if _, err := ParseDocument([]byte(deep)); !errors.Is(err, ErrInconclusive) || errors.As(err, new(*ValidationError)) {
+		t.Fatalf("want an inconclusive parse that is not a violation, got %v", err)
 	}
 	unsupported := `{"x-deep":` + nested + `,"operations":{},"openbindings":"0.9.0"}`
 	if _, _, err := ValidateDocument([]byte(unsupported)); !errors.As(err, new(*VersionRefusalError)) {
@@ -1026,7 +1026,7 @@ func TestValidateDocument_DepthCountsSubschemasOnly(t *testing.T) {
 		}
 	}
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"array","const":` + deep + `,"$defs":{"u":{"default":` + deep + `}}}}}}`
-	contract, err := contractsFor(t, mustDecodeInterface(t, document)).CompileInput(context.Background(), "op")
+	contract, err := contractsFor(t, mustDecodeDocument(t, document)).CompileInput(context.Background(), "op")
 	if err == nil {
 		err = contract.Err()
 	}

@@ -148,10 +148,14 @@ func cliValueCheck(ctx context.Context, document []byte, operation, side string,
 	case errors.As(err, &noVerdict):
 		fmt.Println("no verdict:", noVerdict.Cause)
 		return 4
-	default:
+	case errors.Is(err, openbindings.ErrInconclusive):
+		// The value is not a JSON value: there is nothing to judge.
 		fmt.Println("not a JSON value:", err)
 		return 2
 	}
+	// ValidateJSON returns no other error.
+	fmt.Println("unexpected:", err)
+	return 2
 }
 
 func Example_cliValueCheck() {
@@ -195,7 +199,7 @@ func Example_cliValueCheck() {
 	// exit 4
 	// no verdict: JSON Schema leaves the result undefined, at #/operations/match/input
 	// exit 4
-	// not a JSON value: openbindings: the input is not JSON: unexpected end of JSON input
+	// not a JSON value: openbindings: inconclusive: the input is not JSON: unexpected end of JSON input
 	// exit 2
 	// no verdict: the value cannot be read exactly: the object at "" repeats the member name "title"
 	// exit 4
@@ -382,8 +386,10 @@ func invokeChecks(ctx context.Context, input *openbindings.ValueContract, stdin 
 		case errors.Is(err, openbindings.ErrMismatch):
 		case errors.Is(err, openbindings.ErrNoVerdict):
 			problem, first = "has no verdict", 4
-		default:
+		case errors.Is(err, openbindings.ErrInconclusive):
 			return 2, fmt.Sprintf("value %d is not a JSON value: %v", sent+1, err)
+		default:
+			return 2, fmt.Sprintf("value %d: unexpected: %v", sent+1, err)
 		}
 		if sent == 0 {
 			return first, "the first value " + problem + "; nothing was sent"

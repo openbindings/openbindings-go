@@ -13,7 +13,7 @@ import (
 // bundleOf returns the bundle core writes for a value contract, decoded.
 func bundleOf(t *testing.T, document, entry string, resources ...Resource) map[string]any {
 	t.Helper()
-	contracts := contractsFor(t, mustDecodeInterface(t, document), resources...)
+	contracts := contractsFor(t, mustDecodeDocument(t, document), resources...)
 	raw, refusal := contracts.space.bundle(entry, bundleSpelling{})
 	if refusal != nil {
 		t.Fatalf("no bundle: %v", refusal)
@@ -28,7 +28,7 @@ func bundleOf(t *testing.T, document, entry string, resources ...Resource) map[s
 // refusalOf returns the standing refusal of a value contract.
 func refusalOf(t *testing.T, document, operation string, resources ...Resource) *NoVerdictError {
 	t.Helper()
-	contract, err := contractsFor(t, mustDecodeInterface(t, document), resources...).CompileInput(context.Background(), operation)
+	contract, err := contractsFor(t, mustDecodeDocument(t, document), resources...).CompileInput(context.Background(), operation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func refusalOf(t *testing.T, document, operation string, resources ...Resource) 
 
 func verdicts(t *testing.T, document, operation string, values ...any) []string {
 	t.Helper()
-	contract, err := contractsFor(t, mustDecodeInterface(t, document)).CompileInput(context.Background(), operation)
+	contract, err := contractsFor(t, mustDecodeDocument(t, document)).CompileInput(context.Background(), operation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestBundle_SuppliedResources(t *testing.T) {
 	if !found {
 		t.Fatalf("the resource is not copied under its $id: %v", bundle)
 	}
-	contracts := contractsFor(t, mustDecodeInterface(t, document), money)
+	contracts := contractsFor(t, mustDecodeDocument(t, document), money)
 	for operation, values := range map[string][2]any{
 		"byURI": {map[string]any{"amount": "1.00"}, map[string]any{}},
 		"byID":  {"1.00", json.Number("1")},
@@ -340,7 +340,7 @@ func TestValueContracts_WorkIsLinear(t *testing.T) {
 	}
 	resolve := func(document string, _ int) {
 		compiler, _ := NewValueContractCompiler(testEvaluator{})
-		if _, err := compiler.Resolve(context.Background(), mustDecodeInterface(t, document)); err != nil {
+		if _, err := compiler.Resolve(context.Background(), mustDecodeDocument(t, document)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -355,7 +355,7 @@ func TestValueContracts_WorkIsLinear(t *testing.T) {
 		}
 		return `{"openbindings":"0.2.0","operations":{` + strings.Join(operations, ",") + `},"schemas":{` + strings.Join(schemas, ",") + `}}`
 	}, func(document string, n int) {
-		contracts := contractsFor(t, mustDecodeInterface(t, document))
+		contracts := contractsFor(t, mustDecodeDocument(t, document))
 		for i := range n {
 			if _, err := contracts.CompileInput(context.Background(), fmt.Sprintf("o%d", i)); err != nil {
 				t.Fatal(err)
@@ -377,7 +377,7 @@ func TestRefusals_SuppliedNonSchema(t *testing.T) {
 // An operation with no schema at a direction states no value contract there:
 // every value gets a located ErrNoValueContract.
 func TestCompile_NoValueContract(t *testing.T) {
-	contracts := contractsFor(t, mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"op":{"aliases":["alias"]}}}`))
+	contracts := contractsFor(t, mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"op":{"aliases":["alias"]}}}`))
 	contract, err := contracts.CompileOutput(context.Background(), "alias")
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +390,7 @@ func TestCompile_NoValueContract(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 	// Locations are URI-references, percent-encoded.
-	contract, _ = contractsFor(t, mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"tasks create":{}}}`)).CompileInput(context.Background(), "tasks create")
+	contract, _ = contractsFor(t, mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"tasks create":{}}}`)).CompileInput(context.Background(), "tasks create")
 	if !errors.As(contract.Err(), &refusal) || refusal.Location != "#/operations/tasks%20create/input" {
 		t.Fatalf("%v", contract.Err())
 	}
@@ -398,7 +398,7 @@ func TestCompile_NoValueContract(t *testing.T) {
 
 // A name two operations carry resolves to neither (OBI-T-07).
 func TestCompile_AmbiguousName(t *testing.T) {
-	contracts := contractsFor(t, mustDecodeInterface(t, `{"openbindings":"0.2.0","operations":{"a":{"aliases":["x"]},"b":{"aliases":["x"]}}}`))
+	contracts := contractsFor(t, mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"aliases":["x"]},"b":{"aliases":["x"]}}}`))
 	if _, err := contracts.CompileInput(context.Background(), "x"); !errors.Is(err, ErrOperationNotFound) {
 		t.Fatalf("%v", err)
 	}
@@ -408,7 +408,7 @@ func TestCompile_AmbiguousName(t *testing.T) {
 // them, and a correct evaluator gives the same verdicts under each.
 func TestBundle_SpellingsVary(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/T"}}},"schemas":{"T":{"type":"string","definitions":{"x":{}}}}}`
-	contracts := contractsFor(t, mustDecodeInterface(t, document))
+	contracts := contractsFor(t, mustDecodeDocument(t, document))
 	first, _ := contracts.space.bundle("/operations/op/input", bundleSpelling{0})
 	second, _ := contracts.space.bundle("/operations/op/input", bundleSpelling{1})
 	if string(first) == string(second) {
@@ -435,5 +435,34 @@ func TestBundle_NamespaceAvoidsTheDocument(t *testing.T) {
 		if !strings.HasPrefix(bundle["$id"].(string), "https://bundle-1.openbindings.invalid/") {
 			t.Errorf("%s: root %v", id, bundle["$id"])
 		}
+	}
+}
+
+// Resolve interprets only a document whose declared version it supports: it
+// refuses an unsupported version (OBI-T-04), and does not interpret a
+// document declaring no valid version (OBI-D-09), which is inconclusive, not
+// a refusal.
+func TestResolve_DeclaredVersion(t *testing.T) {
+	compiler, err := NewValueContractCompiler(testEvaluator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for version, want := range map[string]string{"0.2.7": "resolved", "0.3.0": "refusal", "0.2": "inconclusive", "": "inconclusive"} {
+		_, err := compiler.Resolve(context.Background(), &Document{OpenBindings: version, Operations: map[string]Operation{}})
+		got := "resolved"
+		switch {
+		case errors.As(err, new(*VersionRefusalError)) && !errors.Is(err, ErrInconclusive):
+			got = "refusal"
+		case errors.Is(err, ErrInconclusive):
+			got = "inconclusive"
+		case err != nil:
+			got = err.Error()
+		}
+		if got != want {
+			t.Errorf("%q: %s, want %s", version, got, want)
+		}
+	}
+	if _, err := compiler.Resolve(context.Background(), nil); err == nil || errors.Is(err, ErrInconclusive) {
+		t.Errorf("a nil document: %v", err)
 	}
 }

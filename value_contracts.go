@@ -51,8 +51,9 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 //
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (OBI-T-04), and one declaring no valid
-// version an error (OBI-D-09); either way it is not interpreted. A
-// document that cannot be encoded returns an error, as does a done ctx.
+// version (OBI-D-09) an error matching ErrInconclusive; either way it is not
+// interpreted. A document that cannot be encoded returns an error, as does a
+// done ctx.
 func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*ValueContracts, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -64,7 +65,7 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*Va
 		return nil, refusal
 	}
 	if !IsValidSemver(doc.OpenBindings) {
-		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", doc.OpenBindings)
+		return nil, fmt.Errorf("%w: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", ErrInconclusive, doc.OpenBindings)
 	}
 	view, err := documentView(*doc)
 	if err != nil {
@@ -194,8 +195,9 @@ func (c *ValueContract) standingRefusal() *NoVerdictError {
 // reached: the operation states no value contract here (ErrNoValueContract),
 // the result is undefined (ErrUndefined), core or the evaluator lacks a
 // capability, the value cannot be read exactly, or the ctx is done. Any other
-// error says the value is not a JSON value. No returned error matches both
-// ErrMismatch and ErrNoVerdict; one matches ErrUndefined only when the
+// error matches ErrInconclusive: the value is not a JSON value, so there is
+// nothing to judge. No returned error matches more than one of ErrMismatch,
+// ErrNoVerdict, and ErrInconclusive; one matches ErrUndefined only when the
 // specification determines the refusal, ErrNoValueContract only when there is
 // no schema, and a context error only when it is the ctx's own, after the ctx
 // is done.
@@ -208,15 +210,16 @@ func (c *ValueContract) Validate(ctx context.Context, value any) error {
 	}
 	read, err := readGoValue(value)
 	if err != nil {
-		return err
+		return notAValue(err)
 	}
 	return validateWith(ctx, c.compiled, read)
 }
 
 // ValidateJSON validates JSON text, read exactly, as Validate validates a Go
 // value. Text that is not one JSON value of valid UTF-8 returns an error
-// saying so; text this SDK cannot read exactly (a repeated member name, an
-// escaped lone UTF-16 surrogate, nesting past the decoder) gets no verdict.
+// matching ErrInconclusive that says so; text this SDK cannot read exactly (a
+// repeated member name, an escaped lone UTF-16 surrogate, nesting past the
+// decoder) gets no verdict.
 func (c *ValueContract) ValidateJSON(ctx context.Context, data []byte) error {
 	if refusal := c.standingRefusal(); refusal != nil {
 		return refusal
@@ -226,7 +229,7 @@ func (c *ValueContract) ValidateJSON(ctx context.Context, data []byte) error {
 	}
 	read, err := readJSONText(data)
 	if err != nil {
-		return err
+		return notAValue(err)
 	}
 	return validateWith(ctx, c.compiled, read)
 }

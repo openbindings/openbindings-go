@@ -171,14 +171,14 @@ func cliRead(data []byte) (*openbindings.Document, int, string) {
 	case errors.As(err, &violation):
 		first := violation.Findings[0]
 		return nil, 1, fmt.Sprintf("non-conformant at %s: %s", first.Position, first.Rule)
+	case errors.Is(err, openbindings.ErrInconclusive):
+		// The SDK could not read the document in full (nesting past the
+		// decoder, a lone surrogate, the document schema reaching no
+		// verdict): no verdict either way.
+		return nil, 4, "no verdict: " + err.Error()
 	}
-	// C1 item K1 (undecided parse errors): the other errors (nesting past the
-	// decoder, a lone surrogate, the document schema reaching no verdict)
-	// carry no type or sentinel, so a caller can tell them apart, or from
-	// an internal failure, only by the message. Their prefix, "parse
-	// document:", is also not the "openbindings:" prefix of the sentinels
-	// (see C1 item K6 (error prefixes)).
-	return nil, 2, fmt.Sprintf("unclassified (%T): %v", err, err)
+	// ParseDocument returns no other error.
+	return nil, 2, fmt.Sprintf("unexpected (%T): %v", err, err)
 }
 
 func Example_cliRead() {
@@ -199,8 +199,8 @@ func Example_cliRead() {
 	// 0 read
 	// 3 refused (OBI-T-04): declares 0.2.0-rc.1
 	// 1 non-conformant at 1:1: OBI-D-02
-	// 2 unclassified (*fmt.wrapError): parse document: a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry
-	// 2 unclassified (*fmt.wrapError): parse document: the input is nested deeper than the decoder reads (10000 levels), so it is not decoded
+	// 4 no verdict: openbindings: inconclusive: a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry
+	// 4 no verdict: openbindings: inconclusive: the input is nested deeper than the decoder reads (10000 levels), so it is not decoded
 }
 
 // An editor holds a document decoded with json.Unmarshal, which refuses

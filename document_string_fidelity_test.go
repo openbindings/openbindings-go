@@ -26,7 +26,7 @@ func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 	if err := json.Unmarshal(raw, &iface); err == nil || !strings.Contains(err.Error(), "lone UTF-16 surrogate") {
 		t.Fatalf("decoding must refuse, got %v", err)
 	}
-	if _, err := ParseDocument(raw); err == nil || errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "/operations/echo/examples/unit/input") {
+	if _, err := ParseDocument(raw); !errors.Is(err, ErrInconclusive) || errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "/operations/echo/examples/unit/input") {
 		t.Fatalf("parsing must refuse, locating the string, without a violation: %v", err)
 	}
 
