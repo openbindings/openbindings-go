@@ -305,6 +305,22 @@
   `ccfe0b6` spec draft, including the distinct-string kind cases, the
   OBI-D-10 unreferenced `$defs` case, and version-scoped rule identifiers.
   Documentation uses the current §10.4 conformance conclusion section.
+- **The corpus adapter executes every action of scenario format @2, and
+  still reads @1.** It runs the specification corpus's validity fixtures and
+  every scenario action: `check-dependency-kind`, `resolve-operation`,
+  `validate-document`, `validate-operation-values`, `conclude-conformance`,
+  and `check-examples`; `derive-form` is omitted, as this SDK derives no
+  forms. Value cases run in the `schemaeval` module's tests, under the
+  project's ECMA-262 evaluator, where the core's tests ran them with a test
+  evaluator using Go's regexp; CI gives `schemaeval`'s tests the corpus too.
+  Version gates are judged against `SupportedVersions`' declaration, never
+  the version decision under test. A fixture's `notViolated` rules must not
+  be reported violated. A version refusal must come with nothing else at
+  every entry point that refuses. A conclusion's applied text is verified
+  against the corpus's specification text, by hash. Each module records
+  every case executed or omitted with a reason and checks the counts
+  against the corpus manifest. Format @1, the corpus at the applied
+  revision, reads as before.
 
 ### Fixed
 

@@ -73,4 +73,10 @@ jobs:
         run: go vet ./...
       - name: test schemaeval
         working-directory: schemaeval
+        # schemaeval's tests also execute the corpus's value cases under this
+        # evaluator (the core's tests cannot import it), so they need the
+        # corpus too.
         run: go test -race -short ./...
+        env:
+          OB_SPEC_CORPUS: ${{ github.workspace }}/spec/conformance
+          OB_CORPUS_REQUIRED: "1"

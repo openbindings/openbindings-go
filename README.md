@@ -61,7 +61,8 @@ application supplies; see [Validate a value against a value
 contract](#validate-a-value-against-a-value-contract). To exercise the core
 conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
-point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
+point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`
+here and in `schemaeval`, whose tests run the corpus's value cases.
 
 **Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
 than the JSON decoder's 10,000-level limit prevents full document inspection.
