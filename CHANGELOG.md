@@ -80,6 +80,21 @@
   names the schema space indexes by the same grammar. The corpus adapter's
   two keyed expected failures for this (the OBI-D-10 and OBI-D-12 fixtures
   that needed it) are removed: the stale check reported both passing.
+- **Dialects go by resource (ruling S4, §5.2; pre-1.0 for evaluator
+  authors).** The document resource's dialect is 2020-12 and a `$schema` in
+  it declares none; a resource an `$id` declares takes the dialect its
+  `$schema` names, or its enclosing resource's (JSON Schema Core §9.3.2);
+  and a `$schema` below a resource's root never selects one. A value
+  contract copying a schema with a foreign `$schema` and no `$id` (an
+  operation's `input`, a `schemas` entry, or below an `$id` resource's
+  root) now gets a verdict under 2020-12, where core refused it as a
+  dialect it lacks; a resource whose root names another dialect, and one
+  inheriting it, are still refused, located at the root that names it.
+  Such a `$schema` still violates OBI-D-06. The bundle writes `$schema`
+  only at a resource's root, where it declares a dialect, and leaves out
+  one that declares none: core gives each OBI position of the document
+  resource an `$id` of its own, which would otherwise make a misplaced one
+  declare its unit's dialect. `SchemaBundle` states this ("One dialect").
 - **The model's types and lookups take the spec's names (breaking,
   pre-1.0).** `Interface` is `Document`, `BindingEntry` is `Binding`, and
   `DependencyEntry` is `Dependency`, the spec's terms (§3);

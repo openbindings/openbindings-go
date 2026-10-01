@@ -252,6 +252,82 @@ func TestBundle_SuppliedResources(t *testing.T) {
 	}
 }
 
+// Dialects go by resource (§5.2, JSON Schema Core §9.3.2). The document
+// resource's is 2020-12, and a $schema in it declares none, so a schema
+// copied with a foreign $schema and no $id is read as 2020-12 and gets a
+// verdict, though the $schema still violates OBI-D-06; so is one below an
+// $id resource's root, where $schema is misplaced. A resource whose root
+// names another dialect, and a resource inheriting it, get no verdict:
+// this SDK evaluates 2020-12 alone. The cases are the B6 builders'.
+func TestDialects_ByResource(t *testing.T) {
+	const draft07 = `"http://json-schema.org/draft-07/schema#"`
+	for _, c := range []struct {
+		name, document string
+		value          any
+		want           string
+	}{
+		{"misplaced at an operation's input, mismatch", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"type":"string"}}}}`, json.Number("5"), "mismatch"},
+		{"misplaced at an operation's input, valid", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"type":"string"}}}}`, "x", "valid"},
+		{"misplaced, nullable an unknown keyword", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"type":"string","nullable":true}}}}`, nil, "mismatch"},
+		{"misplaced, an https draft-07 spelling", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":"https://json-schema.org/draft-07/schema#","type":"integer"}}}}`, json.Number("1"), "valid"},
+		// Draft-07 would ignore the keywords beside $ref; 2020-12 applies them.
+		{"misplaced beside a $ref", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"$ref":"#/schemas/Any","type":"string"}}},"schemas":{"Any":{}}}`, json.Number("5"), "mismatch"},
+		{"misplaced at a schemas entry", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/S"}}},"schemas":{"S":{"$schema":` + draft07 + `,"type":"string"}}}`, json.Number("5"), "mismatch"},
+		{"misplaced below an $id resource's root", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/a"}}},"schemas":{"A":{"$id":"https://e.example.test/a","properties":{"p":{"$schema":` + draft07 + `,"type":"string"}}}}}`, map[string]any{"p": json.Number("5")}, "mismatch"},
+		{"a 2020-12 resource", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/a"}}},"schemas":{"A":{"$id":"https://e.example.test/a","$schema":"https://json-schema.org/draft/2020-12/schema","type":"string"}}}`, json.Number("5"), "mismatch"},
+		{"a draft-07 resource", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/a"}}},"schemas":{"A":{"$id":"https://e.example.test/a","$schema":` + draft07 + `,"type":"string"}}}`, json.Number("5"), "no verdict"},
+		{"a resource inheriting draft-07", `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/inner"}}},"schemas":{"Outer":{"$id":"https://e.example.test/outer","$schema":` + draft07 + `,"definitions":{"inner":{"$id":"https://e.example.test/inner","type":"string"}}}}}`, json.Number("5"), "no verdict"},
+	} {
+		if got := inputVerdict(t, c.document, "op", c.value); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+		if report := mustValidateDocument(t, c.document); report.Evidence["OBI-D-06"] != EvidenceViolated && !strings.Contains(c.name, "2020-12") {
+			t.Errorf("%s: OBI-D-06 is %s, want violated", c.name, report.Evidence["OBI-D-06"])
+		}
+	}
+	// The refusal is located at the root that declares the dialect, also
+	// for a resource inheriting it.
+	refusal := refusalOf(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"https://e.example.test/inner"}}},"schemas":{"Outer":{"$id":"https://e.example.test/outer","$schema":`+draft07+`,"definitions":{"inner":{"$id":"https://e.example.test/inner","type":"string"}}}}}`, "op")
+	if errors.Is(refusal, ErrUndefined) || refusal.Location != "#/schemas/Outer" || !strings.Contains(refusal.Error(), "does not evaluate") {
+		t.Errorf("an inherited dialect: %v at %s", refusal, refusal.Location)
+	}
+}
+
+// The bundle writes $schema only where it declares a dialect, a resource's
+// root, so core's generated $id at an OBI position of the document resource
+// never makes a misplaced one declare its unit's dialect, and an evaluator
+// never meets a misplaced one.
+func TestBundle_WritesOnlyDeclaringSchemas(t *testing.T) {
+	const draft07 = `"http://json-schema.org/draft-07/schema#"`
+	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$schema":` + draft07 + `,"properties":{
+		"a":{"$schema":` + draft07 + `},"r":{"$ref":"https://e.example.test/r"}}}}},
+		"schemas":{"R":{"$id":"https://e.example.test/r","$schema":"https://json-schema.org/draft/2020-12/schema","items":{"$schema":"https://json-schema.org/draft/2020-12/schema"}}}}`
+	bundle := bundleOf(t, document, "/operations/op/input")
+	var declaring []string
+	var walk func(value any, at string)
+	walk = func(value any, at string) {
+		switch v := value.(type) {
+		case map[string]any:
+			if _, present := v["$schema"]; present {
+				declaring = append(declaring, fmt.Sprint(v["$id"]))
+			}
+			for key, member := range v {
+				walk(member, at+"/"+key)
+			}
+		case []any:
+			for _, item := range v {
+				walk(item, at)
+			}
+		}
+	}
+	for _, unit := range bundle["$defs"].(map[string]any) {
+		walk(unit, "")
+	}
+	if !slices.Equal(declaring, []string{"https://e.example.test/r"}) {
+		t.Fatalf("$schema written at %v, want only the resource root https://e.example.test/r", declaring)
+	}
+}
+
 func TestNewValueContractCompiler_RefusesResources(t *testing.T) {
 	for name, resources := range map[string][]Resource{
 		"not JSON":        {{URI: "https://ex.test/a", Document: json.RawMessage(`{`)}},

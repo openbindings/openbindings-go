@@ -72,6 +72,12 @@ pending for each of these, each marked by its ruling:
   a whole declares a name, for OBI-D-12's lookup, OBI-D-13's count, and
   reference resolution everywhere (`#1bad` never targets `"$anchor":
   "1bad"`); OBI-D-10 still reports the value.
+- **Dialects by resource (S4).** A schema is read under its resource's
+  dialect: the document resource's is 2020-12 whatever `$schema` it holds,
+  an `$id` resource takes its root's `$schema` or its enclosing resource's,
+  and a misplaced `$schema` selects nothing. A foreign `$schema` still
+  violates OBI-D-06; value validation gives no verdict only where the
+  resource's dialect is one the tool lacks.
 
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable
