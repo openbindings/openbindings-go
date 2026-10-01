@@ -200,12 +200,32 @@ type coreToolScenarioHeader struct {
 	Action      string `json:"action"`
 }
 
+// corpusDefects are scenarios, in the corpus of the specification revision
+// this SDK applies, whose expected outcome the specification text
+// contradicts, keyed by scenario ID: the outcome this SDK reaches instead,
+// and why the text requires it. An entry fails once its scenario expects
+// that outcome, or is gone, so each goes when the corpus is corrected.
+var corpusDefects = map[string]struct{ outcome, why string }{
+	"T09-S-01": {
+		outcome: "conformance-undetermined",
+		why:     "its evidence omits OBI-D-12 and OBI-D-13, and OBI-T-09 permits a conformant conclusion only when every applicable document rule has been established with no violation",
+	},
+}
+
 func runCoreToolScenarioDir(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("reading tool scenarios: %v", err)
 	}
+	seen := map[string]bool{}
+	defer func() {
+		for id := range corpusDefects {
+			if !seen[id] {
+				t.Errorf("corpusDefects names %s, which the corpus does not hold", id)
+			}
+		}
+	}()
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -224,6 +244,7 @@ func runCoreToolScenarioDir(t *testing.T, dir string) {
 				t.Fatalf("parsing scenario header in %s: %v", entry.Name(), err)
 			}
 			raw := raw
+			seen[header.ID] = true
 			t.Run(file.Rule+"/"+header.ID+"/"+header.Description, func(t *testing.T) {
 				switch header.Action {
 				case "resolve-operation":
@@ -233,7 +254,7 @@ func runCoreToolScenarioDir(t *testing.T, dir string) {
 				case "validate-operation-values":
 					testValidateValuesScenario(t, raw)
 				case "conclude-conformance":
-					testConcludeConformanceScenario(t, raw)
+					testConcludeConformanceScenario(t, header.ID, raw)
 				default:
 					t.Fatalf("unsupported scenario action %q", header.Action)
 				}
@@ -365,7 +386,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	}
 }
 
-func testConcludeConformanceScenario(t *testing.T, raw json.RawMessage) {
+func testConcludeConformanceScenario(t *testing.T, id string, raw json.RawMessage) {
 	t.Helper()
 	var scenario struct {
 		Given struct {
@@ -379,8 +400,16 @@ func testConcludeConformanceScenario(t *testing.T, raw json.RawMessage) {
 		t.Fatal(err)
 	}
 	report := ConcludeConformance(scenario.Given.Evidence)
-	if string(report.Conclusion) != scenario.Expected.Conclusion {
-		t.Fatalf("report %#v; expected conclusion=%q", report, scenario.Expected.Conclusion)
+	want := scenario.Expected.Conclusion
+	if defect, known := corpusDefects[id]; known {
+		if want == defect.outcome {
+			t.Fatalf("corpusDefects names %s, whose expected conclusion is now %q: remove the entry", id, want)
+		}
+		t.Logf("the corpus expects %q, which the text contradicts: %s", want, defect.why)
+		want = defect.outcome
+	}
+	if string(report.Conclusion) != want {
+		t.Fatalf("report %#v; expected conclusion=%q", report, want)
 	}
 }
 

@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 )
 
@@ -123,25 +124,45 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 	return out
 }
 
-// ConcludeConformance applies OBI-T-09's truth conditions to a complete map of
-// rule evidence. The caller supplies every rule applicable to the validation;
-// absence is not itself an evidence status. It concludes from exactly the
-// evidence given, as the core conformance corpus's OBI-T-09 scenarios do, so
-// an empty map concludes conformant: a report from Document.Validate or
-// ValidateDocument always carries every document rule. A violation is decisive even when
-// other rules remain inconclusive. In the absence of a violation, any
-// inconclusive applicable rule makes the conclusion undetermined; otherwise
-// the conclusion is conformant. An unrecognized runtime status is treated
-// conservatively as inconclusive rather than allowing malformed evidence to
-// produce a conformant conclusion.
+// ConcludeConformance applies OBI-T-09's truth conditions to rule evidence
+// and returns the report they conclude. Every document rule of the
+// specification this SDK applies (DocumentRules) applies to every document,
+// so a document rule missing from evidence is treated as inconclusive:
+// absence is no evidence, and an empty map concludes conformance
+// undetermined. A violation is decisive even when other rules remain
+// inconclusive. In the absence of a violation, any inconclusive rule makes
+// the conclusion undetermined; otherwise the conclusion is conformant. A
+// status other than the four this package defines is treated as
+// inconclusive, so malformed evidence never concludes conformant. Evidence
+// under an identifier that is not a document rule is concluded from like any
+// other.
 //
-// A caller holding evidence this SDK cannot produce can amend a report's
-// Evidence and conclude again. The returned report carries
-// the evidence it concluded from and no findings.
+// The returned report's Evidence is the evidence it concluded from: the
+// evidence given, with each missing document rule recorded as inconclusive.
+// It carries no findings, and no Version or Revision, since evidence alone
+// names no specification text.
+//
+// A caller holding evidence this SDK cannot produce, such as its own
+// decision of a rule a report left inconclusive, amends that report under
+// these invariants:
+//   - The decision settles the whole rule: satisfied, violated with the
+//     findings that establish the violation, or not applicable. Another
+//     inconclusive answer amends nothing.
+//   - The rule's earlier findings go, and the decision's findings take their
+//     place; every other rule's evidence and findings stay.
+//   - The Conclusion and the Violated and Inconclusive lists are recomputed
+//     by concluding again from the amended Evidence with ConcludeConformance,
+//     never edited.
+//   - Version and Revision are copied from the report: the amending caller
+//     applied the same specification text (OBI-T-09). A caller that applied
+//     other text does not amend this report.
 func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationReport {
-	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, len(evidence))}
-	for rule, status := range evidence {
-		report.Evidence[rule] = status
+	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, max(len(evidence), len(documentRules)))}
+	for _, rule := range documentRules {
+		report.Evidence[rule] = EvidenceInconclusive
+	}
+	maps.Copy(report.Evidence, evidence)
+	for rule, status := range report.Evidence {
 		switch status {
 		case EvidenceViolated:
 			report.Violated = append(report.Violated, rule)
