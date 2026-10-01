@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestInterface_LosslessRoundTrip_PreservesExtensionsAndUnknownTopLevel(t *testing.T) {
+func TestDocument_LosslessRoundTrip_PreservesExtensionsAndUnknownTopLevel(t *testing.T) {
 	in := []byte(`{
   "openbindings": "0.1.0",
   "operations": {},
@@ -47,7 +47,7 @@ func TestInterface_LosslessRoundTrip_PreservesExtensionsAndUnknownTopLevel(t *te
 	}
 }
 
-func TestInterface_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
+func TestDocument_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.1.0",
 		Name:         Present("Good Example"),
@@ -240,7 +240,7 @@ func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	}
 }
 
-func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
+func TestBinding_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	in := []byte(`{
   "operation": "logs.get",
   "source": "publicOpenapi",
@@ -264,7 +264,7 @@ func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing
 	}
 }
 
-func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
+func TestBinding_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	be := Binding{
 		Operation:   "typed.op",
 		Source:      "typedSource",
@@ -303,7 +303,7 @@ func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	}
 }
 
-func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *testing.T) {
+func TestDocument_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *testing.T) {
 	in := []byte(`{
   "openbindings": "0.1.0",
   "operations": {
@@ -595,7 +595,7 @@ func TestOperation_BooleanSchemaRoundTrip(t *testing.T) {
 	}
 }
 
-func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
+func TestDocument_DependenciesLosslessRoundTrip(t *testing.T) {
 	in := []byte(`{
   "openbindings":"0.2.0",
   "operations":{"deliver":{"input":{"type":"object"}}},
@@ -640,7 +640,7 @@ func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDependencyEntry_PresentEmptyKindsSurvivesRoundTrip(t *testing.T) {
+func TestDependency_PresentEmptyKindsSurvivesRoundTrip(t *testing.T) {
 	in := []byte(`{"operation":"deliver","kinds":[]}`)
 	var dependency Dependency
 	if err := json.Unmarshal(in, &dependency); err != nil {

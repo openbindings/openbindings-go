@@ -46,11 +46,11 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{}}`
 	fromDocument := mustValidateDocument(t, document)
-	fromInterface, err := mustDecodeDocument(t, document).Validate()
+	fromHostObject, err := mustDecodeDocument(t, document).Validate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, report := range []ValidationReport{fromDocument, fromInterface} {
+	for _, report := range []ValidationReport{fromDocument, fromHostObject} {
 		if report.Version != "0.2.0" || len(report.Revision) != 40 || strings.Trim(report.Revision, "0123456789abcdef") != "" {
 			t.Errorf("version %q, revision %q: want 0.2.0 and a full commit hash while 0.2.0 is a working draft", report.Version, report.Revision)
 		}
@@ -64,7 +64,7 @@ func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 // which the model writes only when it decodes back unchanged, so a host
 // object decides OBI-D-01 and a well-formed one concludes conformant, whether
 // decoded or built in code.
-func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
+func TestDocumentValidate_DecidesD01OnTheSerialization(t *testing.T) {
 	decoded, err := ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"tasks.create":{}}}`))
 	if err != nil {
 		t.Fatal(err)
