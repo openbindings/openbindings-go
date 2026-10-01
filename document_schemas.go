@@ -20,7 +20,8 @@ import (
 type documentSchemas struct {
 	// anchors maps each plain name the document resource declares to every
 	// declaration of it, in document order: one per $anchor and one per
-	// $dynamicAnchor, as OBI-D-13 counts them (JSON Schema Core §8.2.2).
+	// $dynamicAnchor whose value declares a name (plainName), as OBI-D-13
+	// counts them (JSON Schema Core §8.2.2).
 	anchors map[string][]anchorDeclaration
 	// identifiers maps each identifier OBI-D-13 compares to where every
 	// schema declaring it sits, in document order.
@@ -63,7 +64,7 @@ func collectDocumentSchemas(view any) documentSchemas {
 		}
 		if !inResource {
 			for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
-				if name, isString := object[keyword].(string); isString {
+				if name, declares := plainName(object[keyword]); declares {
 					d.anchors[name] = append(d.anchors[name], anchorDeclaration{at: at, keyword: keyword})
 				}
 			}
@@ -88,6 +89,30 @@ func collectDocumentSchemas(view any) documentSchemas {
 		}
 	}
 	return d
+}
+
+// plainName returns the plain name an $anchor or $dynamicAnchor value
+// declares: the value itself, when it is a string matching, as a whole, the
+// grammar of JSON Schema Core §8.2.2 (a letter or underscore, then any
+// number of letters, digits, hyphens, underscores, and periods, all ASCII).
+// Any other value declares no name, for OBI-D-12, OBI-D-13, or the
+// resolution §7.2 bases on OBI-D-12 (§7.3); OBI-D-10 reports it. Both
+// indexes, this file's and the schema space's, read names through it, so
+// they cannot disagree on what a document declares.
+func plainName(value any) (string, bool) {
+	name, isString := value.(string)
+	if !isString || name == "" {
+		return "", false
+	}
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', c == '_':
+		case i > 0 && ('0' <= c && c <= '9' || c == '-' || c == '.'):
+		default:
+			return "", false
+		}
+	}
+	return name, true
 }
 
 // comparableID returns the identifier OBI-D-13 compares for an $id, or ""

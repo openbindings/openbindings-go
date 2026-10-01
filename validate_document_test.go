@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"runtime"
 	"slices"
@@ -791,6 +792,101 @@ func TestValidateDocument_RepeatedVersionIsNotRead(t *testing.T) {
 	}
 	if report.Evidence["OBI-D-01"] != EvidenceViolated {
 		t.Fatalf("OBI-D-01 = %s", report.Evidence["OBI-D-01"])
+	}
+}
+
+// Only an $anchor or $dynamicAnchor whose value matches JSON Schema Core
+// §8.2.2's grammar as a whole declares a plain name (§7.3), and the grammar
+// core applies is the one the 2020-12 meta-schema checks: a value declares a
+// name exactly when OBI-D-10 holds for it.
+func TestPlainNames_TheGrammarIsTheMetaSchemas(t *testing.T) {
+	values := []string{`"a"`, `"_"`, `"A9"`, `"a-b.c_9"`, `"Z."`, `"1bad"`, `"bad/name"`, `"a\n"`, `"\u00e9"`, `""`, `"-a"`, `".a"`, `"a b"`, `"a#"`, `"\uff41"`, `"a\u0000"`, `5`, `null`}
+	for _, value := range values {
+		var decoded any
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		_, declares := plainName(decoded)
+		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+			report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"schemas":{"A":{"`+keyword+`":`+value+`}}}`)
+			if metaValid := report.Evidence["OBI-D-10"] == EvidenceSatisfied; metaValid != declares {
+				t.Errorf("%s %s: declares a name %v, but OBI-D-10 is %s", keyword, value, declares, report.Evidence["OBI-D-10"])
+			}
+		}
+	}
+}
+
+// Both indexes of plain names, OBI-D-12's and OBI-D-13's (documentSchemas)
+// and the schema space's, declare only what the grammar admits, in the
+// document resource and in an $id resource alike: "#1bad" targets no
+// "$anchor": "1bad" for OBI-D-12, Document.References, or a value contract;
+// two such declarations are no repeated name for OBI-D-13; and OBI-D-10
+// still reports each value. A name in the grammar resolves in all of them.
+func TestPlainNames_OnlyTheGrammarDeclaresInEitherIndex(t *testing.T) {
+	document := `{"openbindings":"0.2.0","schemas":{
+	  "A":{"$anchor":"1bad","type":"string"},"B":{"$dynamicAnchor":"1bad"},"C":{"$anchor":"bad/name"},"G":{"$anchor":"good","type":"string"},
+	  "R":{"$id":"https://ex.test/r","$defs":{"x":{"$anchor":"1bad"},"y":{"$anchor":"fine"}}}},
+	  "operations":{
+	    "bad":{"input":{"$ref":"#1bad"}},"slash":{"input":{"$ref":"#bad/name"}},"good":{"input":{"$ref":"#good"}},
+	    "inR":{"input":{"$ref":"https://ex.test/r#1bad"}},"fineR":{"input":{"$ref":"https://ex.test/r#fine"}}}}`
+
+	view := mustUnmarshalToMap(t, []byte(document))
+	space := newSchemaSpace(view, nil)
+	byOBID12 := slices.Sorted(maps.Keys(collectDocumentSchemas(view).anchors))
+	bySpace := slices.Sorted(maps.Keys(space.obi.resources[0].anchors))
+	if !slices.Equal(byOBID12, []string{"good"}) || !slices.Equal(bySpace, byOBID12) {
+		t.Fatalf("the document resource declares %v to OBI-D-12 and %v to the schema space; want [good] in both", byOBID12, bySpace)
+	}
+	for _, r := range space.obi.resources[1:] {
+		if names := slices.Sorted(maps.Keys(r.anchors)); !slices.Equal(names, []string{"fine"}) {
+			t.Fatalf("the resource %s declares %v; want [fine]", r.id, names)
+		}
+	}
+
+	report := mustValidateDocument(t, document)
+	violatedAt := map[string]bool{}
+	for _, finding := range report.Violations() {
+		violatedAt[finding.Rule+" "+finding.Path] = true
+	}
+	for _, want := range []string{
+		"OBI-D-12 /operations/bad/input/$ref", "OBI-D-12 /operations/slash/input/$ref",
+		"OBI-D-10 /schemas/A/$anchor", "OBI-D-10 /schemas/B/$dynamicAnchor", "OBI-D-10 /schemas/C/$anchor", "OBI-D-10 /schemas/R/$defs/x/$anchor",
+	} {
+		if !violatedAt[want] {
+			t.Errorf("want %s violated; violations %v", want, report.Violations())
+		}
+	}
+	if report.Evidence["OBI-D-13"] != EvidenceSatisfied || violatedAt["OBI-D-12 /operations/good/input/$ref"] {
+		t.Errorf("OBI-D-13 %s, and #good violated %v", report.Evidence["OBI-D-13"], violatedAt["OBI-D-12 /operations/good/input/$ref"])
+	}
+
+	refs, err := mustDecodeDocument(t, document).References()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := map[string]string{}
+	for _, r := range refs {
+		targets[r.Location] = r.Target
+	}
+	for location, want := range map[string]string{
+		"/operations/bad/input/$ref":   "",
+		"/operations/slash/input/$ref": "",
+		"/operations/inR/input/$ref":   "",
+		"/operations/good/input/$ref":  "/schemas/G",
+		"/operations/fineR/input/$ref": "/schemas/R/$defs/y",
+	} {
+		if got, listed := targets[location]; !listed || got != want {
+			t.Errorf("References: %s targets %q (listed %v), want %q", location, got, listed, want)
+		}
+	}
+
+	for operation, want := range map[string]string{"bad": "no verdict", "slash": "no verdict", "inR": "no verdict", "good": "mismatch"} {
+		if got := inputVerdict(t, document, operation, 5); got != want {
+			t.Errorf("value contract %s: %s, want %s", operation, got, want)
+		}
+	}
+	if refusal := refusalOf(t, document, "bad"); !errors.Is(refusal, ErrUndefined) || !strings.Contains(refusal.Error(), "no schema in the document resource declares") {
+		t.Errorf("#1bad: %v", refusal)
 	}
 }
 

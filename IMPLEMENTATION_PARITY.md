@@ -67,6 +67,11 @@ pending for each of these, each marked by its ruling:
   conclusion is non-conformant from OBI-D-01 alone; nothing is left
   inconclusive. A validator that has not decided OBI-D-01 and fails a check
   it could make exactly concludes non-conformant (§10).
+- **Plain names by the grammar (S3).** Only an `$anchor` or
+  `$dynamicAnchor` whose value matches JSON Schema Core §8.2.2's grammar as
+  a whole declares a name, for OBI-D-12's lookup, OBI-D-13's count, and
+  reference resolution everywhere (`#1bad` never targets `"$anchor":
+  "1bad"`); OBI-D-10 still reports the value.
 
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable

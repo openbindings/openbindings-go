@@ -627,17 +627,9 @@ type keyedFailure struct{ signature, reason string }
 // A keyed case that fails with its signature is reported and does not fail
 // the run, so the module is green at this baseline and any other failure
 // turns it red; a keyed case that fails otherwise, or no longer fails, fails
-// the run, telling the reader to remove its entry.
-var expectedFailures = map[string]keyedFailure{
-	"document/OBI-D-10.json#/tests/22": {
-		signature: "OBI-D-13 reported violated; the fixture lists it notViolated (violated: [OBI-D-10 OBI-D-13])",
-		reason:    "the revised text's section 7.3, which this core does not yet apply: only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name",
-	},
-	"document/OBI-D-12.json#/tests/40": {
-		signature: `expected OBI-D-12 violated; its evidence is "satisfied" (violated: [OBI-D-10])`,
-		reason:    "the revised text's section 7.3, which this core does not yet apply: only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name",
-	},
-}
+// the run, telling the reader to remove its entry. None is keyed: the core
+// follows the corpus of the text it applies.
+var expectedFailures = map[string]keyedFailure{}
 
 // corpusDefect is a defect a conclude-conformance scenario can have, which
 // makes its expected conclusion one the specification text contradicts.

@@ -19,12 +19,10 @@ its environment, independently of protocol. See the
 > install this branch until `v0.2.0` is tagged.
 
 This implementation targets the Core 0.2 working draft on the spec's
-`release/0.2` branch, whose conformance corpus it passes but for one keyed
-corpus defect: scenario T09-S-01 expects conformant from evidence that omits
-OBI-D-12 and OBI-D-13, which OBI-T-09 rules out, so the harness holds this
-SDK to the corrected conclusion, undetermined, and reports the case as a
-keyed expected failure until the corpus is corrected. A validation report
-names the revision of the text it applied (`ValidationReport.Revision`).
+`release/0.2` branch, at the revision it names, and passes that revision's
+conformance corpus with no keyed expected failure. A validation report
+names the revision of the text it applied (`ValidationReport.Revision`), and
+CI tests the SDK against the corpus at exactly that revision.
 
 **Conformance:** `ValidateDocument(data)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of

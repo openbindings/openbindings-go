@@ -66,6 +66,20 @@
   failed OBI-D-09 check there establishes non-conformance (the paragraph's
   second half: either rule may be the one violated). `ConcludeConformance`
   states the applicability the same way; its behavior is unchanged.
+- **Only a name in JSON Schema's grammar is declared (ruling S3, §7.3;
+  pre-1.0).** An `$anchor` or `$dynamicAnchor` declares a plain name only
+  when its value matches, as a whole, the grammar of JSON Schema Core
+  §8.2.2 (a letter or underscore, then letters, digits, hyphens,
+  underscores, and periods). Any other value, such as `"1bad"`,
+  `"bad/name"`, `"a\n"`, or a non-ASCII letter, declares no name for
+  OBI-D-12, OBI-D-13, or §7.2's resolution, where any string used to: a
+  same-document reference naming it violates OBI-D-12 and identifies
+  nothing for `Document.References` and value contracts, and two such
+  values are no repeated name for OBI-D-13. OBI-D-10 still reports each.
+  The same holds in an `$id` resource and a supplied resource, whose plain
+  names the schema space indexes by the same grammar. The corpus adapter's
+  two keyed expected failures for this (the OBI-D-10 and OBI-D-12 fixtures
+  that needed it) are removed: the stale check reported both passing.
 - **The model's types and lookups take the spec's names (breaking,
   pre-1.0).** `Interface` is `Document`, `BindingEntry` is `Binding`, and
   `DependencyEntry` is `Dependency`, the spec's terms (§3);

@@ -77,7 +77,8 @@ type docResource struct {
 	names []string
 	// anchors maps each plain name the resource declares to every schema
 	// declaring it, by $anchor or $dynamicAnchor, once per declaration;
-	// dynamicAnchors maps the names declared by $dynamicAnchor.
+	// dynamicAnchors maps the names declared by $dynamicAnchor. Only a value
+	// plainName accepts declares a name.
 	anchors, dynamicAnchors map[string][]string
 }
 
@@ -186,7 +187,7 @@ func (d *schemaDoc) walk(value any, location string, resource *docResource, unit
 		d.schemas[location] = resource
 		unit.schemas = append(unit.schemas, location)
 		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
-			if name, ok := v[keyword].(string); ok {
+			if name, ok := plainName(v[keyword]); ok {
 				resource.anchors[name] = append(resource.anchors[name], location)
 				unit.anchors = append(unit.anchors, declaredAnchor{resource, name, location})
 				if keyword == "$dynamicAnchor" {
