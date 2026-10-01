@@ -194,7 +194,10 @@ func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationRepor
 type VersionRefusalError struct {
 	// Version is the document's declared openbindings value.
 	Version string
-	Reason  string
+	// Reason says why the version is refused, such as which way it misses
+	// the supported line. It is advisory text for a person; its wording is
+	// not part of the API.
+	Reason string
 }
 
 func (e *VersionRefusalError) Error() string {

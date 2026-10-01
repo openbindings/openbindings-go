@@ -104,6 +104,14 @@ type ValueContracts struct {
 // as you validate against it. The error matches ErrOperationNotFound, or is
 // the ctx's error; otherwise the *ValueContract is never nil.
 //
+// A value contract is decided as a whole: its standing refusal
+// (ValueContract.Err), core's or the evaluator's, applies to every value,
+// even one whose evaluation would never reach what is refused, such as a
+// reference to a resource nobody supplied on a branch the value does not
+// take. OBI-T-08 prescribes no evaluation strategy, so this is permitted, and
+// it is a declared capability limit of this SDK: a tool preparing only what
+// each value reaches could give such a value a verdict.
+//
 // They run the evaluator's Compile in the calling goroutine and wait for it,
 // past the ctx's end if the evaluator does not stop sooner. They return the
 // ctx's error, and no value contract, when the ctx is done before core calls
@@ -191,7 +199,9 @@ func (c *ValueContract) standingRefusal() *NoVerdictError {
 // *MismatchError when it does not, and a *NoVerdictError when no verdict was
 // reached: the operation states no value contract here (ErrNoValueContract),
 // the result is undefined (ErrUndefined), core or the evaluator lacks a
-// capability, the value cannot be read exactly, or the ctx is done. Any other
+// capability, the value cannot be read exactly, or the ctx is done. A value
+// holding a string with a lone UTF-16 surrogate, which a Go string cannot
+// carry, cannot be read exactly: a declared capability limit of this SDK. Any other
 // error matches ErrInconclusive: the value is not a JSON value, so there is
 // nothing to judge. No returned error matches more than one of ErrMismatch,
 // ErrNoVerdict, and ErrInconclusive; one matches ErrUndefined only when the

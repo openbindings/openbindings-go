@@ -62,19 +62,31 @@ func (d Document) Validate() (ValidationReport, error) {
 // can carry it exactly (see LosslessFields), the report, and the same
 // violation error Document.Validate returns. The rules never depend on that
 // decoding: a document the model cannot carry is still judged in full, except
-// where the SDK cannot read it in full. Input that OBI-D-01 refuses (not JSON,
-// not UTF-8, beginning with a byte-order mark, or repeating a member name) is
-// reported as that rule's
-// violation, with every other rule inconclusive, since which of its values
-// the document holds is not established. A document holding a string that
-// escapes a lone UTF-16 surrogate, or nesting deeper than encoding/json reads
-// (10000 levels), has OBI-D-01 and OBI-D-09 decided, OBI-D-09 on the version
-// it declares, and every other rule inconclusive.
+// where the SDK cannot read it in full. The version is read first, from any
+// input that is one JSON value, however deeply it nests.
 //
-// A document declaring a well-formed version outside the supported set is not
-// interpreted: ValidateDocument returns a *VersionRefusalError and no report
-// (OBI-T-04). The version is read first, from any input that is one JSON
-// value, however deeply it nests.
+// Its results take five shapes:
+//   - The document declares a well-formed version outside the supported set:
+//     no document, the zero report, and a *VersionRefusalError. The document
+//     is not interpreted (OBI-T-04).
+//   - OBI-D-01 refuses the input (not JSON, not UTF-8, beginning with a
+//     byte-order mark, or repeating a member name): no document, a report
+//     with OBI-D-01 violated and every other rule inconclusive, since which
+//     values the document holds is not established, and a *ValidationError.
+//   - The input holds a string escaping a lone UTF-16 surrogate, or nests
+//     deeper than encoding/json reads (10000 levels): no document, a report
+//     with OBI-D-01 decided, OBI-D-09 decided on the version the input
+//     declares, and every other rule inconclusive, and a *ValidationError
+//     when OBI-D-09 is violated, nil otherwise.
+//   - The model cannot carry the document for another reason (a null where it
+//     types a value, say): no document, the full report, and a
+//     *ValidationError when the report establishes a violation, nil
+//     otherwise.
+//   - Otherwise: the document, the full report, and a *ValidationError when
+//     the report establishes a violation, nil otherwise.
+//
+// So a nil document beside a report says the model does not carry the input;
+// the report says what was decided about it.
 func ValidateDocument(data []byte) (*Document, ValidationReport, error) {
 	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
 	view, err := decodeDocumentBytes(data)

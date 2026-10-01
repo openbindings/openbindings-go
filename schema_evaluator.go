@@ -69,6 +69,25 @@ import (
 // A SchemaEvaluator and the CompiledSchemas it returns are safe for
 // concurrent use: a service validates many values against one retained
 // CompiledSchema at once.
+//
+// What an evaluator must do has three sources, and only the first is the
+// specification's:
+//   - OBI-T-08 requires evaluation under JSON Schema 2020-12, numbers by
+//     their exact values and patterns as ECMA-262 regular expressions with
+//     the u flag, and no verdict that depends on a reference or capability
+//     the evaluator lacks (a pattern it cannot match as ECMA-262 does, a
+//     number beyond its arithmetic) or on an undefined result. Core refuses
+//     the undefined results and the missing references before an evaluator
+//     sees a bundle.
+//   - The library an evaluator adapts brings limits of its own: its
+//     regular-expression dialect, its arithmetic, its loader, the shape of
+//     its errors, and the meta-schemas' own patterns, which a bundle that
+//     reaches a meta-schema runs through its engine. Each becomes a
+//     no-verdict where evaluation reaches it.
+//   - This SDK's diagnostic contract, the problem locations and multiplicity
+//     above, is the SDK's, not the specification's. An evaluator that
+//     cannot locate problems so still reaches every verdict, and
+//     openbindingstest's Options.Unlocated names the cases it cannot locate.
 type SchemaEvaluator interface {
 	// Compile returns a usable CompiledSchema, or an error meaning no value
 	// validated against this bundle gets a verdict.

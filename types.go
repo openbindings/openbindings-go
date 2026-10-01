@@ -5,20 +5,39 @@ import (
 	"fmt"
 )
 
-// JSONSchema holds a JSON Schema 2020-12 value in either of its two forms:
-// an object schema (map[string]any) or a boolean schema (bool) — §5.2 admits
-// boolean schemas at every schema position (`true` accepts every value,
-// `false` accepts none, `{}` is equivalent to `true`). It is intentionally
-// untyped beyond that to avoid coupling to any one JSON Schema library.
-// This preserves arbitrary keys/values structurally, but not raw JSON bytes.
-// A decoded schema holds generic JSON values, with every number a
-// json.Number, so a number keeps its exact text.
+// JSONSchema holds a JSON Schema 2020-12 schema in either of its two forms
+// (§5.2): an object schema or a boolean schema (`true` accepts every value,
+// `false` accepts none, and `{}` is equivalent to `true`). It is untyped so
+// that the model couples to no JSON Schema library, and the model writes it
+// as encoding/json writes the value it holds.
 //
-// As an operation's Input or Output, a nil JSONSchema means the member is
-// absent, which states no value contract in that direction (§5.1). As an
-// entry of Document.Schemas, where the entry itself says the member is present, nil is a JSON null, which is
-// not a schema: OBI-D-10 reports it. Well-formedness of a present value is a
-// document rule enforced by Validate rather than by this type.
+// Decoding gives a map[string]any or a bool, holding generic JSON values:
+// every number a json.Number, so it keeps its exact text, and every array an
+// []any. A caller setting one writes any of these forms:
+//   - a map[string]any or a bool, whose values encoding/json writes as the
+//     schema means them. A number held as a float64 is written as Go writes
+//     a float64, so one beyond the integers a float64 holds exactly (2^53) is
+//     not the number intended; a json.Number keeps its text.
+//   - a json.RawMessage holding the schema's JSON text, which is written as
+//     given, compacted, with every number exact. It must hold one JSON value
+//     that decoding accepts, or encoding fails.
+//   - any other value encoding/json writes as a JSON object or boolean, such
+//     as a struct. A defined type is written by its own encoding, so a named
+//     byte slice without JSON methods is written as a base64 string, which is
+//     no schema.
+//
+// A caller decoding schema text itself keeps its numbers exact by holding the
+// text as a json.RawMessage, or by decoding with a json.Decoder set to
+// UseNumber: json.Unmarshal into an any reads every number as a float64.
+//
+// Absence is a nil interface. As an operation's Input or Output, a nil
+// JSONSchema means the member is absent, which states no value contract in
+// that direction (§5.1). A typed nil held there, such as a nil
+// json.RawMessage or a nil map[string]any, is not absent: it is written as a
+// present null, which is no schema, and OBI-D-02 and OBI-D-10 report it. As an
+// entry of Document.Schemas, where the entry itself says the member is
+// present, nil is a JSON null, which OBI-D-10 reports. Whether a present value
+// is a well-formed schema is a document rule Validate decides, not this type.
 type JSONSchema any
 
 // jsonTypeName names the JSON type of a decoded value (null, boolean,
