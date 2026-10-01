@@ -75,6 +75,9 @@ func TestModelLimits_InMemory(t *testing.T) {
 		if err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
 			t.Errorf("%s: %s deciding %v, %v", name, report.Conclusion, decidedRules(report), err)
 		}
+		// OBI-D-01 is undecided here, and a failed check of the declared
+		// version, which the model holds exactly, establishes that OBI-D-01
+		// or OBI-D-09 is violated, so non-conformance (§10).
 		report, err = build("0.2").Validate()
 		if !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant || !slices.Equal(report.Violated, []string{"OBI-D-09"}) {
 			t.Errorf("%s, no valid version: %s, violated %v, %v", name, report.Conclusion, report.Violated, err)

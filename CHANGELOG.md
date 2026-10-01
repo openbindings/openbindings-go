@@ -54,6 +54,18 @@
   is unchanged; it was synced from that revision and compared byte for
   byte. The entries below marked with a ruling are the behavior the revised
   text changes.
+- **A text violating OBI-D-01 leaves the other rules not applicable
+  (ruling S1, §10; pre-1.0).** `ValidateDocument` records OBI-D-02 through
+  OBI-D-13 as `not-applicable`, with no finding, where it recorded each
+  inconclusive with a finding: they govern a JSON value only when OBI-D-01
+  holds, impose no further requirements on a text that violates it, and the
+  OBI-D-01 violation alone establishes non-conformance. The conclusion is
+  still non-conformant, and the report's `Inconclusive` list is now empty.
+  `Document.Validate`, whose report on a host object beyond the SDK's own
+  limits leaves OBI-D-01 undecided and decides OBI-D-09, now quotes why a
+  failed OBI-D-09 check there establishes non-conformance (the paragraph's
+  second half: either rule may be the one violated). `ConcludeConformance`
+  states the applicability the same way; its behavior is unchanged.
 - **The model's types and lookups take the spec's names (breaking,
   pre-1.0).** `Interface` is `Document`, `BindingEntry` is `Binding`, and
   `DependencyEntry` is `Dependency`, the spec's terms (§3);

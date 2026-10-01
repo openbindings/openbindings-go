@@ -58,6 +58,16 @@ Document validation reports the core's §10.4 conformance conclusion in Go:
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
+The revised 0.2 working draft (spec `99f8acd`, the text of `8ea5a30`,
+adopted 2026-10-01) is established in Go first; TypeScript alignment is
+pending for each of these, each marked by its ruling:
+
+- **OBI-D-01 decides alone (S1).** On a text violating OBI-D-01, OBI-D-02
+  through OBI-D-13 are not applicable, recorded so with no finding, and the
+  conclusion is non-conformant from OBI-D-01 alone; nothing is left
+  inconclusive. A validator that has not decided OBI-D-01 and fails a check
+  it could make exactly concludes non-conformant (§10).
+
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable
 behavior and recognizable names, not identical signatures:

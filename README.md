@@ -44,7 +44,12 @@ its typed decoding, so a document the typed model cannot carry is still judged
 in full, with two exceptions the SDK cannot read in full: a document holding a
 string that escapes a lone UTF-16 surrogate, and input nested deeper than
 encoding/json reads (10000 levels). For both, OBI-D-01 is decided, and so
-is OBI-D-09, from the declared version. The other rules are inconclusive. Both return a `*ValidationError` beside the
+is OBI-D-09, from the declared version. The other rules are inconclusive.
+A text that violates OBI-D-01 (not UTF-8 JSON, beginning with a byte-order
+mark, or repeating a member name) is non-conformant by that violation
+alone: the other rules govern a JSON value only when OBI-D-01 holds, so the
+report records them as not applicable (§10). `ValidateDocument` and
+`Document.Validate` return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
