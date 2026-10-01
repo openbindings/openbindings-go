@@ -1,59 +1,70 @@
 package openbindings
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
-	"strings"
 	"testing"
 )
 
 // The declaration and the version this SDK writes agree: documents built
 // with the SDK declare a version it supports.
 func TestSupportedVersions_AuthoringVersionIsSupported(t *testing.T) {
-	if supported, err := IsSupportedVersion(AuthoringVersion); !supported {
-		t.Fatalf("AuthoringVersion %s is not supported: %v", AuthoringVersion, err)
+	if !isValidSemver(AuthoringVersion) || CheckVersion(AuthoringVersion) != nil {
+		t.Fatalf("AuthoringVersion %s is not supported: %v", AuthoringVersion, CheckVersion(AuthoringVersion))
 	}
 	if want := supportedLine.major + "." + supportedLine.minor + ".x"; SupportedVersions != want {
 		t.Fatalf("SupportedVersions %q parsed as the line %s", SupportedVersions, want)
 	}
 }
 
-func TestIsSupportedVersion(t *testing.T) {
+// refusedBy reports whether CheckVersion refuses v, failing a test whose
+// refusal is not the one for v.
+func refusedBy(t *testing.T, v string) bool {
+	t.Helper()
+	err := CheckVersion(v)
+	if err == nil {
+		return false
+	}
+	var refusal *VersionRefusalError
+	if !errors.As(err, &refusal) || refusal.Version != v {
+		t.Fatalf("CheckVersion(%q) = %v, want a *VersionRefusalError for it", v, err)
+	}
+	return true
+}
+
+func TestCheckVersion(t *testing.T) {
 	tests := []struct {
 		name    string
 		version string
-		want    bool
-		wantErr bool
+		refused bool
 	}{
-		{name: "the authoring version", version: AuthoringVersion, want: true},
+		{name: "the authoring version", version: AuthoringVersion},
 		// A release of the supported line is supported whatever its patch.
-		{name: "higher patch", version: "0.2.1", want: true},
-		{name: "much higher patch", version: "0.2.99", want: true},
-		{name: "build metadata is ignored", version: "0.2.0+build.1", want: true},
-		{name: "lower minor pre-1", version: "0.1.0", want: false},
-		{name: "lower minor, higher patch", version: "0.1.9", want: false},
-		{name: "much lower", version: "0.0.1", want: false},
-		{name: "higher major", version: "1.0.0", want: false},
-		{name: "higher minor pre-1", version: "0.3.0", want: false},
-		{name: "a prerelease of a supported release", version: "0.2.0-rc.1", want: false},
-		{name: "a prerelease of a later patch", version: "0.2.1-rc.1", want: false},
-		{name: "invalid empty", version: "", wantErr: true},
-		{name: "invalid 1.0", version: "1.0", wantErr: true},
-		{name: "invalid letters", version: "a.b.c", wantErr: true},
-		{name: "invalid negative", version: "-1.0.0", wantErr: true},
-		{name: "surrounding whitespace is not SemVer", version: " " + AuthoringVersion + " ", wantErr: true},
+		{name: "higher patch", version: "0.2.1"},
+		{name: "much higher patch", version: "0.2.99"},
+		{name: "build metadata is ignored", version: "0.2.0+build.1"},
+		{name: "lower minor pre-1", version: "0.1.0", refused: true},
+		{name: "lower minor, higher patch", version: "0.1.9", refused: true},
+		{name: "much lower", version: "0.0.1", refused: true},
+		{name: "higher major", version: "1.0.0", refused: true},
+		{name: "higher minor pre-1", version: "0.3.0", refused: true},
+		{name: "a prerelease of a supported release", version: "0.2.0-rc.1", refused: true},
+		{name: "a prerelease of a later patch", version: "0.2.1-rc.1", refused: true},
+		// A text declaring no version is never refused (OBI-T-04).
+		{name: "invalid empty", version: ""},
+		{name: "invalid 1.0", version: "1.0"},
+		{name: "invalid 0.2", version: "0.2"},
+		{name: "invalid letters", version: "a.b.c"},
+		{name: "invalid negative", version: "-1.0.0"},
+		{name: "surrounding whitespace is not SemVer", version: " " + AuthoringVersion + " "},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := IsSupportedVersion(tt.version)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("IsSupportedVersion(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
-				return
-			}
-			if !tt.wantErr && got != tt.want {
-				t.Errorf("IsSupportedVersion(%q) = %v, want %v", tt.version, got, tt.want)
+			if got := refusedBy(t, tt.version); got != tt.refused {
+				t.Errorf("CheckVersion(%q) refuses: %v, want %v", tt.version, got, tt.refused)
 			}
 		})
 	}
@@ -69,15 +80,15 @@ func TestSupportedVersions_StatesEveryPrerelease(t *testing.T) {
 
 // A prerelease is supported only when named explicitly (§8.1): naming one
 // supports it, build metadata aside, and supports nothing else.
-func TestIsSupportedVersion_PrereleasesAreNamed(t *testing.T) {
+func TestCheckVersion_PrereleasesAreNamed(t *testing.T) {
 	defer func(saved []string) { supportedPrereleases = saved }(supportedPrereleases)
 	supportedPrereleases = []string{"0.3.0-rc.1"}
-	for version, want := range map[string]bool{
+	for version, supported := range map[string]bool{
 		"0.3.0-rc.1": true, "0.3.0-rc.1+build.2": true,
 		"0.3.0-rc.2": false, "0.3.0": false, "0.2.0-rc.1": false,
 	} {
-		if got, err := IsSupportedVersion(version); got != want || err != nil {
-			t.Errorf("IsSupportedVersion(%q) = %v, %v; want %v", version, got, err, want)
+		if refused := refusedBy(t, version); refused == supported {
+			t.Errorf("CheckVersion(%q) refuses: %v; want %v", version, refused, !supported)
 		}
 	}
 }
@@ -97,49 +108,52 @@ func TestVersionRefusal_SaysWhy(t *testing.T) {
 	}
 }
 
-// TestIsSupportedVersion_MatchesValidateAndParseRefusal pins IsSupportedVersion
-// to the ACTUAL accept/refuse outcome of ParseDocument and Document.Validate
-// for the same versions, so the acceptance oracle can never drift from the
-// paths it is promoted to predict (README, `ob create`). The minimal document
-// is otherwise schema-valid, so on a well-formed version any refusal is the
-// OBI-T-04 version refusal, tagged "(OBI-T-04)".
-func TestIsSupportedVersion_MatchesValidateAndParseRefusal(t *testing.T) {
-	doc := func(v string) []byte {
-		return []byte(fmt.Sprintf(`{"openbindings": %q, "operations": {}}`, v))
+// CheckVersion's refusal is the one every entry point returns for the same
+// version, and it refuses exactly what they refuse: no version refusal
+// anywhere for a text declaring no version.
+func TestCheckVersion_IsTheEntryPointsRefusal(t *testing.T) {
+	compiler, err := NewValueContractCompiler(testEvaluator{})
+	if err != nil {
+		t.Fatal(err)
 	}
 	versions := []string{
 		"0.2.0", "0.2.1", "0.2.99", "0.1.0", "0.1.9",
 		"0.0.1", "0.3.0", "1.0.0", "0.2.0-rc.1", "0.3.0-rc.1",
+		"0.2", "", " 0.2.0",
 	}
 	for _, v := range versions {
 		t.Run(v, func(t *testing.T) {
-			accepted, err := IsSupportedVersion(v)
-			if err != nil {
-				t.Fatalf("IsSupportedVersion(%q) unexpected error: %v", v, err)
-			}
-
-			// ParseDocument path.
-			_, perr := ParseDocument(doc(v))
-			parseRefuses := perr != nil
-			if parseRefuses && !strings.Contains(perr.Error(), "(OBI-T-04)") {
-				t.Fatalf("ParseDocument(%q) failed for a non-version reason: %v", v, perr)
-			}
-			if accepted == parseRefuses {
-				t.Errorf("drift: IsSupportedVersion(%q)=%v but ParseDocument refuses=%v", v, accepted, parseRefuses)
-			}
-
-			// Document.Validate path: only the version decision is tagged
-			// "(OBI-T-04)", so it is isolable from any other shape problems.
-			_, verr := (Document{OpenBindings: v, Operations: map[string]Operation{}}).Validate()
-			validateVersionRefuses := verr != nil && strings.Contains(verr.Error(), "(OBI-T-04)")
-			if accepted == validateVersionRefuses {
-				t.Errorf("drift: IsSupportedVersion(%q)=%v but Validate version-refuses=%v (%v)", v, accepted, validateVersionRefuses, verr)
+			want := CheckVersion(v)
+			data := []byte(fmt.Sprintf(`{"openbindings": %q, "operations": {}}`, v))
+			doc := &Document{OpenBindings: v, Operations: map[string]Operation{}}
+			_, parseErr := ParseDocument(data)
+			_, _, validateDocumentErr := ValidateDocument(data)
+			_, validateErr := doc.Validate()
+			_, referencesErr := doc.References()
+			_, resolveErr := compiler.Resolve(context.Background(), doc)
+			for name, err := range map[string]error{
+				"ParseDocument":    parseErr,
+				"ValidateDocument": validateDocumentErr,
+				"Validate":         validateErr,
+				"References":       referencesErr,
+				"Resolve":          resolveErr,
+			} {
+				var refusal *VersionRefusalError
+				if !errors.As(err, &refusal) {
+					refusal = nil
+				}
+				if want == nil && refusal != nil {
+					t.Errorf("%s refuses %q, which CheckVersion does not: %v", name, v, err)
+				}
+				if want != nil && !reflect.DeepEqual(error(refusal), want) {
+					t.Errorf("%s: %v, want CheckVersion's refusal %v", name, err, want)
+				}
 			}
 		})
 	}
 }
 
-func TestIsValidSemver(t *testing.T) {
+func TestValidSemver(t *testing.T) {
 	cases := []struct {
 		in   string
 		want bool
@@ -165,7 +179,7 @@ func TestIsValidSemver(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
-			if got := IsValidSemver(c.in); got != c.want {
+			if got := isValidSemver(c.in); got != c.want {
 				t.Errorf("IsValidSemver(%q) = %v, want %v", c.in, got, c.want)
 			}
 		})
@@ -265,15 +279,14 @@ func TestCompareSemver(t *testing.T) {
 // integer is compared exactly, and refused or accepted like any other.
 func TestVersionNumbersAreUnbounded(t *testing.T) {
 	huge := "999999999999999999999999999999"
-	for version, want := range map[string]bool{
+	for version, supported := range map[string]bool{
 		huge + ".0.0":      false,
 		"0." + huge + ".0": false,
 		"0.2." + huge:      true,
 		"0.2.0-" + huge:    false,
 	} {
-		supported, err := IsSupportedVersion(version)
-		if err != nil || supported != want {
-			t.Errorf("IsSupportedVersion(%q) = %v, %v; want %v", version, supported, err, want)
+		if refused := refusedBy(t, version); refused == supported {
+			t.Errorf("CheckVersion(%q) refuses: %v; want %v", version, refused, !supported)
 		}
 	}
 	if _, _, err := ValidateDocument([]byte(`{"openbindings":"` + huge + `.0.0","operations":{}}`)); !errors.As(err, new(*VersionRefusalError)) {

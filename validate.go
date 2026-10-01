@@ -178,7 +178,7 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 		c.violated("OBI-D-09", "", "missing the required openbindings member")
 	case !isString:
 		c.violated("OBI-D-09", "/openbindings", fmt.Sprintf("must be a SemVer 2.0.0 string; got %s", jsonTypeName(value)))
-	case !IsValidSemver(version):
+	case !isValidSemver(version):
 		c.violated("OBI-D-09", "/openbindings", fmt.Sprintf("%q is not a valid SemVer 2.0.0 string", version))
 	}
 }
@@ -218,7 +218,7 @@ func interpretable(version string) error {
 	if refusal := versionRefusalOf(version); refusal != nil {
 		return refusal
 	}
-	if !IsValidSemver(version) {
+	if !isValidSemver(version) {
 		return fmt.Errorf("%w: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", ErrInconclusive, version)
 	}
 	return nil
@@ -228,7 +228,7 @@ func interpretable(version string) error {
 // an accepted version and for a malformed one, which is OBI-D-09's concern
 // rather than a refusal.
 func versionRefusalOf(version string) *VersionRefusalError {
-	if !IsValidSemver(version) {
+	if !isValidSemver(version) {
 		return nil
 	}
 	msg, refused, err := versionRefusal(version)

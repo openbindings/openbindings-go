@@ -52,10 +52,9 @@ func conformanceSkip(tt conformanceTest) (reason string, skip bool) {
 	if tt.RequiresSupports != "" {
 		// Administer the test only to tools whose OBI-T-04
 		// version-acceptance predicate accepts the annotated version; for
-		// this SDK that predicate is IsSupportedVersion. Anything the SDK
-		// would refuse to process is a skip.
-		accepted, err := IsSupportedVersion(tt.RequiresSupports)
-		if err == nil && !accepted {
+		// this SDK that predicate is CheckVersion. Anything the SDK would
+		// refuse to process is a skip.
+		if errors.As(CheckVersion(tt.RequiresSupports), new(*VersionRefusalError)) {
 			return fmt.Sprintf("requires supported version %s", tt.RequiresSupports), true
 		}
 	}
@@ -392,7 +391,7 @@ func testConcludeConformanceScenario(t *testing.T, raw json.RawMessage) {
 // Contract: `requiresSupports: "X.Y.Z"` — administer this test only to tools
 // whose OBI-T-04 version-acceptance predicate accepts X.Y.Z; otherwise skip
 // and report the skip separately (skips are never failures). For this SDK
-// the predicate is IsSupportedVersion.
+// the predicate is CheckVersion.
 //
 // Annotation versions are derived from the SDK's own constants so the test
 // stays correct across version bumps.

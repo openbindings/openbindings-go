@@ -39,9 +39,12 @@
 //
 // JSON Schema fields preserve object and boolean schema roots. Every
 // OBI declares its target spec version via the top-level openbindings
-// field, and a version is interpreted exactly when [IsSupportedVersion] says
-// so: every version [SupportedVersions] states, which is every release of the
-// 0.2 line. A document written with this SDK declares [AuthoringVersion].
+// field. A document declaring a version [SupportedVersions] states, which is
+// every release of the 0.2 line, is interpreted, and every entry point
+// refuses one declaring another well-formed version (OBI-T-04);
+// [CheckVersion] makes that decision for a caller holding a document it
+// decoded itself. A document written with this SDK declares
+// [AuthoringVersion].
 //
 // # Value Contracts
 //

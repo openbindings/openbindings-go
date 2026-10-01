@@ -203,8 +203,10 @@ func Example_cliRead() {
 }
 
 // An editor holds a document decoded with json.Unmarshal, which refuses
-// nothing, so it makes OBI-T-04's line decision itself before interpreting
-// the document.
+// nothing, so it makes OBI-T-04's decision itself before interpreting the
+// document. CheckVersion returns the refusal ParseDocument would return, or
+// nil: a text declaring no version ("0.2" is not SemVer, nor is "") is never
+// refused, and OBI-D-09 reports it instead.
 func Example_cliVersionDecision() {
 	fmt.Println("this ob interprets OpenBindings", openbindings.SupportedVersions)
 	for _, declared := range []string{`"0.2.0"`, `"0.2.7"`, `"0.2.0+build.5"`, `"0.3.0"`, `"0.2.0-rc.1"`, `"0.2"`, `""`} {
@@ -212,29 +214,21 @@ func Example_cliVersionDecision() {
 		if err := json.Unmarshal([]byte(`{"openbindings":`+declared+`,"operations":{}}`), &held); err != nil {
 			panic(err)
 		}
-		declared := held.OpenBindings
-		supported, err := openbindings.IsSupportedVersion(declared)
-		if (err == nil) != openbindings.IsValidSemver(declared) {
-			panic("IsSupportedVersion's error is IsValidSemver's answer")
+		if err := openbindings.CheckVersion(held.OpenBindings); err != nil {
+			fmt.Printf("%-15q %v\n", held.OpenBindings, err)
+			continue
 		}
-		// OBI-T-04: refuse a declared version outside the supported set,
-		// and never refuse a text that declares no version.
-		refuse := err == nil && !supported
-		// C1 item K2 (version decision): the signature invites `if ok, _ :=
-		// IsSupportedVersion(v); !ok { refuse }`, which refuses "0.2" and "",
-		// the refusal OBI-T-04 forbids.
-		naive := !supported
-		fmt.Printf("%-15q refuse=%-5v naive=%v\n", declared, refuse, naive)
+		fmt.Printf("%-15q not refused\n", held.OpenBindings)
 	}
 	// Output:
 	// this ob interprets OpenBindings 0.2.x
-	// "0.2.0"         refuse=false naive=false
-	// "0.2.7"         refuse=false naive=false
-	// "0.2.0+build.5" refuse=false naive=false
-	// "0.3.0"         refuse=true  naive=true
-	// "0.2.0-rc.1"    refuse=true  naive=true
-	// "0.2"           refuse=false naive=true
-	// ""              refuse=false naive=true
+	// "0.2.0"         not refused
+	// "0.2.7"         not refused
+	// "0.2.0+build.5" not refused
+	// "0.3.0"         openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)
+	// "0.2.0-rc.1"    openbindings: document declares version "0.2.0-rc.1", a pre-release this implementation does not support (OBI-T-04)
+	// "0.2"           not refused
+	// ""              not refused
 }
 
 // memberOrder lists an encoded object's top-level member names in order.
