@@ -40,27 +40,38 @@ import (
 // meta-schema check meets a resource limit (§10.4).
 //
 // A document declaring a version outside the supported set is not interpreted:
-// Validate returns a *VersionRefusalError and no report (OBI-T-04). A
-// document beyond this SDK's own limits, as ValidateDocument meets them in
-// bytes, gets a report the same way: one nesting deeper than encoding/json
-// reads (10000 levels), or holding, in JSON text the model carries as given
-// (a member it carries as raw JSON, or a schema held as a json.RawMessage),
-// a string escaping a lone UTF-16 surrogate, which a Go string cannot carry.
-// The model has no text for such a document, so OBI-D-01 stays
-// inconclusive; the report decides OBI-D-09, on the declared version, and
-// leaves every other rule inconclusive. Only a limit core establishes while
-// checking the document's own representation counts: a schema value's own
-// marshaler that fails is the marshaler's failure, whatever its error carries
-// (a limit ParseDocument reported for other bytes included), and text it
-// writes past the decoder's depth is a marshaler error too, which
-// encoding/json refuses; text within that depth that makes the whole
-// document nest too deep is this SDK's limit.
+// Validate returns a *VersionRefusalError and no report (OBI-T-04).
 //
-// A host object that cannot be encoded for a reason of its own (a NaN, a
-// channel, invalid UTF-8 in a Go string, a marshaler's error) returns an error
-// matching no category, and no report, as does one holding, in a member the
-// model carries as raw JSON, other bytes decoding would refuse: the model
-// encodes only what it would decode back unchanged.
+// Encoding a host document either fails or writes text, and this is the
+// boundary between this SDK's own limits and an encoding failure, for
+// Validate, Document.References, and ValueContractCompiler.Resolve alike:
+//   - This SDK's limit is only what its own checks find: core's scan of the
+//     text the document encodes to, and the refusals this package's model
+//     types make of their own members carried as raw JSON (example values,
+//     source and binding content, kept members). Either finds nesting deeper
+//     than encoding/json reads (10000 levels), or a string escaping a lone
+//     UTF-16 surrogate, which a Go string cannot carry, as ValidateDocument
+//     meets them in bytes. The model has no text for such a document, so
+//     Validate's report leaves OBI-D-01 inconclusive, decides OBI-D-09 on
+//     the declared version when that is valid UTF-8, and leaves every other
+//     rule inconclusive; References and Resolve return an error matching
+//     ErrInconclusive.
+//   - A failure to encode at all is an encoding failure: an error matching
+//     no category, and no report, whatever the error carries. It can come
+//     from a value encoding/json does not write as held (a NaN, a channel, a
+//     cycle, invalid UTF-8 in a Go string, which it would replace, raw JSON
+//     it will not compact, which includes raw JSON nesting past its own
+//     depth), or from any marshaler outside the model's own members: a
+//     caller's, or one of this package's types placed inside a schema. A
+//     model type's refusal of other bytes in a raw member, and text core's
+//     scan refuses for another reason (a member name repeated in raw JSON),
+//     are encoding failures too: the model writes only what it would decode
+//     back unchanged.
+//
+// So raw JSON within encoding/json's depth that makes the whole document nest
+// too deep, or that holds an escaped lone surrogate, is this SDK's limit, and
+// raw JSON nesting past encoding/json's depth on its own is an encoding
+// failure.
 func (d Document) Validate() (ValidationReport, error) {
 	if refusal := versionRefusalOf(d.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
@@ -177,8 +188,9 @@ func d01Violation(data []byte, err error) Finding {
 // marshaler is one of this package's types, whose failure is its own check's,
 // and through single wrappings. It never reads what a caller's marshaler
 // returned, which may carry any error, a limit this SDK reported elsewhere
-// (from ParseDocument, say) included; nor raw JSON encoding/json itself
-// refused, which verifyRawSchemas and verifyRawMembers check first.
+// (from ParseDocument, say) included; nor a schema's failure, which
+// encodeObject keeps as text, so one of this package's types placed in a
+// schema is the caller's marshaler too (unencodableSchema).
 func ownLimit(err error) string {
 	for err != nil {
 		if failure, isMarshaler := err.(*json.MarshalerError); isMarshaler {
@@ -201,9 +213,8 @@ func ownLimit(err error) string {
 
 // modelLimitError reports a document the model does not write because it
 // holds what this SDK cannot read or carry, which is no defect of the value
-// (§10.4): it nests deeper than encoding/json reads, or holds, in a member
-// carried as raw JSON, a string escaping a lone UTF-16 surrogate. It matches
-// ErrInconclusive.
+// (§10.4): it nests deeper than encoding/json reads, or holds a string
+// escaping a lone UTF-16 surrogate. It matches ErrInconclusive.
 type modelLimitError struct {
 	// what says what the document holds, as "the document <what>".
 	what string

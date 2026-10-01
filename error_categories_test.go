@@ -145,11 +145,13 @@ type repeatingMarshaler struct{}
 
 func (repeatingMarshaler) MarshalJSON() ([]byte, error) { return []byte(`{"a":1,"a":2}`), nil }
 
-// Raw JSON in a Go value is read as JSON text is: Validate on a
-// json.RawMessage gives exactly what ValidateJSON gives on the same bytes,
-// and raw JSON a value holds gets the category the same text gets, so depth
-// and a lone surrogate are core's refusal to read the value exactly, never
-// "not a JSON value".
+// A json.RawMessage that is the value is JSON text: Validate on it gives
+// exactly what ValidateJSON gives on the same bytes. Raw JSON held in a value
+// is encoded by encoding/json like any Go value: text encoding/json refuses
+// (past its own depth, not one JSON value) is not a JSON value, and the text
+// it writes is read like any value's, so a lone surrogate, a repeated name,
+// or nesting the written text makes too deep is core's refusal to read the
+// value exactly.
 func TestCategories_RawJSONReadsAsText(t *testing.T) {
 	var validated atomic.Int32
 	contract := answering(t, func(context.Context, any) error {
@@ -177,12 +179,17 @@ func TestCategories_RawJSONReadsAsText(t *testing.T) {
 				t.Errorf("%s, as %s: %v, want what ValidateJSON gives: %v", name, form, got, want)
 			}
 		}
-		// Held in a value, the same text gets the same category as the
-		// value's text.
-		held := contract.Validate(ctx, map[string]any{"x": raw})
-		whole := contract.ValidateJSON(ctx, []byte(`{"x":`+text+`}`))
-		if fmt.Sprint(categories(held)) != fmt.Sprint(categories(whole)) {
-			t.Errorf("%s, held in a value: %v (%v), want the category of %v (%v)", name, held, categories(held), whole, categories(whole))
+		// Held in a value, the text is encoded by encoding/json, and what it
+		// writes is read as ValidateJSON reads it.
+		value := map[string]any{"x": raw}
+		held := contract.Validate(ctx, value)
+		written, err := json.Marshal(value)
+		if err != nil {
+			requireCategory(t, name+", held in a value encoding/json refuses", held, "ErrInconclusive")
+			continue
+		}
+		if whole := contract.ValidateJSON(ctx, written); fmt.Sprint(held) != fmt.Sprint(whole) || fmt.Sprint(categories(held)) != fmt.Sprint(categories(whole)) {
+			t.Errorf("%s, held in a value: %v, want what ValidateJSON gives the written text: %v", name, held, whole)
 		}
 	}
 	if got := contract.Validate(ctx, json.RawMessage(nil)); got != nil {
@@ -191,7 +198,24 @@ func TestCategories_RawJSONReadsAsText(t *testing.T) {
 	if got, want := contract.Validate(ctx, json.RawMessage(nil)), contract.ValidateJSON(ctx, []byte(`null`)); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("a nil json.RawMessage: %v, want %v", got, want)
 	}
-	requireCategory(t, "nested past the decoder, held", contract.Validate(ctx, map[string]any{"x": json.RawMessage(texts["nested past the decoder"])}), "ErrNoVerdict")
+	// Which texts encoding/json refuses, held: past its own depth, and what
+	// is not one JSON value. What it writes and core cannot read exactly
+	// gets no verdict, nesting the written text makes too deep included.
+	for name, want := range map[string]string{
+		"nested past the decoder": "ErrInconclusive",
+		"not JSON":                "ErrInconclusive",
+		"two values":              "ErrInconclusive",
+		"empty":                   "ErrInconclusive",
+		"a lone surrogate":        "ErrNoVerdict",
+		"a repeated name":         "ErrNoVerdict",
+	} {
+		requireCategory(t, name+", held", contract.Validate(ctx, map[string]any{"x": json.RawMessage(texts[name])}), want)
+	}
+	within := json.RawMessage(strings.Repeat("[", 9999) + strings.Repeat("]", 9999))
+	requireCategory(t, "nested within the decoder, held two levels down", contract.Validate(ctx, []any{[]any{within}}), "ErrNoVerdict")
+	if err := contract.Validate(ctx, []any{within}); err != nil {
+		t.Errorf("nested within the decoder, held one level down: %v", err)
+	}
 	if validated.Load() == 0 {
 		t.Fatal("the evaluator was never called on a readable value")
 	}

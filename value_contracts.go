@@ -52,13 +52,10 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (OBI-T-04), and one declaring no valid
 // version (OBI-D-09) an error matching ErrInconclusive; either way it is not
-// interpreted. A document beyond this SDK's own limits, nesting deeper than
-// encoding/json reads (10000 levels) or holding, in JSON text the model
-// carries as given, a string escaping a lone UTF-16 surrogate, returns an
-// error matching ErrInconclusive too. One that cannot be encoded for a reason
-// of its own (a NaN, a channel, invalid UTF-8 in a Go string, a marshaler's
-// error) returns an error matching no category, as does a nil document; a
-// done ctx returns its error.
+// interpreted. A document beyond this SDK's own limits returns an error
+// matching ErrInconclusive too, and one that fails to encode an error
+// matching no category, as does a nil document; Document.Validate states
+// which documents are which. A done ctx returns its error.
 func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*ValueContracts, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -199,6 +196,16 @@ func (c *ValueContract) standingRefusal() *NoVerdictError {
 // named byte slice that does not marshal itself) is refused, naming
 // ValidateJSON; one nested in a value is a base64 string, as encoding/json
 // writes it.
+//
+// A json.RawMessage, or a *json.RawMessage, that is the value is JSON text,
+// read exactly as ValidateJSON reads it; a nil one is null, as encoding/json
+// writes it. Raw JSON nested in a value is encoded by encoding/json like any
+// Go value, by its rules (an omitempty member, a pointer method on an
+// addressable value): text encoding/json refuses, nesting past its own depth
+// or not one JSON value, makes the value not a JSON value, and the text it
+// writes is read like any value's text, so a lone surrogate, a repeated
+// member name, or nesting the written text makes too deep gets what
+// ValidateJSON gives that text.
 //
 // It returns nil when the value satisfies the value contract, a
 // *MismatchError when it does not, and a *NoVerdictError when no verdict was

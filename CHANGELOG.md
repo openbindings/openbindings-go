@@ -84,28 +84,29 @@
   deeper than encoding/json reads (10000 levels), or holding a string
   escaping a lone UTF-16 surrogate, as the SDK's own limits (a lone
   surrogate is valid JSON text a Go string cannot carry, a declared
-  capability limit). A `Document` the model does not write for either
-  reason, nesting so deep or holding a lone surrogate in JSON text it carries
-  as given (a raw member, or a schema held as a `json.RawMessage`), now gets
-  the same: `Document.Validate` reports conformance undetermined, with
-  OBI-D-01 inconclusive since the model has no text and OBI-D-09 decided on
-  the declared version alone, and `Document.References` and
+  capability limit). A `Document` in which the SDK's own checks (core's scan
+  of the text the document encodes to, and the model types' refusals of
+  their own members carried as raw JSON) find either now gets the same:
+  `Document.Validate` reports conformance undetermined, with OBI-D-01
+  inconclusive since the model has no text and at most OBI-D-09 decided, on
+  the declared version, and `Document.References` and
   `ValueContractCompiler.Resolve` return an error matching
-  `ErrInconclusive`, where all three returned an untyped encoding error.
-  Only a limit core establishes while checking the document's own
-  representation counts: core checks a schema held as a `json.RawMessage`
-  before encoding/json compacts it, as it checks raw members. A caller's
-  marshaler that fails is the marshaler's failure, whatever its error
-  carries, a limit `ParseDocument` reported elsewhere included, and so is
-  text a marshaler writes past the decoder's depth, which encoding/json
-  refuses; text within that depth that makes the whole document too deep is
-  the SDK's limit.
-- **Raw JSON in a value reads as JSON text.** `ValueContract.Validate` reads
-  a `json.RawMessage`, as the value or held in it, as `ValidateJSON` reads
-  text: on the same bytes, nesting past the decoder, a lone surrogate, or a
-  repeated name is core's refusal to read the value exactly (`ErrNoVerdict`),
-  where raw JSON nesting past encoding/json's depth was "not a JSON value"
-  (`ErrInconclusive`).
+  `ErrInconclusive`, where all three returned an untyped encoding error. A
+  document that fails to encode at all still gets an error matching no
+  category and no report, whatever the failure carries: a failure from
+  encoding/json, which includes raw JSON nesting past its own depth, or from
+  any marshaler outside the model's own members, a caller's or one of the
+  SDK's types placed inside a schema. So raw JSON within encoding/json's
+  depth that makes the whole document too deep, or that holds a lone
+  surrogate, is the SDK's limit. `Document.Validate` states this boundary.
+- **A raw JSON value reads as JSON text.** `ValueContract.Validate` reads a
+  `json.RawMessage` or `*json.RawMessage` that is the value exactly as
+  `ValidateJSON` reads the same bytes, so text nesting past the decoder is
+  core's refusal to read the value exactly (`ErrNoVerdict`), where it was
+  "not a JSON value" (`ErrInconclusive`); a nil one is still null. Raw JSON
+  nested in a value is still encoded by encoding/json like any Go value:
+  what encoding/json refuses is not a JSON value, and the text it writes is
+  read like any value's text (see `ValueContract.Validate`).
 - **Encoding failures from caller values match no category.** A value that
   cannot be encoded for a reason of its own (a NaN, a channel, invalid UTF-8
   in a Go string, a marshaler's error) still returns an error and no report

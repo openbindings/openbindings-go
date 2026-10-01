@@ -39,7 +39,7 @@ var documentRules = []string{
 // them. A version refusal returns no report, nor does a host object the
 // caller made unencodable (a NaN, invalid UTF-8 in a Go string, a
 // marshaler's error); a host object beyond this SDK's own limits gets a
-// report, deciding OBI-D-09 alone.
+// report, deciding at most OBI-D-09.
 func DocumentRules() []string {
 	return append([]string(nil), documentRules...)
 }
@@ -93,7 +93,7 @@ type ValidationReport struct {
 	// document is vacuously satisfied. A version refusal, or a host object
 	// the caller made unencodable, returns no report, whose Evidence is nil;
 	// a host object beyond this SDK's own limits gets a report whose
-	// Evidence decides OBI-D-09 alone.
+	// Evidence decides at most OBI-D-09.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
 	// Version, in identifier order. These lists are SDK report fields.

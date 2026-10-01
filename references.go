@@ -85,16 +85,14 @@ type Reference struct {
 // The whole call fails, listing no reference, for a document declaring a
 // well-formed version outside the supported set (a *VersionRefusalError,
 // OBI-T-04); for one declaring no valid version (OBI-D-09), or beyond this
-// SDK's own limits, nesting deeper than encoding/json reads (10000 levels)
-// or holding a string escaping a lone UTF-16 surrogate in JSON text the
-// model carries as given (an error matching ErrInconclusive); and for one
-// that cannot be encoded for a reason of its own, a NaN, say (an error
-// matching no category). Where a schema
-// nests subschemas deeper than 256 levels, which this SDK does not index, it
-// returns the references it found with an error matching ErrInconclusive:
-// what is missing from them is not absent. A nil error means the list is
-// complete, so an empty list with a nil error means the document holds no
-// reference. A nil Document holds none.
+// SDK's own limits (an error matching ErrInconclusive); and for one that
+// fails to encode (an error matching no category). Document.Validate states
+// which documents are beyond this SDK's limits and which fail to encode.
+// Where a schema nests subschemas deeper than 256 levels, which this SDK
+// does not index, it returns the references it found with an error matching
+// ErrInconclusive: what is missing from them is not absent. A nil error
+// means the list is complete, so an empty list with a nil error means the
+// document holds no reference. A nil Document holds none.
 func (d *Document) References() ([]Reference, error) {
 	if d == nil {
 		return nil, nil

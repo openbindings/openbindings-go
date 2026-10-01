@@ -97,6 +97,7 @@ var (
 	rawMessageType      = reflect.TypeFor[json.RawMessage]()
 	int64PointerType    = reflect.TypeFor[*int64]()
 	marshalerType       = reflect.TypeFor[json.Marshaler]()
+	jsonSchemaType      = reflect.TypeFor[JSONSchema]()
 	verifiedDecoderType = reflect.TypeFor[verifiedDecoder]()
 	errNotJSONObject    = errors.New("not a JSON object")
 	errNullJSONObject   = errors.New("null is not an object")
@@ -310,11 +311,13 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyStrings(typed, lossless); err != nil {
 		return nil, err
 	}
-	if err := verifyRawSchemas(typed); err != nil {
-		return nil, err
-	}
 	data, err := marshalUnescaped(typed)
 	if err != nil {
+		if unencodableSchema(typed) {
+			// The failure is a schema's, the caller's value: kept as text, it
+			// never reads as this SDK's limit, whatever it carries.
+			return nil, errors.New(err.Error())
+		}
 		return nil, err
 	}
 	typedNames := membersOf(reflect.TypeOf(typed)).typed
@@ -357,6 +360,26 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 		return nil, fmt.Errorf("the encoding is not one decoding accepts: %w", err)
 	}
 	return data, nil
+}
+
+// unencodableSchema reports whether a schema an OBI-defined object holds (an
+// operation's input or output, the document's schemas) fails to encode on
+// its own. A schema is the caller's value, which encoding/json writes as the
+// caller built it, so its failure is the caller's whatever its error
+// carries, a refusal by one of this package's types placed in it included
+// (see ownLimit).
+func unencodableSchema(typed any) bool {
+	value := reflect.ValueOf(typed)
+	for _, field := range membersOf(value.Type()).fields {
+		held := value.Field(field.index)
+		if t := held.Type(); t != jsonSchemaType && (t.Kind() != reflect.Map || t.Elem() != jsonSchemaType) {
+			continue
+		}
+		if _, err := marshalUnescaped(held.Interface()); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // marshalUnescaped encodes v as json.Marshal does, but escaping no HTML.

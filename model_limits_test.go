@@ -33,10 +33,13 @@ func decidedRules(report ValidationReport) []string {
 
 // A document beyond this SDK's own limits, nesting deeper than encoding/json
 // reads or holding a string escaping a lone UTF-16 surrogate, is classified
-// the same whether it arrives as bytes or in memory: in memory, Validate
-// reports conformance undetermined, deciding OBI-D-09 alone, and References
-// and Resolve return an error matching ErrInconclusive, as ParseDocument does
-// for the bytes.
+// the same whether it arrives as bytes or in memory, where core finds it in
+// the text the document encodes to or in a member the model carries as raw
+// JSON: in memory, Validate reports conformance undetermined, deciding
+// OBI-D-09 alone, and References and Resolve return an error matching
+// ErrInconclusive, as ParseDocument does for the bytes. Raw JSON a schema
+// holds that encoding/json itself refuses, past its depth, is an encoding
+// failure instead (TestModelLimits_Boundary).
 func TestModelLimits_InMemory(t *testing.T) {
 	deepSchema := nestedSchema(10001)
 	deepRaw := json.RawMessage(strings.Repeat("[", 10001) + strings.Repeat("]", 10001))
@@ -52,14 +55,8 @@ func TestModelLimits_InMemory(t *testing.T) {
 		"a schema": func(version string) *Document {
 			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: deepSchema}}}
 		},
-		"a schema held as raw JSON": func(version string) *Document {
-			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: deepRawSchema}}}
-		},
-		"raw JSON within a schema": func(version string) *Document {
-			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Output: map[string]any{"properties": map[string]any{"a": deepRawSchema}}}}}
-		},
-		"a schemas entry held as raw JSON": func(version string) *Document {
-			return &Document{OpenBindings: version, Operations: map[string]Operation{}, Schemas: map[string]JSONSchema{"Deep": &deepRawSchema}}
+		"a schema held as raw JSON the document makes too deep": func(version string) *Document {
+			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: json.RawMessage(strings.Repeat(`{"not":`, 9999) + `{}` + strings.Repeat(`}`, 9999))}}}
 		},
 		"source content": func(version string) *Document {
 			return &Document{OpenBindings: version, Operations: map[string]Operation{}, Sources: map[string]Source{"s": {Kind: "k", Content: deepRaw}}}

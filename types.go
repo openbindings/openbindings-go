@@ -20,14 +20,22 @@ import (
 //     not the number intended; a json.Number keeps its text.
 //   - a json.RawMessage holding the schema's JSON text, which is written as
 //     given, compacted, with every number exact. It must hold one JSON value
-//     that decoding accepts, or encoding fails; core checks it before
-//     encoding, so text this SDK cannot read (nesting past the decoder, an
-//     escaped lone UTF-16 surrogate) is reported as this SDK's limit.
+//     encoding/json compacts, or encoding fails, as it does for text nesting
+//     past encoding/json's depth. Text encoding/json writes from it that
+//     this SDK cannot read in the document (an escaped lone UTF-16
+//     surrogate, nesting the document makes too deep) is this SDK's limit.
 //   - any other value encoding/json writes as a JSON object or boolean, such
-//     as a struct. A defined type is written by its own encoding, so a named
+//     as a struct, which encoding/json writes by its own rules (an omitempty
+//     member, a pointer method on an addressable value), raw JSON it holds
+//     included. A defined type is written by its own encoding, so a named
 //     byte slice without JSON methods is written as a base64 string, which is
-//     no schema. A marshaler's failure, and text it writes past the
-//     decoder's depth, is the marshaler's error, never this SDK's limit.
+//     no schema.
+//
+// A schema that fails to encode is an encoding failure, never this SDK's
+// limit, whatever the failure carries: a marshaler's error, text a
+// marshaler writes past encoding/json's depth, or a refusal by one of this
+// package's types placed in the schema. Document.Validate states the
+// boundary.
 //
 // A caller decoding schema text itself keeps its numbers exact by holding the
 // text as a json.RawMessage, or by decoding with a json.Decoder set to
