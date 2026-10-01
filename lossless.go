@@ -146,12 +146,16 @@ type verifiedDecoder interface {
 }
 
 // decodeExact is every OBI-defined object's UnmarshalJSON: it verifies its
-// input once, then decodes it and every object nested in it.
+// input once, then decodes it and every object nested in it. Its errors name
+// the package, which encoding/json returns as they are.
 func decodeExact(b []byte, what string, target verifiedDecoder) error {
 	if err := verifyExactJSON(b); err != nil {
-		return fmt.Errorf("%s: %w", what, err)
+		return fmt.Errorf("openbindings: %s: %w", what, err)
 	}
-	return target.decodeVerified(b)
+	if err := target.decodeVerified(b); err != nil {
+		return fmt.Errorf("openbindings: %w", err)
+	}
+	return nil
 }
 
 // decodeObject decodes the OBI-defined object b, which verifyExactJSON has

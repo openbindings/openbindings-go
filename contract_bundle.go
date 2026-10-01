@@ -184,7 +184,7 @@ func (s *schemaSpace) bundle(entry string, spelling bundleSpelling) (json.RawMes
 		})
 		cause := errors.New(first.reason)
 		if first.kind == undefinedResult {
-			cause = fmt.Errorf("%w: %s", ErrUndefined, first.reason)
+			cause = &coreReason{sentinel: ErrUndefined, detail: first.reason}
 		}
 		return nil, &NoVerdictError{Location: first.location, Cause: cause}
 	}

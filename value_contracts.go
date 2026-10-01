@@ -134,7 +134,7 @@ func (c *ValueContracts) compile(ctx context.Context, operation, direction strin
 		stated = c.states[key][1]
 	}
 	if !stated {
-		return &ValueContract{refusal: &NoVerdictError{Location: locationOf(c.space.obi, entry), Cause: ErrNoValueContract}}, nil
+		return &ValueContract{refusal: &NoVerdictError{Location: locationOf(c.space.obi, entry), Cause: &coreReason{sentinel: ErrNoValueContract}}}, nil
 	}
 	document, refusal := c.space.bundle(entry, bundleSpelling{})
 	if refusal != nil {

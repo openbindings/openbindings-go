@@ -16,13 +16,13 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	if e == nil || len(e.Findings) == 0 {
-		return "non-conformant document"
+		return "openbindings: non-conformant document"
 	}
 	lines := make([]string, len(e.Findings))
 	for i, finding := range e.Findings {
 		lines[i] = formatFinding(finding.Path, finding.Message, finding.Rule)
 	}
-	return "non-conformant document: " + strings.Join(lines, "; ")
+	return "openbindings: non-conformant document: " + strings.Join(lines, "; ")
 }
 
 var (
