@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -78,42 +79,61 @@ const appliedTextRevision = "98127021a7e2fa08a8c7b2e6bead1c847c9b6e1f"
 const appliedTextSHA256 = "e70cbc8b3b6d4096fd83f694dc093d3ce6d6c87319aeb97b8ae9ec12ebe63a4f"
 
 // appliedTextVerified verifies the text this SDK names against the bytes it
-// pins: appliedTextRevision is appliedRevision, the openbindings.md at that
-// revision hashes to appliedTextSHA256, and the schema at that revision is
-// the one embedded here. Both are read from the history of the specification
-// repository holding the corpus, never from its checkout, so the text beside
-// the corpus plays no part and an unrelated specification commit cannot
-// change the result.
+// pins (verifyAppliedText), for the history of the specification repository
+// holding the corpus.
 func appliedTextVerified(corpusDir string) (bool, string) {
-	if appliedTextRevision != appliedRevision {
-		return false, fmt.Sprintf("appliedTextSHA256 is the hash of the text at %s, but appliedRevision is %s: pin the named revision's hash", appliedTextRevision, appliedRevision)
+	return verifyAppliedText(corpusDir, appliedRevision, appliedTextRevision, appliedTextSHA256, openbindingsSchemaJSON)
+}
+
+var fullRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// verifyAppliedText verifies a declared applied text: the revision must be a
+// full 40-hex commit of the specification repository holding corpusDir (git
+// rev-parse --verify REV^{commit} gives it back), the pinned hash must be
+// bound to it, the openbindings.md at it must hash to the pinned sha256, and
+// its schema must be the one this SDK embeds. Both are read from the history,
+// never from its checkout or index, so the text beside the corpus plays no
+// part and an unrelated specification commit cannot change the result. A
+// release named alone (OBI-T-09/c3a) is not verified: no verification against
+// a release snapshot exists.
+func verifyAppliedText(corpusDir, revision, pinnedRevision, pinnedSHA256 string, schema []byte) (bool, string) {
+	switch {
+	case revision == "":
+		return false, "a release named alone (OBI-T-09/c3a) is not verified: no verification against a release snapshot exists"
+	case !fullRevision.MatchString(revision):
+		return false, fmt.Sprintf("appliedRevision %q is not a full 40-hex commit", revision)
+	case pinnedRevision != revision:
+		return false, fmt.Sprintf("appliedTextSHA256 is the hash of the text at %s, but appliedRevision is %s: pin the named revision's hash", pinnedRevision, revision)
 	}
-	text, err := gitShow(corpusDir, appliedRevision+":openbindings.md")
+	if commit, err := git(corpusDir, "rev-parse", "--verify", "--quiet", revision+"^{commit}"); err != nil || string(bytes.TrimSpace(commit)) != revision {
+		return false, fmt.Sprintf("%s is not a commit of the specification history holding the corpus", revision)
+	}
+	text, err := git(corpusDir, "show", revision+":openbindings.md")
 	if err != nil {
-		return false, fmt.Sprintf("the specification history holding the corpus does not give the text at %s: %v", appliedRevision, err)
+		return false, fmt.Sprintf("the specification history holding the corpus does not give the text at %s: %v", revision, err)
 	}
 	sum := sha256.Sum256(text)
-	if got := hex.EncodeToString(sum[:]); got != appliedTextSHA256 {
-		return false, fmt.Sprintf("openbindings.md at %s hashes to %s, not the pinned %s", appliedRevision, got, appliedTextSHA256)
+	if got := hex.EncodeToString(sum[:]); got != pinnedSHA256 {
+		return false, fmt.Sprintf("openbindings.md at %s hashes to %s, not the pinned %s", revision, got, pinnedSHA256)
 	}
-	schema, err := gitShow(corpusDir, appliedRevision+":openbindings.schema.json")
+	pinnedSchema, err := git(corpusDir, "show", revision+":openbindings.schema.json")
 	if err != nil {
-		return false, fmt.Sprintf("the specification history holding the corpus does not give the schema at %s: %v", appliedRevision, err)
+		return false, fmt.Sprintf("the specification history holding the corpus does not give the schema at %s: %v", revision, err)
 	}
-	if !bytes.Equal(schema, openbindingsSchemaJSON) {
-		return false, fmt.Sprintf("openbindings.schema.json at %s is not the schema this SDK embeds", appliedRevision)
+	if !bytes.Equal(pinnedSchema, schema) {
+		return false, fmt.Sprintf("openbindings.schema.json at %s is not the schema this SDK embeds", revision)
 	}
 	return true, ""
 }
 
-// gitShow reads an object from the git repository holding dir.
-func gitShow(dir, object string) ([]byte, error) {
-	cmd := exec.Command("git", "-C", dir, "show", object)
+// git runs a git command in the repository holding dir.
+func git(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("git show %s: %v %s", object, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("git %s: %v %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
 }
@@ -156,12 +176,19 @@ func runRootCorpus(t *testing.T, dir string, specCorpus bool) {
 		t.Run(cs.ID+"/"+cs.Description, func(t *testing.T) {
 			j := run.judge(cs)
 			ledger.Record(cs.ID, j)
-			switch j.Category {
-			case corpus.Pass:
+			keyed, expected := expectedFailures[cs.ID]
+			switch {
+			case expected && j.Category == corpus.Fail && j.Detail == keyed.signature:
+				t.Logf("keyed expected failure (%s): %s", keyed.reason, j.Detail)
+			case expected && j.Category == corpus.Fail:
+				t.Errorf("%s (the keyed expected failure's signature is %q)", j.Detail, keyed.signature)
+			case expected:
+				t.Errorf("the keyed expected failure %s is now %s (%s): remove its expectedFailures entry", cs.ID, j.Category, j.Detail)
+			case j.Category == corpus.Pass:
 				t.Logf("pass: %s", j.Detail)
-			case corpus.Advisory:
+			case j.Category == corpus.Advisory:
 				t.Logf("ADVISORY (never a failure): %s", j.Detail)
-			case corpus.Fail:
+			case j.Category == corpus.Fail:
 				t.Error(j.Detail)
 			default:
 				t.Skipf("%s: %s", j.Category, j.Detail)
@@ -442,15 +469,23 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 			}
 			return pass(string(report.Conclusion))
 		}
-		if report.Version != appliedRelease || report.Revision != appliedRevision {
-			return fail("names %q@%q; the applied text is %q@%q", report.Version, report.Revision, appliedRelease, appliedRevision)
+		return judgeNaming(report, appliedRelease, appliedRevision, r.verified, r.unverified, corpus.Required())
+	}
+	return pass(string(report.Conclusion))
+}
+
+// judgeNaming holds a conclusion to the applied text this SDK declares: the
+// name it gives is compared first, always, and then the text it names must
+// have been verified.
+func judgeNaming(report ValidationReport, release, revision string, verified bool, unverified string, required bool) corpus.Judgment {
+	if report.Version != release || report.Revision != revision {
+		return fail("names %q@%q; the applied text is %q@%q", report.Version, report.Revision, release, revision)
+	}
+	if !verified {
+		if required {
+			return fail("UNVERIFIED applied text: %s", unverified)
 		}
-		if !r.verified {
-			if corpus.Required() {
-				return fail("UNVERIFIED applied text: %s", r.unverified)
-			}
-			return corpus.Judgment{Category: corpus.Unverified, Detail: r.unverified}
-		}
+		return corpus.Judgment{Category: corpus.Unverified, Detail: unverified}
 	}
 	return pass(string(report.Conclusion))
 }
@@ -473,6 +508,39 @@ func mustSemver(v string) semver {
 		panic(err)
 	}
 	return parsed
+}
+
+// continuesWithNonConformant is this adapter's declaration for the core:
+// ValidateDocument returns the document with a non-conformant report
+// whenever the model carries it (its fifth result shape), so a tool built on
+// it continues with every non-conformant document it can carry (§10.3).
+// Holding the core to that declaration, an omission because no document
+// came back fails unless its case is keyed in uncarried.
+const continuesWithNonConformant = true
+
+// uncarried keys the cases whose non-conformant document the model cannot
+// carry, so the core does not continue with it, each with why. None does.
+var uncarried = map[string]string{}
+
+// uncarriedOmission judges a case for which ValidateDocument returned no
+// document: a failure for a conformant document; for a non-conformant one,
+// an omission only when the case is keyed in uncarried.
+func uncarriedOmission(id string, nonConformant []string, err error) corpus.Judgment {
+	if len(nonConformant) == 0 {
+		return fail("the model does not carry a conformant document (%v)", err)
+	}
+	if why, keyed := uncarried[id]; keyed || !continuesWithNonConformant {
+		return omit("the model cannot carry this non-conformant document, so this SDK does not continue with it: " + why)
+	}
+	return fail("ValidateDocument returned no document for this non-conformant document, though the core declares it continues with every non-conformant document the model carries (key the case in uncarried if the model cannot carry it): %v", err)
+}
+
+// staleUncarried fails a case keyed in uncarried whose document came back.
+func staleUncarried(id string) (corpus.Judgment, bool) {
+	if _, keyed := uncarried[id]; keyed {
+		return fail("the keyed uncarried case %s now gets a document: remove its uncarried entry", id), true
+	}
+	return corpus.Judgment{}, false
 }
 
 // judgeResolve executes resolve-operation: the model ValidateDocument
@@ -509,10 +577,10 @@ func judgeResolve(cs corpus.Case) corpus.Judgment {
 		return fail("interpreted; expected version-refusal")
 	}
 	if doc == nil {
-		if len(s.Given.NonConformant) == 0 {
-			return fail("the model does not carry a conformant document (%v)", err)
-		}
-		return omit("the model cannot carry this non-conformant document, so this SDK does not continue with it")
+		return uncarriedOmission(cs.ID, s.Given.NonConformant, err)
+	}
+	if j, stale := staleUncarried(cs.ID); stale {
+		return j
 	}
 	key, _, found := doc.ResolveOperation(s.Given.Name)
 	switch s.Expected.Outcome {
@@ -546,6 +614,27 @@ func judgeResolve(cs corpus.Case) corpus.Judgment {
 		return fail("binding keys %v; expected %v", bindings, want)
 	}
 	return pass("resolved " + key)
+}
+
+// keyedFailure is a case this core is expected to fail: the failure's
+// signature and why.
+type keyedFailure struct{ signature, reason string }
+
+// expectedFailures keys the cases of the specification's corpus this core is
+// expected to fail: the corpus decides them and the core does not yet follow.
+// A keyed case that fails with its signature is reported and does not fail
+// the run, so the module is green at this baseline and any other failure
+// turns it red; a keyed case that fails otherwise, or no longer fails, fails
+// the run, telling the reader to remove its entry.
+var expectedFailures = map[string]keyedFailure{
+	"document/OBI-D-10.json#/tests/22": {
+		signature: "OBI-D-13 reported violated; the fixture lists it notViolated (violated: [OBI-D-10 OBI-D-13])",
+		reason:    "needs G: S3, only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name (section 7.3)",
+	},
+	"document/OBI-D-12.json#/tests/40": {
+		signature: `expected OBI-D-12 violated; its evidence is "satisfied" (violated: [OBI-D-10])`,
+		reason:    "needs G: S3, only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name (section 7.3)",
+	},
 }
 
 // corpusDefect is a defect a conclude-conformance scenario can have, which
@@ -733,10 +822,11 @@ func judgeKind(cs corpus.Case) corpus.Judgment {
 	switch {
 	case refused:
 		return fail("version-refusal; expected %s", s.Expected.Outcome)
-	case !carried && len(s.Given.NonConformant) == 0:
-		return fail("the model does not carry a conformant document (%v)", err)
 	case !carried:
-		return omit("the model cannot carry this non-conformant document, so this SDK does not continue with it")
+		return uncarriedOmission(cs.ID, s.Given.NonConformant, err)
+	}
+	if j, stale := staleUncarried(cs.ID); stale {
+		return j
 	}
 	got := "does-not-meet"
 	if meets {

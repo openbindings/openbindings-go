@@ -322,7 +322,16 @@
   verified by reading that revision's `openbindings.md` from the spec
   repository's history and comparing its hash with the one the adapter pins
   for that revision, never against the text checked out beside the corpus.
-  A SHORTFALL against the capability profile the adapter declares fails.
+  The revision must be a full 40-hex commit of that history (`git rev-parse
+  --verify REV^{commit}` gives it back); a release named alone is reported
+  unverified, as no verification against a release snapshot exists.
+  A SHORTFALL against the capability profile the adapter declares fails, and
+  so does an omission because no document came back for a non-conformant
+  document the model carries: the adapter declares that the core continues
+  with every such document, and keys any case it cannot carry. The cases the
+  core is expected to fail (the two S3 fixtures, until G) are keyed with
+  their signatures, so the module is green at the baseline, a regression
+  fails it, and a keyed case that passes fails as stale.
   Kind retrieval is observed through a local TCP listener whose address the
   kind names, so a connection from any client counts. Each module records
   every case executed or omitted with a reason and checks the counts

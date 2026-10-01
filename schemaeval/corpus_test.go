@@ -124,6 +124,10 @@ type valueScenario struct {
 	Expected json.RawMessage `json:"expected"`
 }
 
+// uncarried keys the value cases whose non-conformant document the model
+// cannot carry, each with why. None does.
+var uncarried = map[string]string{}
+
 // contractsOf decodes the document into the model and resolves its value
 // contracts, so ValueContractCompiler.Resolve's own version decision is the
 // one exercised. carried is false when the model cannot carry the document.
@@ -183,8 +187,15 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 	switch {
 	case !carried && len(s.Given.NonConformant) == 0:
 		return fail("the model does not carry a conformant document: %v", err)
+	case !carried && uncarried[cs.ID] != "":
+		return corpus.Judgment{Category: corpus.Omitted, Detail: "the model cannot carry this non-conformant document, so this SDK does not continue with it: " + uncarried[cs.ID]}
 	case !carried:
-		return corpus.Judgment{Category: corpus.Omitted, Detail: "the model cannot carry this non-conformant document, so this SDK does not continue with it"}
+		// The model's decoding is the core's own: it continues with every
+		// non-conformant document the model carries, so a document it cannot
+		// carry is a case to key, never a silent omission.
+		return fail("the model does not carry this non-conformant document (key the case in uncarried if it cannot): %v", err)
+	case uncarried[cs.ID] != "":
+		return fail("the keyed uncarried case %s is now carried: remove its uncarried entry", cs.ID)
 	case errors.As(err, new(*openbindings.VersionRefusalError)):
 		exclusive := contracts == nil && !errors.As(err, new(*openbindings.ValidationError))
 		return corpus.JudgeValues(cs.Format, s.Expected, true, exclusive, nil, valueProfile)
