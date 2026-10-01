@@ -431,7 +431,9 @@ func TestValidateDocument_KeyFindingsAreLocatedAtTheKey(t *testing.T) {
 // Validation records the same findings in the same order every time, for a
 // document with many sibling problems across its maps, given as bytes,
 // decoded (json.Unmarshal carries its unknown members), or built in memory,
-// whose encoding is checked as bytes too. The document schema check, whose
+// whose encoding is checked as bytes too. A document the model does not
+// carry (type errors, preferences that are not in-range integers) is checked
+// as bytes alone. The document schema check, whose
 // library walks a document's objects in no fixed order, orders its findings
 // by where the failing keyword applies, then by message.
 func TestValidate_FindingsAreDeterministic(t *testing.T) {
@@ -447,6 +449,17 @@ func TestValidate_FindingsAreDeterministic(t *testing.T) {
 			"sources":{"s<":{"kind":""},"s2":{"kind":"k","zz":1}},
 			"bindings":{"b<":{"operation":"o9","source":"s9"},"b2":{"operation":"o2","source":"s2","aa":1,"zz":2},
 				"":{"operation":"o2","source":"s2"}}}`,
+	}
+	bytesOnly := map[string]string{
+		"problems in every map, with type errors": `{"openbindings":"0.2.0","zz":1,"aa":2,
+			"schemas":{"s<1>":{"type":"nope","$ref":"#/nowhere"},"ok":{"properties":{"a":{"type":3}}}},
+			"operations":{"o<1>":{"bad":1,"examples":{"e<1>":{},"e 2":{"x":1}},"aliases":["a","a","b<"]},
+				"o2":{"zz":1,"aa":[],"input":{"$ref":"#/schemas/missing"},"examples":{"f<":{}}},
+				"o3":{"aliases":["b<"],"tags":[1]}},
+			"dependencies":{"d<":{"operation":"none","kinds":[]},"d2":{"operation":3}},
+			"sources":{"s<":{"kind":""},"s2":{"kind":"k","zz":1}},
+			"bindings":{"b<":{"operation":"o9","source":"s9","preference":1.5},"b2":{"operation":"o2","source":"s2","aa":1,"zz":2},
+				"b3":{"operation":"o2","source":"s2","preference":1e400}}}`,
 	}
 	outcome := func(report ValidationReport, err error) string {
 		return fmt.Sprintf("%v\n%v", report.Findings, err)
@@ -470,6 +483,15 @@ func TestValidate_FindingsAreDeterministic(t *testing.T) {
 			t.Fatalf("%s: the model does not carry it, so its decoded route is not exercised: %v", name, err)
 		}
 		stable(name+", decoded", doc.Validate)
+	}
+	for name, text := range bytesOnly {
+		if err := json.Unmarshal([]byte(text), new(Document)); err == nil {
+			t.Fatalf("%s: the model carries it, so it belongs among the decoded fixtures", name)
+		}
+		stable(name+", as bytes", func() (ValidationReport, error) {
+			_, report, err := ValidateDocument([]byte(text))
+			return report, err
+		})
 	}
 	built := Document{OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{"s<1>": map[string]any{"type": "nope"}, "s 2": map[string]any{"$ref": "#/nowhere"}},

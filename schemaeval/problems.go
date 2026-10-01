@@ -26,13 +26,14 @@ var kindPrinter = message.NewPrinter(language.English)
 // each alternative lacked; contains and not are located at the value they
 // apply to.
 //
-// A failed propertyNames keyword is one problem, wherever in the tree and on
-// however many objects it fails, located at the root of the value and naming
-// each invalid name once, in sorted order: v6.0.3 records its instance
-// location without copying it, so below the top level a later sibling can
-// overwrite it (which sibling depends on the order the library walks an
-// object's members, which is not fixed), and how it groups the failures
-// depends on the objects' shapes.
+// A failed propertyNames keyword, outside an anyOf or oneOf alternative,
+// where the applicator's one problem states it, is one problem wherever in
+// the tree and on however many objects it fails, located at the root of the
+// value and naming each invalid name once, in sorted order: v6.0.3 records
+// its instance location without copying it, so below the top level a later
+// sibling can overwrite it (which sibling depends on the order the library
+// walks an object's members, which is not fixed), and how it groups the
+// failures depends on the objects' shapes.
 func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []openbindings.SchemaProblem {
 	names := map[string][]string{}
 	out := projected(ve, standsFor, names)

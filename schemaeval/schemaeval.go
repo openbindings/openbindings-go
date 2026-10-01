@@ -23,7 +23,8 @@
 // can overwrite it, and which one depends on the order the library walks the
 // object's members, which is not fixed; so each failed propertyNames keyword
 // is one problem, located at the root of the value whatever objects it
-// applies to, naming each invalid name once, in sorted order.
+// applies to, naming each invalid name once, in sorted order, outside an
+// anyOf or oneOf alternative, where the applicator's one problem states it.
 // openbindingstest checks it against the evaluator contract.
 //
 // # Adapting another library

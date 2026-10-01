@@ -127,7 +127,7 @@ func TestDocumentSchema_NamedMapsAreEveryConstrainedMap(t *testing.T) {
 
 // numberComparisons lists where a schema, or a subschema it describes, tells
 // numbers apart other than by type and by equality: a bound (a zero bound
-// only unless withZero allows comparison with zero), a multipleOf, or a
+// too, unless withZero allows comparison with zero), a multipleOf, or a
 // number in const or enum, each as a JSON Pointer to the keyword. A stand-in
 // for a number beyond the numeric limits of schema evaluation keeps type,
 // equality, and comparison with zero (schemacompiler.Substitute).
