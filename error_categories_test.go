@@ -106,7 +106,7 @@ func TestCategories_MarshalerErrorsAreNotVerdicts(t *testing.T) {
 	}
 	for name, err := range said {
 		for form, failure := range map[string]error{
-			"":         err,
+			"":          err,
 			", wrapped": fmt.Errorf("marshaler: %w", err),
 			", joined":  errors.Join(errors.New("marshaler"), err),
 		} {
