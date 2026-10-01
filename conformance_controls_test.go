@@ -81,7 +81,7 @@ func TestAppliedTextControls(t *testing.T) {
 // The name a conclusion gives is compared always, before verification: a
 // wrong name fails even when the pinned bytes are verified.
 func TestJudgeNamingControls(t *testing.T) {
-	const rev = "98127021a7e2fa08a8c7b2e6bead1c847c9b6e1f"
+	const rev = appliedRevision
 	report := func(version, revision string) ValidationReport {
 		return ValidationReport{Conclusion: ConclusionConformant, Version: version, Revision: revision}
 	}

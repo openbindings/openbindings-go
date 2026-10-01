@@ -45,6 +45,15 @@
 
 ### Changed
 
+- **The SDK applies the revised 0.2 working draft.** The text it applies,
+  which a report names (`ValidationReport.Revision`) and Go CI checks the
+  spec repository out at, moves from `98127021` to `99f8acd5`, whose
+  `openbindings.md` (sha256 `95846137…0198`) carries the checkpoint 1 and 2
+  rulings: R1 and R2 in OBI-T-09, and S1 to S6 with the OBI-D-01 note. The
+  corpus adapter pins that revision's hash beside it. The document schema
+  is unchanged; it was synced from that revision and compared byte for
+  byte. The entries below marked with a ruling are the behavior the revised
+  text changes.
 - **The model's types and lookups take the spec's names (breaking,
   pre-1.0).** `Interface` is `Document`, `BindingEntry` is `Binding`, and
   `DependencyEntry` is `Dependency`, the spec's terms (§3);
