@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -393,18 +394,21 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 // Validation of a host object judges the document it encodes, so an object
 // the model cannot encode exactly is not validated: an escaped lone surrogate
 // the encoding would have replaced with U+FFFD no longer passes a const of
-// U+FFFD.
+// U+FFFD. A lone surrogate is valid JSON text a Go string cannot carry, a
+// capability limit of this SDK (§10.4), so the report is undetermined,
+// deciding OBI-D-09 alone, as ValidateDocument decides such bytes, and
+// Resolve's error matches ErrInconclusive.
 func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 	iface := Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
 		Input:    map[string]any{"const": "\ufffd"},
 		Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"\ud800"`)}},
 	}}}
-	if report, err := iface.Validate(); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
-		t.Fatalf("want an encoding error and no report, got %v, %+v", err, report)
+	if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
+		t.Fatalf("want an undetermined report deciding OBI-D-09 alone, got %v, %+v", err, report)
 	}
 	compiler, _ := NewValueContractCompiler(testEvaluator{})
-	if _, err := compiler.Resolve(context.Background(), &iface); err == nil || errors.Is(err, ErrNoVerdict) {
-		t.Fatalf("want an encoding error, got %v", err)
+	if _, err := compiler.Resolve(context.Background(), &iface); !errors.Is(err, ErrInconclusive) || errors.Is(err, ErrNoVerdict) {
+		t.Fatalf("want an error matching ErrInconclusive, got %v", err)
 	}
 }
 
@@ -413,8 +417,10 @@ func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 // keys could even become one name), in a struct a schema holds too; a value
 // that holds itself, through the model's own types as well; a member name
 // both Extensions and Unknown hold; and raw JSON in a schema that decoding
-// would refuse. Validate returns
-// the encoding error, never a report on another document.
+// would refuse. Validate returns the encoding error, never a report on
+// another document, except for raw JSON escaping a lone surrogate, which is
+// this SDK's own limit: there Validate reports undetermined, deciding only
+// OBI-D-09.
 func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 	text := func(s string) *string { return &s }
 	selfHolding := Operation{}
@@ -440,14 +446,24 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 			Extensions: map[string]json.RawMessage{"x-a": json.RawMessage(`1`)}, Unknown: map[string]json.RawMessage{"x-a": json.RawMessage(`2`)}}},
 		"raw JSON in a schema repeating a name": {OpenBindings: "0.2.0", Operations: map[string]Operation{
 			"op": {Input: json.RawMessage(`{"type":"string","type":"integer"}`)}}},
-		"raw JSON in a schema escaping a lone surrogate": {OpenBindings: "0.2.0", Operations: map[string]Operation{
-			"op": {Input: json.RawMessage(`{"const":"\ud800"}`)}}},
 	} {
 		if data, err := json.Marshal(iface); err == nil {
 			t.Errorf("%s: encoded %s", name, data)
 		}
 		if report, err := iface.Validate(); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
 			t.Errorf("%s: want the encoding error and no report, got %v", name, err)
+		}
+	}
+
+	for name, iface := range map[string]Document{
+		"raw JSON in a schema escaping a lone surrogate": {OpenBindings: "0.2.0", Operations: map[string]Operation{
+			"op": {Input: json.RawMessage(`{"const":"\ud800"}`)}}},
+	} {
+		if data, err := json.Marshal(iface); err == nil {
+			t.Errorf("%s: encoded %s", name, data)
+		}
+		if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
+			t.Errorf("%s: want an undetermined report deciding OBI-D-09 alone, got %v, %+v", name, err, report)
 		}
 	}
 

@@ -41,12 +41,17 @@ import (
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (OBI-T-04). A
-// document nesting deeper than encoding/json reads (10000 levels) is beyond
-// this SDK's own limit, as it is for ValidateDocument: the model does not
-// write it, so the report decides OBI-D-09, on the declared version, and
+// document beyond this SDK's own limits, as ValidateDocument meets them in
+// bytes, gets a report the same way: one nesting deeper than encoding/json
+// reads (10000 levels), or holding, in JSON text the model carries as given
+// (a member it carries as raw JSON, or a schema held as a json.RawMessage),
+// a string escaping a lone UTF-16 surrogate, which a Go string cannot carry.
+// The model has no text for such a document, so OBI-D-01 stays
+// inconclusive; the report decides OBI-D-09, on the declared version, and
 // leaves every other rule inconclusive. A host object that cannot be encoded
-// otherwise (a NaN, a channel, invalid UTF-8) returns an error and no report,
-// as does one holding, in a member the model carries as raw JSON, other bytes
+// for a reason of its own (a NaN, a channel, invalid UTF-8 in a Go string, a
+// marshaler's error) returns an error matching no category, and no report, as
+// does one holding, in a member the model carries as raw JSON, other bytes
 // decoding would refuse: the model encodes only what it would decode back
 // unchanged.
 func (d Document) Validate() (ValidationReport, error) {
@@ -54,12 +59,12 @@ func (d Document) Validate() (ValidationReport, error) {
 		return ValidationReport{}, refusal
 	}
 	view, err := documentView(d)
-	if errors.Is(err, errNestingLimit) {
+	if limit := (*modelLimitError)(nil); errors.As(err, &limit) {
 		// Only the declared version is read, as ValidateDocument reads it
-		// from bytes nesting so deep; a version that is not UTF-8 would not
-		// be written as held, so it is not read either.
+		// from such bytes; a version that is not UTF-8 would not be written
+		// as held, so it is not read either.
 		c := ruleChecks{version: appliedRelease, revision: appliedRevision}
-		reason := fmt.Sprintf("the document is %v, so the model does not write it and this rule was not checked", errNestingLimit)
+		reason := fmt.Sprintf("the document %s, so the model does not write it and this rule was not checked", limit.what)
 		if !utf8.ValidString(d.OpenBindings) {
 			c.inconclusiveExcept(reason)
 			return c.conclude()
@@ -159,16 +164,35 @@ func d01Violation(data []byte, err error) Finding {
 	return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err), Position: d01Position(data, err)}
 }
 
+// modelLimitError reports a document the model does not write because it
+// holds what this SDK cannot read or carry, which is no defect of the value
+// (§10.4): it nests deeper than encoding/json reads, or holds, in a member
+// carried as raw JSON, a string escaping a lone UTF-16 surrogate. It matches
+// ErrInconclusive.
+type modelLimitError struct {
+	// what says what the document holds, as "the document <what>".
+	what string
+}
+
+func (e *modelLimitError) Error() string {
+	return ErrInconclusive.Error() + ": the document " + e.what + ", so it is not read"
+}
+
+func (e *modelLimitError) Is(target error) bool { return target == ErrInconclusive }
+
 // documentView encodes a host document and decodes the generic JSON view the
-// document rules judge. A document nesting deeper than encoding/json reads,
-// which the model does not write, is this SDK's own limit, and the error
-// matches ErrInconclusive (and errNestingLimit). Any other encoding failure
-// is the value's, and is kept as text: it can be a marshaler's own error held
-// in a schema, which may say anything, and it must match no category.
+// document rules judge. A document beyond this SDK's own limits, which the
+// model does not write, returns a *modelLimitError. Any other encoding
+// failure is the value's, and is kept as text: it can be a marshaler's own
+// error held in a schema, which may say anything, and it must match no
+// category.
 func documentView(d Document) (any, error) {
 	data, err := json.Marshal(d)
 	if errors.Is(err, errNestingLimit) {
-		return nil, fmt.Errorf("%w: the document is %w, so it is not read", ErrInconclusive, errNestingLimit)
+		return nil, &modelLimitError{what: "is " + errNestingLimit.Error()}
+	}
+	if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
+		return nil, &modelLimitError{what: "holds an escape of a lone UTF-16 surrogate, which this SDK does not carry"}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("openbindings: encode document: %v", err)

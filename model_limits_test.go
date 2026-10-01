@@ -31,14 +31,18 @@ func decidedRules(report ValidationReport) []string {
 	return decided
 }
 
-// A document nesting deeper than encoding/json reads is beyond this SDK's own
-// limit whether it arrives as bytes or in memory: in memory, Validate reports
-// conformance undetermined, deciding OBI-D-09 alone, and References and
-// Resolve return an error matching ErrInconclusive, as ParseDocument does for
-// the bytes.
-func TestNestingLimit_InMemory(t *testing.T) {
+// A document beyond this SDK's own limits, nesting deeper than encoding/json
+// reads or holding a string escaping a lone UTF-16 surrogate, is classified
+// the same whether it arrives as bytes or in memory: in memory, Validate
+// reports conformance undetermined, deciding OBI-D-09 alone, and References
+// and Resolve return an error matching ErrInconclusive, as ParseDocument does
+// for the bytes.
+func TestModelLimits_InMemory(t *testing.T) {
 	deepSchema := nestedSchema(10001)
 	deepRaw := json.RawMessage(strings.Repeat("[", 10001) + strings.Repeat("]", 10001))
+	// The escape is built from the backslash's code point so that no cleanup
+	// of the source can turn it into a character.
+	lone := `"` + string(rune(92)) + `ud800"`
 	compiler, err := NewValueContractCompiler(testEvaluator{})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +53,15 @@ func TestNestingLimit_InMemory(t *testing.T) {
 		},
 		"source content": func(version string) *Document {
 			return &Document{OpenBindings: version, Operations: map[string]Operation{}, Sources: map[string]Source{"s": {Kind: "k", Content: deepRaw}}}
+		},
+		"a lone surrogate in an example": func(version string) *Document {
+			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Examples: map[string]OperationExample{"e": {Input: json.RawMessage(lone)}}}}}
+		},
+		"a lone surrogate in an extension": func(version string) *Document {
+			return &Document{OpenBindings: version, Operations: map[string]Operation{}, LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-note": json.RawMessage(lone)}}}
+		},
+		"a lone surrogate in a raw schema": func(version string) *Document {
+			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: json.RawMessage(`{"const":` + lone + `}`)}}}
 		},
 	} {
 		report, err := build("0.2.0").Validate()
@@ -71,13 +84,17 @@ func TestNestingLimit_InMemory(t *testing.T) {
 		}
 	}
 
-	// The same schema as bytes.
-	text := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":` + strings.Repeat(`{"not":`, 10001) + `{}` + strings.Repeat(`}`, 10001) + `}}}`)
-	if _, err := ParseDocument(text); !errors.Is(err, ErrInconclusive) {
-		t.Errorf("ParseDocument: %v", err)
-	}
-	if _, report, err := ValidateDocument(text); err != nil || report.Conclusion != ConclusionConformanceUndetermined {
-		t.Errorf("ValidateDocument: %s, %v", report.Conclusion, err)
+	// The same limits as bytes.
+	for name, text := range map[string]string{
+		"a schema":         `{"openbindings":"0.2.0","operations":{"op":{"input":` + strings.Repeat(`{"not":`, 10001) + `{}` + strings.Repeat(`}`, 10001) + `}}}`,
+		"a lone surrogate": `{"openbindings":"0.2.0","operations":{"op":{"examples":{"e":{"input":` + lone + `}}}}}`,
+	} {
+		if _, err := ParseDocument([]byte(text)); !errors.Is(err, ErrInconclusive) {
+			t.Errorf("%s as bytes, ParseDocument: %v", name, err)
+		}
+		if _, report, err := ValidateDocument([]byte(text)); err != nil || report.Conclusion != ConclusionConformanceUndetermined {
+			t.Errorf("%s as bytes, ValidateDocument: %s, %v", name, report.Conclusion, err)
+		}
 	}
 }
 
@@ -85,7 +102,7 @@ func TestNestingLimit_InMemory(t *testing.T) {
 // defect, not this SDK's limit: Validate, References, and Resolve return an
 // error matching no category, whatever a marshaler in the document says, and
 // no report.
-func TestNestingLimit_EncodingDefectsMatchNoCategory(t *testing.T) {
+func TestModelLimits_EncodingDefectsMatchNoCategory(t *testing.T) {
 	compiler, err := NewValueContractCompiler(testEvaluator{})
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +114,9 @@ func TestNestingLimit_EncodingDefectsMatchNoCategory(t *testing.T) {
 		"a NaN":         withInput(map[string]any{"maximum": math.NaN()}),
 		"a channel":     withInput(map[string]any{"const": make(chan int)}),
 		"invalid UTF-8": {OpenBindings: "0.2.0", Operations: map[string]Operation{}, Description: Present("caf\xff")},
+		// A Go string cannot hold a lone surrogate; its bytes are invalid
+		// UTF-8, the caller's defect.
+		"a surrogate's bytes in a Go string": {OpenBindings: "0.2.0", Operations: map[string]Operation{}, Name: Present("\xed\xa0\x80")},
 	}
 	for _, said := range []error{ErrInconclusive, ErrNoVerdict, ErrMismatch, &NoVerdictError{Cause: errors.New("made by the marshaler")}} {
 		documents["a marshaler in a schema saying "+said.Error()] = withInput(failingMarshaler{said})

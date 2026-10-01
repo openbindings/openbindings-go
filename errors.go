@@ -38,10 +38,11 @@ var (
 	// *VersionRefusalError and a *ValidationError; by
 	// ValueContractCompiler.Resolve's and Document.References' errors for a
 	// document declaring no valid version, which they do not interpret, and
-	// for one nesting deeper than encoding/json reads, which this SDK does
-	// not read; by Document.References' error for an index it could not
-	// complete; and by ValueContract.Validate's and ValidateJSON's errors for
-	// input that is not one JSON value.
+	// for one beyond this SDK's own limits, nesting deeper than encoding/json
+	// reads or holding a string escaping a lone UTF-16 surrogate, which the
+	// model does not write; by Document.References' error for an index it
+	// could not complete; and by ValueContract.Validate's and ValidateJSON's
+	// errors for input that is not one JSON value.
 	ErrInconclusive = errors.New("openbindings: inconclusive")
 
 	// ErrOperationNotFound is wrapped by the errors returned for a name that
