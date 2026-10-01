@@ -307,6 +307,12 @@ func reportAgreesWithFixture(data []byte, tt conformanceTest) []string {
 	if !refused && report.Conclusion != ConclusionNonConformant {
 		problems = append(problems, fmt.Sprintf("ValidateDocument concluded %s for a violating case", report.Conclusion))
 	}
+	// A version refusal is no validity verdict. Only format @1's refusal
+	// fixtures, which list OBI-T-04, expect one; any other violating case
+	// expects a non-conformant conclusion.
+	if refused && !slices.Contains(tt.Violates, "OBI-T-04") {
+		problems = append(problems, fmt.Sprintf("ValidateDocument refused a violating case the fixture holds to document rules: %v", err))
+	}
 	for _, rule := range tt.Violates {
 		switch {
 		case rule == "OBI-T-04": // format @1's refusal fixtures
@@ -407,6 +413,15 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 		}
 	}
 	if s.Expected.NamesAppliedText {
+		if declared, ok := declaredVersion(data); ok && includedPrerelease(declared) {
+			// A conclusion on a document declaring an explicitly included
+			// prerelease names that prerelease (OBI-T-09). The corpus holds
+			// no text for a draft, so there is no text to verify.
+			if named, err := parseSemverStrict(report.Version); err != nil || compareSemver(named, mustSemver(declared)) != 0 {
+				return fail("names %q; a conclusion on a document declaring the included prerelease %q names that prerelease", report.Version, declared)
+			}
+			return pass(string(report.Conclusion))
+		}
 		if report.Version != appliedRelease || report.Revision != appliedRevision {
 			return fail("names %q@%q; the applied text is %q@%q", report.Version, report.Revision, appliedRelease, appliedRevision)
 		}
@@ -418,6 +433,26 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 		}
 	}
 	return pass(string(report.Conclusion))
+}
+
+// includedPrerelease reports whether v is a prerelease this SDK names
+// explicitly in supportedPrereleases.
+func includedPrerelease(v string) bool {
+	parsed, err := parseSemverStrict(v)
+	if err != nil || len(parsed.preRelease) == 0 {
+		return false
+	}
+	return slices.ContainsFunc(supportedPrereleases, func(p string) bool {
+		return compareSemver(parsed, mustSemver(p)) == 0
+	})
+}
+
+func mustSemver(v string) semver {
+	parsed, err := parseSemverStrict(v)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }
 
 // judgeResolve executes resolve-operation: the model ValidateDocument
