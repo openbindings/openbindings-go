@@ -94,11 +94,14 @@
   `ErrInconclusive`, where all three returned an untyped encoding error. A
   document that fails to encode at all still gets an error matching no
   category and no report, whatever the failure carries: a failure from
-  encoding/json, which includes raw JSON nesting past its own depth, or from
-  any marshaler outside the model's own members, a caller's or one of the
-  SDK's types placed inside a schema. So raw JSON within encoding/json's
-  depth that makes the whole document too deep, or that holds a lone
-  surrogate, is the SDK's limit. `Document.Validate` states this boundary.
+  encoding/json, which includes raw JSON a schema holds nesting past its own
+  depth, or from any marshaler outside the model's own members, a caller's
+  or one of the SDK's types placed inside a schema. So raw JSON a schema
+  holds within encoding/json's depth that makes the whole document too
+  deep, or that holds a lone surrogate, is the SDK's limit. A document
+  holding both kinds of defect is decided by the first that encoding meets,
+  and each schema is encoded once, so a caller's marshaler runs once per
+  encoding. `Document.Validate` states this boundary and the order.
 - **A raw JSON value reads as JSON text.** `ValueContract.Validate` reads a
   `json.RawMessage` or `*json.RawMessage` that is the value exactly as
   `ValidateJSON` reads the same bytes, so text nesting past the decoder is

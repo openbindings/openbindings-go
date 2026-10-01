@@ -147,3 +147,30 @@ func TestModelLimits_EncodingDefectsMatchNoCategory(t *testing.T) {
 		t.Errorf("a nil document: %v", err)
 	}
 }
+
+// reorderedMembers holds a schema after a member holding OBI-defined
+// objects, the reverse of the model's own field order.
+type reorderedMembers struct {
+	Examples map[string]OperationExample `json:"examples,omitzero"`
+	Input    JSONSchema                  `json:"input,omitempty"`
+}
+
+// Which failure decides does not depend on field order: an object encodes its
+// schemas before its other members, so a schema that fails decides even
+// after a member holding this SDK's limit, while the members are still
+// written in field order.
+func TestEncodeObject_SchemasFirstWhateverTheFieldOrder(t *testing.T) {
+	lone := map[string]OperationExample{"e": {Input: json.RawMessage(`"` + string(rune(92)) + `ud800"`)}}
+	_, err := encodeObject(reorderedMembers{Examples: lone, Input: map[string]any{"maximum": math.NaN()}}, LosslessFields{})
+	if err == nil || ownLimit(err) != "" {
+		t.Errorf("a failing schema after an example's limit: %v (limit %q), want the schema's failure", err, ownLimit(err))
+	}
+	_, err = encodeObject(reorderedMembers{Examples: lone, Input: true}, LosslessFields{})
+	if ownLimit(err) == "" {
+		t.Errorf("an example's limit beside a schema that encodes: %v, want the limit", err)
+	}
+	data, err := encodeObject(reorderedMembers{Examples: map[string]OperationExample{"e": {}}, Input: true}, LosslessFields{})
+	if want := `{"examples":{"e":{}},"input":true}`; err != nil || string(data) != want {
+		t.Errorf("encoded %s, %v, want %s", data, err, want)
+	}
+}

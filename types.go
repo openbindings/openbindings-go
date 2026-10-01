@@ -31,11 +31,12 @@ import (
 //     byte slice without JSON methods is written as a base64 string, which is
 //     no schema.
 //
-// A schema that fails to encode is an encoding failure, never this SDK's
-// limit, whatever the failure carries: a marshaler's error, text a
-// marshaler writes past encoding/json's depth, or a refusal by one of this
-// package's types placed in the schema. Document.Validate states the
-// boundary.
+// Encoding a document encodes each schema it holds once, so a marshaler a
+// schema holds runs once per encoding. A schema that fails to encode is an
+// encoding failure, never this SDK's limit, whatever the failure carries: a
+// marshaler's error, text a marshaler writes past encoding/json's depth, or
+// a refusal by one of this package's types placed in the schema.
+// Document.Validate states the boundary.
 //
 // A caller decoding schema text itself keeps its numbers exact by holding the
 // text as a json.RawMessage, or by decoding with a json.Decoder set to

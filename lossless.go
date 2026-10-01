@@ -304,6 +304,12 @@ func preferenceValue(token string) (int64, bool) {
 // name order. It escapes no HTML itself: the encoder that calls MarshalJSON
 // decides, so json.Marshal escapes <, >, and & as it does everywhere, and an
 // encoder set not to (SetEscapeHTML(false)) writes them as held.
+//
+// It checks in this order, and the first failure met decides: the members
+// it carries as raw JSON; the Go strings it holds, and whether a value holds
+// itself; its schemas, each encoded once; its other typed members, an
+// OBI-defined object among them encoded the same way; and, with core's scan,
+// the text it wrote.
 func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyRawMembers(typed, lossless); err != nil {
 		return nil, err
@@ -311,14 +317,16 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyStrings(typed, lossless); err != nil {
 		return nil, err
 	}
-	data, err := marshalUnescaped(typed)
+	schemas, others, err := encodeSchemas(typed)
 	if err != nil {
-		if unencodableSchema(typed) {
-			// The failure is a schema's, the caller's value: kept as text, it
-			// never reads as this SDK's limit, whatever it carries.
-			return nil, errors.New(err.Error())
-		}
 		return nil, err
+	}
+	data, err := marshalUnescaped(others)
+	if err != nil {
+		return nil, err
+	}
+	if len(schemas) > 0 {
+		data = withSchemas(data, reflect.TypeOf(typed), schemas)
 	}
 	typedNames := membersOf(reflect.TypeOf(typed)).typed
 	kept := map[string]json.RawMessage{}
@@ -362,24 +370,74 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	return data, nil
 }
 
-// unencodableSchema reports whether a schema an OBI-defined object holds (an
-// operation's input or output, the document's schemas) fails to encode on
-// its own. A schema is the caller's value, which encoding/json writes as the
-// caller built it, so its failure is the caller's whatever its error
-// carries, a refusal by one of this package's types placed in it included
-// (see ownLimit).
-func unencodableSchema(typed any) bool {
+// encodeSchemas encodes, once each, the schema members an OBI-defined object
+// holds (an operation's input and output, the document's schemas), by member
+// name, and returns typed without them. A schema member is present exactly
+// when its Go value is not nil. A schema is the caller's value, which
+// encoding/json writes as the caller built it, so a failure to encode one is
+// the caller's whatever its error carries, a refusal by one of this
+// package's types placed in it included: it is kept as text, so it never
+// reads as this SDK's limit (see ownLimit). Encoding each once means a
+// caller's marshaler runs once per encoding, and encoding them before the
+// object's other members means which failure decides never depends on field
+// order.
+func encodeSchemas(typed any) (map[string][]byte, any, error) {
 	value := reflect.ValueOf(typed)
+	var schemas map[string][]byte
+	var others reflect.Value
 	for _, field := range membersOf(value.Type()).fields {
 		held := value.Field(field.index)
-		if t := held.Type(); t != jsonSchemaType && (t.Kind() != reflect.Map || t.Elem() != jsonSchemaType) {
+		t := held.Type()
+		if isSchema := t == jsonSchemaType || t.Kind() == reflect.Map && t.Elem() == jsonSchemaType; !isSchema || held.IsNil() {
 			continue
 		}
-		if _, err := marshalUnescaped(held.Interface()); err != nil {
-			return true
+		data, err := marshalUnescaped(held.Interface())
+		if err != nil {
+			return nil, nil, errors.New(err.Error())
 		}
+		if schemas == nil {
+			schemas = map[string][]byte{}
+			others = reflect.New(value.Type()).Elem()
+			others.Set(value)
+		}
+		schemas[field.name] = data
+		others.Field(field.index).SetZero()
 	}
-	return false
+	if schemas == nil {
+		return nil, typed, nil
+	}
+	return schemas, others.Interface(), nil
+}
+
+// withSchemas writes the encoded schemas into data, the encoding of an
+// object's other typed members, each at its member's place in field order.
+// They are written as encoded, not handed back to encoding/json as raw JSON,
+// which would compact them again and refuse a schema deeper than it reads as
+// a syntax error of its own: that depth is core's scan to find.
+func withSchemas(data []byte, t reflect.Type, schemas map[string][]byte) []byte {
+	entries, _ := splitObject(data) // encoding/json wrote it
+	written := make(map[string][]byte, len(entries)+len(schemas))
+	for _, entry := range entries {
+		written[entry.name] = entry.value
+	}
+	maps.Copy(written, schemas)
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for _, field := range membersOf(t).fields {
+		value, present := written[field.name]
+		if !present {
+			continue
+		}
+		if b.Len() > 1 {
+			b.WriteByte(',')
+		}
+		name, _ := marshalUnescaped(field.name)
+		b.Write(name)
+		b.WriteByte(':')
+		b.Write(value)
+	}
+	b.WriteByte('}')
+	return b.Bytes()
 }
 
 // marshalUnescaped encodes v as json.Marshal does, but escaping no HTML.

@@ -60,18 +60,25 @@ import (
 //     no category, and no report, whatever the error carries. It can come
 //     from a value encoding/json does not write as held (a NaN, a channel, a
 //     cycle, invalid UTF-8 in a Go string, which it would replace, raw JSON
-//     it will not compact, which includes raw JSON nesting past its own
-//     depth), or from any marshaler outside the model's own members: a
-//     caller's, or one of this package's types placed inside a schema. A
+//     in a schema it will not compact, which includes raw JSON nesting past
+//     its own depth), or from any marshaler outside the model's own members:
+//     a caller's, or one of this package's types placed inside a schema. A
 //     model type's refusal of other bytes in a raw member, and text core's
 //     scan refuses for another reason (a member name repeated in raw JSON),
 //     are encoding failures too: the model writes only what it would decode
 //     back unchanged.
 //
-// So raw JSON within encoding/json's depth that makes the whole document nest
-// too deep, or that holds an escaped lone surrogate, is this SDK's limit, and
-// raw JSON nesting past encoding/json's depth on its own is an encoding
-// failure.
+// So raw JSON a schema holds is this SDK's limit when it holds an escaped
+// lone surrogate, or stays within encoding/json's depth but makes the whole
+// document nest too deep, and an encoding failure when it nests past
+// encoding/json's depth on its own; in a member the model carries as raw
+// JSON, nesting past that depth is this SDK's limit, as the first bullet
+// says. A document holding both kinds of defect is decided by the first that
+// encoding meets. Each object the model encodes checks, in order, the
+// members it carries as raw JSON; the Go strings it holds, and any value
+// that holds itself; its schemas, each encoded once; its other members, each
+// object among them checked in this same order; and the text it wrote, with
+// core's scan.
 func (d Document) Validate() (ValidationReport, error) {
 	if refusal := versionRefusalOf(d.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
@@ -190,7 +197,7 @@ func d01Violation(data []byte, err error) Finding {
 // returned, which may carry any error, a limit this SDK reported elsewhere
 // (from ParseDocument, say) included; nor a schema's failure, which
 // encodeObject keeps as text, so one of this package's types placed in a
-// schema is the caller's marshaler too (unencodableSchema).
+// schema is the caller's marshaler too (encodeSchemas).
 func ownLimit(err error) string {
 	for err != nil {
 		if failure, isMarshaler := err.(*json.MarshalerError); isMarshaler {

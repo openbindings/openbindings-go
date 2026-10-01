@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -151,22 +153,47 @@ type marshalerField struct {
 	Const json.Marshaler `json:"const"`
 }
 
+// streamedSchema is a caller's schema read from a stream, which it can
+// encode once: a second encoding writes nothing, which is not JSON.
+type streamedSchema struct{ r io.Reader }
+
+func (s *streamedSchema) MarshalJSON() ([]byte, error) { return io.ReadAll(s.r) }
+
 // The boundary of a document in memory, as Document.Validate states it: what
 // core finds in the text the document encodes to, or this package's types
 // find in the members they carry as raw JSON, is this SDK's limit; a failure
 // to encode at all is an encoding failure matching no category, whatever its
 // error carries, from encoding/json or from any marshaler but the model's on
 // its own members, this package's own types placed inside a schema included.
-// Each side is pinned through Validate, References, and Resolve, and a value
-// encoding/json writes without a failure keeps its plain result.
+// A document holding both kinds of defect is decided by the first that
+// encoding meets: an object's raw members, then its schemas, then its other
+// members, then the text. Each side is pinned through Validate, References,
+// and Resolve, each given a document built afresh, and a value encoding/json
+// writes without a failure keeps its plain result. Validate gives the same
+// side for a document declaring no valid version, where References and
+// Resolve read nothing, and refuses one declaring an unsupported version.
 func TestModelLimits_Boundary(t *testing.T) {
 	backslash := string(rune(92)) // built, so that no cleanup turns the escape into a character
 	lone := `"` + backslash + `ud800"`
 	deep := json.RawMessage(strings.Repeat(`{"not":`, 10001) + `{}` + strings.Repeat(`}`, 10001))
 	within := json.RawMessage(strings.Repeat(`{"not":`, 9999) + `{}` + strings.Repeat(`}`, 9999))
 	loneSource := openbindings.Source{Kind: "k", Content: json.RawMessage(lone)}
-	withInput := func(input any) *openbindings.Document {
-		return &openbindings.Document{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: input}}}
+	loneExample := map[string]openbindings.OperationExample{"e": {Input: json.RawMessage(lone)}}
+	loneKept := openbindings.LosslessFields{Extensions: map[string]json.RawMessage{"x-note": json.RawMessage(lone)}}
+	nan := map[string]any{"maximum": math.NaN()}
+	document := func(version string, operations map[string]openbindings.Operation, schemas map[string]openbindings.JSONSchema) *openbindings.Document {
+		if operations == nil {
+			operations = map[string]openbindings.Operation{}
+		}
+		return &openbindings.Document{OpenBindings: version, Operations: operations, Schemas: schemas}
+	}
+	operation := func(op openbindings.Operation) map[string]openbindings.Operation {
+		return map[string]openbindings.Operation{"op": op}
+	}
+	withInput := func(input any) func(string) *openbindings.Document {
+		return func(version string) *openbindings.Document {
+			return document(version, operation(openbindings.Operation{Input: input}), nil)
+		}
 	}
 	const (
 		limit   = "the SDK's limit"
@@ -174,13 +201,17 @@ func TestModelLimits_Boundary(t *testing.T) {
 		plain   = "conformant"
 	)
 	documents := map[string]struct {
-		doc  *openbindings.Document
-		side string
+		build func(version string) *openbindings.Document
+		side  string
 	}{
 		// Raw JSON past encoding/json's depth, which it refuses to compact.
-		"raw JSON past the decoder's depth as a schema":                                  {withInput(deep), failure},
-		"raw JSON past the decoder's depth within a schema":                              {&openbindings.Document{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Output: map[string]any{"properties": map[string]any{"a": deep}}}}}, failure},
-		"raw JSON past the decoder's depth as a schemas entry":                           {&openbindings.Document{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{}, Schemas: map[string]openbindings.JSONSchema{"Deep": &deep}}, failure},
+		"raw JSON past the decoder's depth as a schema": {withInput(deep), failure},
+		"raw JSON past the decoder's depth within a schema": {func(version string) *openbindings.Document {
+			return document(version, operation(openbindings.Operation{Output: map[string]any{"properties": map[string]any{"a": deep}}}), nil)
+		}, failure},
+		"raw JSON past the decoder's depth as a schemas entry": {func(version string) *openbindings.Document {
+			return document(version, nil, map[string]openbindings.JSONSchema{"Deep": &deep})
+		}, failure},
 		"raw JSON past the decoder's depth, promoted from an unexported embedded struct": {withInput(promotesRaw{embeddedRaw{Not: deep}}), failure},
 		// Raw JSON encoding/json writes, which core's scan reads.
 		"raw JSON within the decoder's depth the document makes too deep": {withInput(within), limit},
@@ -189,29 +220,67 @@ func TestModelLimits_Boundary(t *testing.T) {
 		"a repeated name in raw JSON as a schema":                         {withInput(json.RawMessage(`{"type":"string","type":"number"}`)), failure},
 		// This package's types: a limit on the model's own members, an
 		// encoding failure inside a schema.
-		"a lone surrogate in a source's content":                    {&openbindings.Document{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{}, Sources: map[string]openbindings.Source{"s": loneSource}}, limit},
-		"that source in a schema, behind json.Marshaler":            {withInput(marshalerField{Const: loneSource}), failure},
-		"that source in a schema, behind any":                       {withInput(map[string]any{"const": loneSource}), failure},
-		"that source as a schema":                                   {withInput(loneSource), failure},
-		"that source as a schemas entry":                            {&openbindings.Document{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{}, Schemas: map[string]openbindings.JSONSchema{"S": loneSource}}, failure},
-		"an operation holding that source's content, in a schema":   {withInput(map[string]any{"const": openbindings.Operation{Examples: map[string]openbindings.OperationExample{"e": {Input: json.RawMessage(lone)}}}}), failure},
-		"an omitempty raw member left empty":                        {withInput(omittedRaw{Type: "string", Not: json.RawMessage{}}), plain},
-		"a pointer marshaler not writing raw JSON past the depth":   {withInput(&holdsAddressed{Not: addressedMarshaler{Raw: deep}}), plain},
-		"a pointer marshaler not writing raw JSON that is not JSON": {withInput(&holdsAddressed{Not: addressedMarshaler{Raw: json.RawMessage(`{`)}}), plain},
+		"a lone surrogate in a source's content": {func(version string) *openbindings.Document {
+			d := document(version, nil, nil)
+			d.Sources = map[string]openbindings.Source{"s": loneSource}
+			return d
+		}, limit},
+		"that source in a schema, behind json.Marshaler": {withInput(marshalerField{Const: loneSource}), failure},
+		"that source in a schema, behind any":            {withInput(map[string]any{"const": loneSource}), failure},
+		"that source as a schema":                        {withInput(loneSource), failure},
+		"that source as a schemas entry": {func(version string) *openbindings.Document {
+			return document(version, nil, map[string]openbindings.JSONSchema{"S": loneSource})
+		}, failure},
+		"an operation holding a lone surrogate in an example, in a schema": {withInput(map[string]any{"const": openbindings.Operation{Examples: loneExample}}), failure},
+		"an omitempty raw member left empty":                               {withInput(omittedRaw{Type: "string", Not: json.RawMessage{}}), plain},
+		"a pointer marshaler not writing raw JSON past the depth":          {withInput(&holdsAddressed{Not: addressedMarshaler{Raw: deep}}), plain},
+		"a pointer marshaler not writing raw JSON that is not JSON":        {withInput(&holdsAddressed{Not: addressedMarshaler{Raw: json.RawMessage(`{`)}}), plain},
+		// A schema a caller can encode only once, beside a limit core finds
+		// after it: the schema is encoded once, so the limit stands.
+		"a streamed schema beside a lone surrogate in a source's content": {func(version string) *openbindings.Document {
+			d := document(version, nil, map[string]openbindings.JSONSchema{"S": &streamedSchema{strings.NewReader(`{}`)}})
+			d.Sources = map[string]openbindings.Source{"s": loneSource}
+			return d
+		}, limit},
+		"a streamed schema beside a lone surrogate in an operation's raw schema": {func(version string) *openbindings.Document {
+			return document(version, operation(openbindings.Operation{Input: json.RawMessage(`{"const":` + lone + `}`)}), map[string]openbindings.JSONSchema{"S": &streamedSchema{strings.NewReader(`{}`)}})
+		}, limit},
+		// Both kinds of defect: the first that encoding meets decides, raw
+		// members before schemas before the object's other members.
+		"a lone surrogate in an operation's kept member, and a NaN in its input": {func(version string) *openbindings.Document {
+			return document(version, operation(openbindings.Operation{Input: nan, LosslessFields: loneKept}), nil)
+		}, limit},
+		"a lone surrogate in the document's kept member, and a NaN in its schemas": {func(version string) *openbindings.Document {
+			d := document(version, nil, map[string]openbindings.JSONSchema{"S": nan})
+			d.LosslessFields = loneKept
+			return d
+		}, limit},
+		"a lone surrogate in an example, and a NaN in the operation's input": {func(version string) *openbindings.Document {
+			return document(version, operation(openbindings.Operation{Input: nan, Examples: loneExample}), nil)
+		}, failure},
+		"a lone surrogate in an example, and an output that fails": {func(version string) *openbindings.Document {
+			return document(version, operation(openbindings.Operation{Output: callerMarshaler{err: errors.New("the output fails")}, Examples: loneExample}), nil)
+		}, failure},
+		"a lone surrogate in a source's content, and a NaN in the schemas": {func(version string) *openbindings.Document {
+			d := document(version, nil, map[string]openbindings.JSONSchema{"S": nan})
+			d.Sources = map[string]openbindings.Source{"s": loneSource}
+			return d
+		}, failure},
 	}
 	want := map[string][3]string{
 		limit:   {"report conformance-undetermined", "ErrInconclusive, an error", "ErrInconclusive, an error"},
 		failure: {"an error", "an error", "an error"},
 		plain:   {"report conformant", "no error", "no error"},
 	}
+	wantNoVersion := map[string]string{limit: "report non-conformant", failure: "an error", plain: "report non-conformant"}
 	compiler, err := openbindings.NewValueContractCompiler(typeOnly{}) // Resolve calls no evaluator
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, c := range documents {
-		report, validateErr := c.doc.Validate()
-		refs, referencesErr := c.doc.References()
-		_, resolveErr := compiler.Resolve(context.Background(), c.doc)
+		report, validateErr := c.build("0.2.0").Validate()
+		refs, referencesErr := c.build("0.2.0").References()
+		_, resolveErr := compiler.Resolve(context.Background(), c.build("0.2.0"))
 		got := [3]string{outcomes(validateErr, &report), outcomes(referencesErr, nil), outcomes(resolveErr, nil)}
 		if got != want[c.side] {
 			t.Errorf("%s: Validate, References, Resolve gave %q, want %s %q: %v; %v; %v", name, got, c.side, want[c.side], validateErr, referencesErr, resolveErr)
@@ -233,6 +302,69 @@ func TestModelLimits_Boundary(t *testing.T) {
 			}
 			if refs != nil {
 				t.Errorf("%s: References listed %v", name, refs)
+			}
+		}
+		report, validateErr = c.build("0.2").Validate()
+		if got := outcomes(validateErr, &report); got != wantNoVersion[c.side] {
+			t.Errorf("%s, declaring no valid version: Validate gave %s, want %s: %v", name, got, wantNoVersion[c.side], validateErr)
+		}
+		if c.side != failure && (!errors.As(validateErr, new(*openbindings.ValidationError)) || !slices.Contains(report.Violated, "OBI-D-09")) {
+			t.Errorf("%s, declaring no valid version: violated %v, %v", name, report.Violated, validateErr)
+		}
+		if c.side == failure && errors.As(validateErr, new(*openbindings.ValidationError)) {
+			t.Errorf("%s, declaring no valid version: a violation is reachable: %v", name, validateErr)
+		}
+		if _, err := c.build("0.3.0").Validate(); !errors.As(err, new(*openbindings.VersionRefusalError)) {
+			t.Errorf("%s, declaring an unsupported version: %v", name, err)
+		}
+	}
+}
+
+// countingSchema is a caller's schema that counts its encodings.
+type countingSchema struct{ calls *int }
+
+func (s countingSchema) MarshalJSON() ([]byte, error) {
+	*s.calls++
+	return []byte(`{}`), nil
+}
+
+// Each schema a document holds is encoded once per encoding, so a caller's
+// marshaler in one runs once for each of Validate, References, and Resolve,
+// whether the document encodes, meets this SDK's limit, or fails to encode.
+func TestModelLimits_SchemasEncodeOnce(t *testing.T) {
+	backslash := string(rune(92))
+	compiler, err := openbindings.NewValueContractCompiler(typeOnly{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, beside := range map[string]func(*openbindings.Document){
+		"a document that encodes": func(*openbindings.Document) {},
+		"a lone surrogate in a source's content": func(d *openbindings.Document) {
+			d.Sources = map[string]openbindings.Source{"s": {Kind: "k", Content: json.RawMessage(`"` + backslash + `ud800"`)}}
+		},
+		"a binding whose content is not JSON": func(d *openbindings.Document) {
+			d.Bindings = map[string]openbindings.Binding{"b": {Operation: "op", Source: "s", Content: json.RawMessage(`{`)}}
+		},
+	} {
+		var input, output, entry int
+		build := func() *openbindings.Document {
+			d := &openbindings.Document{
+				OpenBindings: "0.2.0",
+				Schemas:      map[string]openbindings.JSONSchema{"S": countingSchema{&entry}},
+				Operations:   map[string]openbindings.Operation{"op": {Input: countingSchema{&input}, Output: countingSchema{&output}}},
+			}
+			beside(d)
+			return d
+		}
+		for entryPoint, call := range map[string]func(){
+			"Validate":   func() { build().Validate() },
+			"References": func() { build().References() },
+			"Resolve":    func() { compiler.Resolve(context.Background(), build()) },
+		} {
+			input, output, entry = 0, 0, 0
+			call()
+			if input != 1 || output != 1 || entry != 1 {
+				t.Errorf("%s, %s: the input, output, and schemas entry were encoded %d, %d, and %d times, want once each", name, entryPoint, input, output, entry)
 			}
 		}
 	}
