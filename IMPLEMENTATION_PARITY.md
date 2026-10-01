@@ -58,7 +58,7 @@ Document validation reports the core's §10.4 conformance conclusion in Go:
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
-The revised 0.2 working draft (spec `99f8acd`, adopted 2026-10-01) is
+The revised 0.2 working draft (spec `cbc17a6`, adopted 2026-10-01) is
 established in Go first; TypeScript alignment is pending for each of these,
 each with the spec CHANGELOG entry (0.2.0 working draft) that states it:
 

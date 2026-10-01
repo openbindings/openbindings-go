@@ -71,7 +71,7 @@ func sdkDeclaration() corpus.Declaration {
 // appliedTextRevision and appliedTextSHA256 bind the text this SDK applies:
 // the revision of github.com/openbindings/spec it pins, which must be
 // appliedRevision, and the sha256 of that revision's openbindings.md.
-const appliedTextRevision = "99f8acd5a4490bbb9d1de51e90d032b31feeff30"
+const appliedTextRevision = "cbc17a6f6fdb9eeeb38dd0fa184df258cedaece0"
 
 const appliedTextSHA256 = "958461372e761311a12e3f33bab112876032ffa14d776f39be31f83bebfe0198"
 

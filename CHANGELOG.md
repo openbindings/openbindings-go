@@ -48,7 +48,7 @@
 
 - **The SDK applies the revised 0.2 working draft.** The text it applies,
   which a report names (`ValidationReport.Revision`) and Go CI checks the
-  spec repository out at, moves from `98127021` to `99f8acd5`, whose
+  spec repository out at, moves from `98127021` to `cbc17a6f`, whose
   `openbindings.md` (sha256 `95846137…0198`) is the one the spec's
   CHANGELOG describes in its 0.2.0 working-draft entries under "Changed",
   from "OBI-T-09 forbids an unestablished non-conformance claim" to
