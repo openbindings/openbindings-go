@@ -1267,14 +1267,19 @@ func Example_cliReferenceParity() {
 		if err := json.Unmarshal([]byte(document), &held); err != nil {
 			panic(err)
 		}
-		lookup := "resolves"
+		// A string that is not a URI-reference is no reference of any form
+		// (§7.1), so the lookup does not list it.
+		lookup := "not a reference"
 		refs, err := held.References()
 		if err != nil {
 			panic(err)
 		}
 		for _, r := range refs {
-			if r.Location == at && r.Target == "" {
+			switch {
+			case r.Location == at && r.Target == "":
 				lookup = "no target"
+			case r.Location == at:
+				lookup = "resolves"
 			}
 		}
 		if (lookup == "resolves") == (validator == "resolves") {
@@ -1287,7 +1292,7 @@ func Example_cliReferenceParity() {
 	// #                                                            fails OBI-D-12           no target
 	// #/schemas/Task                                               resolves                 resolves
 	// #/schemas/Task/properties/my%20type                          resolves                 resolves
-	// #/schemas/Task/properties/my type                            fails OBI-D-05           no target
+	// #/schemas/Task/properties/my type                            fails OBI-D-05           not a reference
 	// #/schemas/Task/properties/my%2520type                        fails OBI-D-12           no target
 	// #%2Fschemas%2FTask                                           resolves                 resolves
 	// #/schemas/Task/type                                          fails OBI-D-12           no target
