@@ -263,7 +263,7 @@ func testResolveOperationScenario(t *testing.T, raw json.RawMessage) {
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
-	key, _, found := ResolveOperation(iface, scenario.Given.Name)
+	key, _, found := iface.ResolveOperation(scenario.Given.Name)
 	if scenario.Expected.Outcome == "not-found" {
 		if found {
 			t.Fatalf("resolved to %q; expected not-found", key)
@@ -273,13 +273,7 @@ func testResolveOperationScenario(t *testing.T, raw json.RawMessage) {
 	if !found || key != scenario.Expected.OperationKey {
 		t.Fatalf("resolved (%q, %v); expected %q", key, found, scenario.Expected.OperationKey)
 	}
-	var bindings []string
-	for bindingKey, binding := range iface.Bindings {
-		if binding.Operation == key {
-			bindings = append(bindings, bindingKey)
-		}
-	}
-	sort.Strings(bindings)
+	bindings := iface.OperationBindings(key)
 	expected := append([]string(nil), scenario.Expected.BindingKeys...)
 	sort.Strings(expected)
 	if !slices.Equal(bindings, expected) {
@@ -307,7 +301,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
-	operationKey, operation, found := ResolveOperation(iface, scenario.Given.Operation)
+	operationKey, operation, found := iface.ResolveOperation(scenario.Given.Operation)
 	if !found {
 		t.Fatalf("operation %q not found", scenario.Given.Operation)
 	}
@@ -352,7 +346,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
-	operationKey, operation, found := ResolveOperation(iface, scenario.Given.Operation)
+	operationKey, operation, found := iface.ResolveOperation(scenario.Given.Operation)
 	if !found {
 		t.Fatalf("operation %q not found", scenario.Given.Operation)
 	}

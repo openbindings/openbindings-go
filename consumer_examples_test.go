@@ -359,21 +359,6 @@ func Example_cliEdit() {
 	// false true
 }
 
-// bindingsOf finds a resolved operation's bindings by its key (OBI-T-07), in
-// key order. C1 item K3 (bindings by key): the core has no helper for it, so the
-// CLI (invoke, show, operation list, mcp), Loop A's adapter, and the spec's
-// Go runner (tool_scenarios.go, resolve-operation) each write this loop.
-func bindingsOf(iface *openbindings.Document, key string) []string {
-	var keys []string
-	for bindingKey, binding := range iface.Bindings {
-		if binding.Operation == key {
-			keys = append(keys, bindingKey)
-		}
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 // cliInvokeChoice is how `ob invoke <obi> <operation> [--binding B]...`
 // chooses a binding: resolve the name (OBI-T-07), find the operation's
 // bindings by its key, read each binding's source kind, and take the first
@@ -381,11 +366,11 @@ func bindingsOf(iface *openbindings.Document, key string) []string {
 // the candidates with preference and deprecation, which are shown and never
 // used to choose.
 func cliInvokeChoice(iface *openbindings.Document, name string, canInvoke map[string]bool, named ...string) string {
-	key, _, found := openbindings.ResolveOperation(iface, name)
+	key, _, found := iface.ResolveOperation(name)
 	if !found {
 		return fmt.Sprintf("refused: no operation named %q", name)
 	}
-	bindings := bindingsOf(iface, key)
+	bindings := iface.OperationBindings(key)
 	kindOf := func(binding string) string {
 		return iface.Sources[iface.Bindings[binding].Source].Kind
 	}
@@ -483,13 +468,13 @@ func Example_cliDependencyKinds() {
 		operation := consumer.Operations[dependency.Operation]
 		var providerKey string
 		for _, published := range append([]string{dependency.Operation}, operation.Aliases...) {
-			if key, _, found := openbindings.ResolveOperation(provider, published); found {
+			if key, _, found := provider.ResolveOperation(published); found {
 				providerKey = key
 				break
 			}
 		}
 		var meets []string
-		for _, b := range bindingsOf(provider, providerKey) {
+		for _, b := range provider.OperationBindings(providerKey) {
 			if dependency.AcceptsKind(provider.Sources[provider.Bindings[b].Source].Kind) {
 				meets = append(meets, b)
 			}

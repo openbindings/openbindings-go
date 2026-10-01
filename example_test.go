@@ -172,3 +172,37 @@ func ExampleBinding() {
 	// processPayment stripe
 	// {"target":"#/paths/~1charges/post"}
 }
+
+func ExampleDocument_OperationBindings() {
+	doc, err := openbindings.ParseDocument([]byte(`{
+		"openbindings": "0.2.0",
+		"operations": {
+			"createTask": {"aliases": ["tasks.create"]}
+		},
+		"sources": {
+			"api": {"kind": "example.openapi@1"},
+			"tools": {"kind": "example.mcp@1"}
+		},
+		"bindings": {
+			"createTask.tools": {"operation": "createTask", "source": "tools"},
+			"createTask.api": {"operation": "createTask", "source": "api", "preference": 10}
+		}
+	}`))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Resolve the name a caller gave, then find the bindings by the key it
+	// resolves to (OBI-T-07): an alias finds no binding itself.
+	key, _, found := doc.ResolveOperation("tasks.create")
+	fmt.Println(key, found)
+	for _, binding := range doc.OperationBindings(key) {
+		fmt.Println(binding, doc.Sources[doc.Bindings[binding].Source].Kind)
+	}
+	fmt.Println(doc.OperationBindings("tasks.create"))
+	// Output:
+	// createTask true
+	// createTask.api example.openapi@1
+	// createTask.tools example.mcp@1
+	// []
+}

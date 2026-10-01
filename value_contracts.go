@@ -80,7 +80,7 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*Va
 		contracts.states[key] = [2]bool{operation.Input != nil, operation.Output != nil}
 		// A name more than one operation carries resolves to none.
 		for _, name := range append([]string{key}, operation.Aliases...) {
-			if resolved, _, found := ResolveOperation(doc, name); found {
+			if resolved, _, found := doc.ResolveOperation(name); found {
 				contracts.keys[name] = resolved
 			}
 		}
