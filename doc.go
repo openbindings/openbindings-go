@@ -128,12 +128,12 @@
 // entry, or array element the model types (null inside a schema, an example
 // value, source or binding content, or a kept member is carried), a missing
 // required string member, or a binding preference that is not an integer
-// number in range. ValidateDocument still judges such a document in full, except input
-// OBI-D-01 refuses (not UTF-8, or repeating a member name), where which values
-// the document holds is not established; and a document holding a lone
-// surrogate, or input nested deeper than encoding/json reads (10000 levels),
-// where it decides OBI-D-01, and OBI-D-09 on the version it reads from the
-// bytes, and leaves the other rules inconclusive.
+// number in range. ValidateDocument still judges such a document in full,
+// except input OBI-D-01 refuses (not UTF-8, or repeating a member name),
+// where which values the document holds is not established; and a document
+// holding a lone surrogate, or input nested deeper than encoding/json reads
+// (10000 levels), where it decides OBI-D-01, and OBI-D-09 on the version it
+// reads from the bytes, and leaves the other rules inconclusive.
 //
 // Encoding refuses the same inexact bytes in the members the model carries as
 // raw JSON (example values, source and binding content, and kept members),

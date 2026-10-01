@@ -201,13 +201,13 @@ func (c *ValueContract) standingRefusal() *NoVerdictError {
 // the result is undefined (ErrUndefined), core or the evaluator lacks a
 // capability, the value cannot be read exactly, or the ctx is done. A value
 // holding a string with a lone UTF-16 surrogate, which a Go string cannot
-// carry, cannot be read exactly: a declared capability limit of this SDK. Any other
-// error matches ErrInconclusive: the value is not a JSON value, so there is
-// nothing to judge. No returned error matches more than one of ErrMismatch,
-// ErrNoVerdict, and ErrInconclusive; one matches ErrUndefined only when the
-// specification determines the refusal, ErrNoValueContract only when there is
-// no schema, and a context error only when it is the ctx's own, after the ctx
-// is done.
+// carry, cannot be read exactly: a declared capability limit of this SDK.
+// Any other error matches ErrInconclusive: the value is not a JSON value, so
+// there is nothing to judge. No returned error matches more than one of
+// ErrMismatch, ErrNoVerdict, and ErrInconclusive; one matches ErrUndefined
+// only when the specification determines the refusal, ErrNoValueContract
+// only when there is no schema, and a context error only when it is the
+// ctx's own, after the ctx is done.
 func (c *ValueContract) Validate(ctx context.Context, value any) error {
 	if refusal := c.standingRefusal(); refusal != nil {
 		return refusal
