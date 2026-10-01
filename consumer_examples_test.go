@@ -984,14 +984,18 @@ func Example_cliFormatBoundary() {
 // docRef is one schema reference keyword in the schemas a document contains
 // (§3, §7), with where its initial lookup lands. It has the shape of the
 // bounded lookup C1 item F4 (references) proposes core export: the
-// keyword's location, the initial target or why there is none, and whether
-// evaluation may land elsewhere. Here a caller writes it, re-implementing the
-// §7 index core already keeps.
+// keyword's location, the initial target or why there is none, and which
+// keywords are $dynamicRef. Here a caller writes it, re-implementing the §7
+// index core already keeps.
 //
 // What a caller may conclude from it: every $ref and $dynamicRef keyword in
 // the schemas the document contains, where each one is; for each, the schema
 // its initial lookup identifies, or why it identifies none; and which ones
-// resolve dynamically. What a caller may not conclude: that a schema no
+// are $dynamicRef keywords that may require dynamic-scope analysis. Whether
+// one does is not decided here: a $dynamicRef looks the dynamic scope up only
+// when its fragment is a plain name and its initial target declares that name
+// as a $dynamicAnchor (core checks both); otherwise it resolves as its initial
+// target. What a caller may not conclude: that a schema no
 // reference targets is unused, or that the schemas a closure of initial
 // targets reaches are all an operation needs. A $dynamicRef can land on any
 // schema in the dynamic scope that declares the matching $dynamicAnchor, and
@@ -1007,8 +1011,9 @@ type docRef struct {
 	Unresolved string // why Target is empty
 }
 
-// Dynamic reports whether evaluation may land elsewhere than Target: a
-// $dynamicRef's initial target is where dynamic resolution starts (§7.4).
+// Dynamic reports whether the keyword is a $dynamicRef, which may require
+// dynamic-scope analysis: evaluation may then land elsewhere than Target
+// (§7.4). It does not decide whether the lookup happens.
 func (r docRef) Dynamic() bool { return r.Keyword == "$dynamicRef" }
 
 // dynamicName is the plain name a $dynamicRef looks up in the dynamic scope,
@@ -1028,7 +1033,7 @@ func (r docRef) String() string {
 		landing = "unresolved: " + r.Unresolved
 	}
 	if r.Dynamic() {
-		landing += " (initial; dynamic)"
+		landing += " (initial; $dynamicRef)"
 	}
 	return fmt.Sprintf("%s %q %s", r.At, r.Value, landing)
 }
@@ -1085,8 +1090,12 @@ var errIncomplete = errors.New("the reference index is incomplete")
 // does); a document that cannot be encoded is an error; and a walk that
 // meets the nesting limit returns what it found with an error matching
 // errIncomplete. A nil error means the index is complete, so an empty
-// result with a nil error means the document holds no reference.
+// result with a nil error means the document holds no reference; a nil
+// document is such a result.
 func referencesOf(doc *openbindings.Interface) ([]docRef, *refIndex, error) {
+	if doc == nil {
+		return nil, nil, nil // no document holds no reference
+	}
 	switch supported, err := openbindings.IsSupportedVersion(doc.OpenBindings); {
 	case err != nil:
 		return nil, nil, fmt.Errorf("the document declares no valid version (%q), so it is not interpreted", doc.OpenBindings)
@@ -1454,7 +1463,7 @@ func Example_cliReferenceLookup() {
 	// /operations/d/output/$ref "#%2Fschemas%2FTask" -> /schemas/Task
 	// /schemas/List/items/$ref "#/schemas/T%61sk" -> /schemas/Task
 	// /schemas/Task/properties/next/$ref "#/schemas/Task" -> /schemas/Task
-	// /schemas/Tree/properties/kids/items/$dynamicRef "#node" -> /schemas/Tree (initial; dynamic)
+	// /schemas/Tree/properties/kids/items/$dynamicRef "#node" -> /schemas/Tree (initial; $dynamicRef)
 	// /schemas/Wrapped/$defs/x/$ref "#/schemas/Task" unresolved: no schema of https://example.com/wrapped there
 	// /schemas/Wrapped/properties/t/$ref "https://example.com/wrapped#/$defs/x" -> /schemas/Wrapped/$defs/x
 }
@@ -1731,7 +1740,7 @@ func Example_cliMergeClosure() {
 // carry: a version this lookup does not interpret, a document declaring no
 // valid version, a document that cannot be encoded, and an index cut short
 // at the nesting limit, which returns what it found and an error. Only a nil
-// error makes an empty result mean "no references".
+// error makes an empty result mean "no references", as for a nil document.
 func Example_cliReferenceFailures() {
 	report := func(name string, doc *openbindings.Interface) {
 		refs, _, err := referencesOf(doc)
@@ -1757,12 +1766,14 @@ func Example_cliReferenceFailures() {
 	}
 	report("deep", &deepDoc)
 	report("no references", &openbindings.Interface{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: true}}})
+	report("nil document", nil)
 	// Output:
 	// next version: refused, version 0.3.0
 	// no version: the document declares no valid version ("0.2"), so it is not interpreted
 	// unencodable: the document cannot be encoded: json: error calling MarshalJSON for type *openbindings.Interface: json: error calling MarshalJSON for type openbindings.Operation: json: unsupported value: NaN
 	// deep: 1 references found, and incomplete
 	// no references: 0 references, complete
+	// nil document: 0 references, complete
 }
 
 // ---------------------------------- C1 item F17 (evaluator cost)
