@@ -6,7 +6,8 @@ package schemaeval_test
 // validate --examples, and invoke's checks), and an evaluator author's
 // third-party evaluator run through openbindingstest. The other exercises
 // are in the core module's consumer_examples_test.go. Comments marked
-// "C1 item" name the report item an awkward step supports.
+// "C1 item" name the report item (K1 to K8, F1 to F17) an awkward step
+// supports.
 
 import (
 	"context"
@@ -55,14 +56,23 @@ const valuesOBI = `{
     },
     "match": {
       "input": { "type": "string", "pattern": "(" }
+    },
+    "ping": {
+      "output": { "type": "string" }
     }
   }
 }`
 
 // cliValueCheck is `ob validate <obi> --operation <name> --input|--output
 // <value>`, with the lab's exit statuses: 0 the value fits, 1 it does not,
-// 2 usage (no such operation, not JSON), 3 refused, 4 no verdict.
-func cliValueCheck(ctx context.Context, document []byte, operation, side string, value []byte) int {
+// 2 usage (no such operation, not JSON, an unreadable document or supplied
+// schema), 3 refused, 4 no verdict, 130 cancelled. resources are schemas the
+// user supplied for references the document does not embed; core fetches
+// nothing.
+func cliValueCheck(ctx context.Context, document []byte, operation, side string, value []byte, resources ...openbindings.Resource) int {
+	cancelled := func(err error) bool {
+		return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	}
 	iface, err := openbindings.ParseDocument(document)
 	var refusal *openbindings.VersionRefusalError
 	switch {
@@ -73,26 +83,42 @@ func cliValueCheck(ctx context.Context, document []byte, operation, side string,
 		fmt.Println("cannot read the document:", err)
 		return 2
 	}
-	// C1 item four-calls: one value takes a compiler, a resolution, a
+	// C1 item K4 (four calls): one value takes a compiler, a resolution, a
 	// compile, and a validation.
-	compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
+	compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}), resources...)
 	if err != nil {
-		panic(err)
+		fmt.Println("a supplied schema cannot be used:", err)
+		return 2
 	}
 	contracts, err := compiler.Resolve(ctx, iface)
-	if err != nil {
-		panic(err) // ParseDocument already refused what Resolve refuses
+	switch {
+	case cancelled(err):
+		fmt.Println("cancelled")
+		return 130
+	case errors.As(err, &refusal):
+		// ParseDocument refuses these first; a document from elsewhere could
+		// still reach here.
+		fmt.Println("refused:", refusal.Reason)
+		return 3
+	case err != nil:
+		fmt.Println("cannot resolve the document:", err)
+		return 2
 	}
 	compile := contracts.CompileInput
 	if side == "output" {
 		compile = contracts.CompileOutput
 	}
 	contract, err := compile(ctx, operation)
-	if errors.Is(err, openbindings.ErrOperationNotFound) {
+	switch {
+	case errors.Is(err, openbindings.ErrOperationNotFound):
 		fmt.Printf("no operation named %q\n", operation)
 		return 2
-	} else if err != nil {
-		panic(err) // the ctx's error
+	case cancelled(err):
+		fmt.Println("cancelled")
+		return 130
+	case err != nil:
+		fmt.Println("cannot compile:", err)
+		return 2
 	}
 	var mismatch *openbindings.MismatchError
 	var noVerdict *openbindings.NoVerdictError
@@ -105,14 +131,22 @@ func cliValueCheck(ctx context.Context, document []byte, operation, side string,
 			fmt.Printf("does not fit at %q\n", problem.InstanceLocation)
 		}
 		return 1
+	case cancelled(err):
+		// A done ctx is a no-verdict holding the ctx's error, so this comes
+		// before the no-verdict cases.
+		fmt.Println("cancelled")
+		return 130
 	case errors.Is(err, openbindings.ErrNoValueContract):
 		fmt.Printf("%s specifies no %s contract, so there is nothing to check\n", operation, side)
 		return 4
 	case errors.Is(err, openbindings.ErrUndefined) && errors.As(err, &noVerdict):
 		fmt.Printf("no verdict: JSON Schema leaves the result undefined, at %s\n", noVerdict.Location)
 		return 4
-	case errors.Is(err, openbindings.ErrNoVerdict):
-		fmt.Println("no verdict:", err)
+	case errors.As(err, &noVerdict) && noVerdict.Location != "":
+		fmt.Printf("no verdict: core refused at %s: %v\n", noVerdict.Location, noVerdict.Cause)
+		return 4
+	case errors.As(err, &noVerdict):
+		fmt.Println("no verdict:", noVerdict.Cause)
 		return 4
 	default:
 		fmt.Println("not a JSON value:", err)
@@ -130,12 +164,26 @@ func Example_cliValueCheck() {
 		{"events.deliver", "output", `{}`},
 		{"match", "input", `"x"`},
 		{"createTask", "input", `{"title":`},
+		{"createTask", "input", `{"title":"a","title":"b"}`},
 		{"deleteTask", "input", `{}`},
 	}
 	for _, c := range checks {
 		fmt.Println("exit", cliValueCheck(ctx, doc, c.operation, c.side, []byte(c.value)))
 	}
 	fmt.Println("exit", cliValueCheck(ctx, []byte(`{"openbindings":"0.3.0","operations":{}}`), "x", "input", []byte(`{}`)))
+
+	// The evaluator's own refusal: schemaeval does not match a Unicode
+	// property escape as ECMA-262 does, so it gives no verdict where
+	// evaluation reaches the pattern.
+	backslash := string(rune(92))
+	letters := []byte(`{"openbindings":"0.2.0","operations":{"name":{"input":{"type":"string","pattern":"^` + backslash + backslash + `p{L}+$"}}}}`)
+	fmt.Println("exit", cliValueCheck(ctx, letters, "name", "input", []byte(`"Ada"`)))
+	fmt.Println("exit", cliValueCheck(ctx, letters, "name", "input", []byte(`7`)))
+
+	// Ctrl-C before the check.
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	fmt.Println("exit", cliValueCheck(done, doc, "createTask", "input", []byte(`{"title":"x"}`)))
 	// Output:
 	// the input value fits acme.tasks.createTask
 	// exit 0
@@ -149,10 +197,89 @@ func Example_cliValueCheck() {
 	// exit 4
 	// not a JSON value: openbindings: the input is not JSON: unexpected end of JSON input
 	// exit 2
+	// no verdict: the value cannot be read exactly: the object at "" repeats the member name "title"
+	// exit 4
 	// no operation named "deleteTask"
 	// exit 2
 	// refused: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)
 	// exit 3
+	// no verdict: schemaeval: evaluation reached what this evaluator cannot decide: the pattern "^\\p{L}+$" is one this evaluator does not match as ECMA-262 does: a Unicode property escape, whose tables this SDK does not match to ECMA-262's
+	// exit 4
+	// does not fit at ""
+	// exit 1
+	// cancelled
+	// exit 130
+}
+
+// `ob validate --operation` on a document that references a schema it does
+// not embed. Core fetches nothing: without the schema the contract gets no
+// verdict, located at the reference; supplied as a Resource, it is checked.
+func Example_cliValueResources() {
+	ctx := context.Background()
+	doc := []byte(`{"openbindings":"0.2.0","operations":{"ship":{"input":{"type":"object","properties":{"to":{"$ref":"https://schemas.example.com/address.json"}}}}}}`)
+	address := openbindings.Resource{URI: "https://schemas.example.com/address.json", Document: json.RawMessage(`{"type":"object","required":["street"]}`)}
+	fmt.Println("exit", cliValueCheck(ctx, doc, "ship", "input", []byte(`{"to":{}}`)))
+	fmt.Println("exit", cliValueCheck(ctx, doc, "ship", "input", []byte(`{"to":{}}`), address))
+	fmt.Println("exit", cliValueCheck(ctx, doc, "ship", "input", []byte(`{"to":{"street":"1 Main St"}}`), address))
+	relative := openbindings.Resource{URI: "schemas/address.json", Document: address.Document}
+	fmt.Println("exit", cliValueCheck(ctx, doc, "ship", "input", []byte(`{}`), relative))
+	// Output:
+	// no verdict: core refused at #/operations/ship/input/properties/to: "https://schemas.example.com/address.json" names https://schemas.example.com/address.json, a resource the document does not embed and the application did not supply (§7.4)
+	// exit 4
+	// does not fit at "/to"
+	// exit 1
+	// the input value fits ship
+	// exit 0
+	// a supplied schema cannot be used: openbindings: a resource's URI must be an absolute URI with no fragment; got "schemas/address.json"
+	// exit 2
+}
+
+// A service reloads a document. A resolved snapshot, and every contract
+// compiled from it, keep the document as it was when resolved; resolving
+// again picks up the change.
+func Example_valueContractSnapshot() {
+	ctx := context.Background()
+	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"rename":{"input":{"type":"string"}}}}`))
+	if err != nil {
+		panic(err)
+	}
+	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
+	before, err := compiler.Resolve(ctx, iface)
+	if err != nil {
+		panic(err)
+	}
+	kept, _ := before.CompileInput(ctx, "rename")
+
+	operation := iface.Operations["rename"]
+	operation.Input = map[string]any{"type": "integer"}
+	iface.Operations["rename"] = operation
+	iface.Operations["purge"] = openbindings.Operation{Input: true}
+
+	recompiled, _ := before.CompileInput(ctx, "rename")
+	_, purgeErr := before.CompileInput(ctx, "purge")
+	after, err := compiler.Resolve(ctx, iface)
+	if err != nil {
+		panic(err)
+	}
+	fresh, _ := after.CompileInput(ctx, "rename")
+	verdict := func(err error) string {
+		switch {
+		case err == nil:
+			return "valid"
+		case errors.Is(err, openbindings.ErrMismatch):
+			return "mismatch"
+		}
+		return "no verdict"
+	}
+	fmt.Println(`kept contract: "x"`, verdict(kept.ValidateJSON(ctx, []byte(`"x"`))))
+	fmt.Println(`old snapshot, compiled after the change: "x"`, verdict(recompiled.ValidateJSON(ctx, []byte(`"x"`))))
+	fmt.Println("old snapshot knows purge:", !errors.Is(purgeErr, openbindings.ErrOperationNotFound))
+	fmt.Println(`new snapshot: "x"`, verdict(fresh.ValidateJSON(ctx, []byte(`"x"`))), "7", verdict(fresh.ValidateJSON(ctx, []byte(`7`))))
+	// Output:
+	// kept contract: "x" valid
+	// old snapshot, compiled after the change: "x" valid
+	// old snapshot knows purge: false
+	// new snapshot: "x" mismatch 7 valid
 }
 
 // `ob validate <obi> --examples` checks every example value against its
@@ -214,10 +341,57 @@ func Example_cliValidateExamples() {
 	// misfits: 1 unchecked: 1
 }
 
-// `ob invoke` checks a stream of input values one at a time (invariant 1:
-// each value separately, never the sequence), refusing before anything is
-// sent when the first value does not fit, and failing the exchange when a
-// later one does not.
+// invokeChecks is how `ob invoke` checks a stream of input values before it
+// sends each one, one value at a time (invariant 1: each value separately,
+// never the sequence). The spec leaves runtime validation, and what to do
+// without a verdict, to the tool (§1.2, invariant 2), so the policy is
+// stated here: the lab's where it gives one, the exercise's where it does
+// not.
+//   - A value that does not fit is refused before anything is sent if it is
+//     the first (exit 3), and otherwise ends the exchange after the earlier
+//     values were sent (exit 1). This is the lab's rule.
+//   - With no input contract there is nothing to check: the value is sent.
+//   - Any other no-verdict (an undefined result, a capability the evaluator
+//     lacks, a value that cannot be read exactly) is not sent: exit 4 if it
+//     is the first, 1 later. This is the exercise's choice; a tool may send
+//     such a value instead.
+//   - Input that is not JSON is a usage error (exit 2).
+//   - Cancellation ends the exchange (exit 130), whatever was sent.
+func invokeChecks(ctx context.Context, input *openbindings.ValueContract, stdin io.Reader, send func(json.RawMessage)) (exit int, why string) {
+	decoder := json.NewDecoder(stdin)
+	for sent := 0; ; sent++ {
+		if err := ctx.Err(); err != nil {
+			return 130, fmt.Sprintf("cancelled after %d sent", sent)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err == io.EOF {
+			return 0, fmt.Sprintf("input closed after %d sent", sent)
+		} else if err != nil {
+			return 2, fmt.Sprintf("the input is not JSON after %d sent: %v", sent, err)
+		}
+		err := input.ValidateJSON(ctx, value)
+		switch {
+		case err == nil, errors.Is(err, openbindings.ErrNoValueContract):
+			send(value)
+			continue
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return 130, fmt.Sprintf("cancelled after %d sent", sent)
+		}
+		problem, first := "does not fit", 3
+		switch {
+		case errors.Is(err, openbindings.ErrMismatch):
+		case errors.Is(err, openbindings.ErrNoVerdict):
+			problem, first = "has no verdict", 4
+		default:
+			return 2, fmt.Sprintf("value %d is not a JSON value: %v", sent+1, err)
+		}
+		if sent == 0 {
+			return first, "the first value " + problem + "; nothing was sent"
+		}
+		return 1, fmt.Sprintf("value %d %s after %d were sent: ERR_OPERATION_VALIDATION_FAILED", sent+1, problem, sent)
+	}
+}
+
 func Example_cliInvokeChecks() {
 	ctx := context.Background()
 	iface, err := openbindings.ParseDocument([]byte(valuesOBI))
@@ -229,46 +403,53 @@ func Example_cliInvokeChecks() {
 	if err != nil {
 		panic(err)
 	}
-	input, err := contracts.CompileInput(ctx, "createTask")
-	if err != nil {
-		panic(err)
+	compile := func(operation string) *openbindings.ValueContract {
+		contract, err := contracts.CompileInput(ctx, operation)
+		if err != nil {
+			panic(err)
+		}
+		return contract
 	}
+	run := func(name string, ctx context.Context, contract *openbindings.ValueContract, stdin string, cancelAfter int, cancel context.CancelFunc) {
+		var sent []string
+		exit, why := invokeChecks(ctx, contract, strings.NewReader(stdin), func(value json.RawMessage) {
+			sent = append(sent, string(value))
+			if len(sent) == cancelAfter {
+				cancel()
+			}
+		})
+		fmt.Printf("%s: exit %d, %s; sent %v\n", name, exit, why, sent)
+	}
+	stream := "{\"title\":\"a\"}\n{\"title\":\"b\"}\n{\"title\":5}\n{\"title\":\"d\"}\n"
+	run("late misfit", ctx, compile("createTask"), stream, 0, nil)
+	run("first misfit", ctx, compile("createTask"), `{"title":5}`, 0, nil)
+	run("repeated member name", ctx, compile("createTask"), `{"title":"a","title":"b"}`, 0, nil)
+	run("undefined contract", ctx, compile("match"), `"x"`, 0, nil)
+	run("no input contract", ctx, compile("ping"), `"x" "y"`, 0, nil)
+	run("not JSON", ctx, compile("createTask"), `{"title":"a"} {"title":`, 0, nil)
+	stopped, cancel := context.WithCancel(ctx)
+	run("Ctrl-C after one", stopped, compile("createTask"), stream, 1, cancel)
+
+	// A binding implementation that decodes outputs into Go values checks
+	// them as they are, read as encoding/json encodes them.
 	output, err := contracts.CompileOutput(ctx, "createTask")
 	if err != nil {
 		panic(err)
 	}
-	// A binding implementation that decodes outputs into Go values checks
-	// them as they are, read as encoding/json encodes them.
 	type task struct {
 		ID    string `json:"id"`
 		Title string `json:"title"`
 	}
 	fmt.Println("output fits:", output.Validate(ctx, task{ID: "t_9", Title: "a"}) == nil, output.Validate(ctx, map[string]any{"id": "t_9"}) == nil)
-	stdin := strings.NewReader("{\"title\":\"a\"}\n{\"title\":\"b\"}\n{\"title\":5}\n{\"title\":\"d\"}\n")
-	decoder := json.NewDecoder(stdin)
-	for sent := 0; ; sent++ {
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err == io.EOF {
-			fmt.Println("input closed after", sent, "values; exit 0")
-			return
-		} else if err != nil {
-			panic(err)
-		}
-		if err := input.ValidateJSON(ctx, value); errors.Is(err, openbindings.ErrMismatch) {
-			if sent == 0 {
-				fmt.Println("refused before sending anything; exit 3")
-			} else {
-				fmt.Printf("value %d does not fit after %d were sent: ERR_OPERATION_VALIDATION_FAILED; exit 1\n", sent+1, sent)
-			}
-			return
-		}
-		fmt.Println("sent", string(value))
-	}
 	// Output:
+	// late misfit: exit 1, value 3 does not fit after 2 were sent: ERR_OPERATION_VALIDATION_FAILED; sent [{"title":"a"} {"title":"b"}]
+	// first misfit: exit 3, the first value does not fit; nothing was sent; sent []
+	// repeated member name: exit 4, the first value has no verdict; nothing was sent; sent []
+	// undefined contract: exit 4, the first value has no verdict; nothing was sent; sent []
+	// no input contract: exit 0, input closed after 2 sent; sent ["x" "y"]
+	// not JSON: exit 2, the input is not JSON after 1 sent: unexpected EOF; sent [{"title":"a"}]
+	// Ctrl-C after one: exit 130, cancelled after 1 sent; sent [{"title":"a"}]
 	// output fits: true false
-	// sent {"title":"a"}
-	// sent {"title":"b"}
-	// value 3 does not fit after 2 were sent: ERR_OPERATION_VALIDATION_FAILED; exit 1
 }
 
 // ------------------------------------------------- an evaluator author
@@ -359,7 +540,7 @@ func Example_evaluatorAuthor() {
 
 // The kit run an evaluator author writes. A decorator inherits its inner
 // evaluator's exemptions, and with a budget no case reaches, only those.
-// C1 item kit-exemptions: schemaeval's exemptions live in its own test file
+// C1 item F10 (copied exemptions): schemaeval's exemptions live in its own test file
 // (TestConformance), so a decorator copies them.
 func TestBudgetEvaluatorConformance(t *testing.T) {
 	const propertyEscape = "a Unicode property escape, whose tables the inner evaluator does not match to ECMA-262's"

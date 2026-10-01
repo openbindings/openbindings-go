@@ -4,30 +4,39 @@ package openbindings_test
 //
 // Each example is a caller's code at the current API, written to show
 // where the API serves the caller and where it does not. Comments marked
-// "C1 item" name the report item an awkward step supports. Three callers:
+// "C1 item" name the report item (K1 to K8, F1 to F17) an awkward step
+// supports. Three callers:
 //
 //   - the 0.2 CLI (ob-cli-surface-lab at f7a9d16, NewNextSurfaceRoot):
 //     reading a document, validating and reporting it, refusing an
 //     unsupported version, editing in place, resolving an operation and
-//     choosing its binding, checking a dependency's kinds, finding a
-//     schema's referrers, comparing entries for merge, and the media type.
+//     choosing its binding, checking a dependency's kinds, the media type,
+//     the formatting boundary, and, on a reference lookup the caller writes,
+//     schema and operation rename, schema remove, and merge closure, with
+//     an exact-value comparison for merge.
 //     Validating values against value contracts needs an evaluator, so
 //     those exercises are in schemaeval/consumer_examples_test.go;
 //   - a producer: building a document in code, writing it, reading it back,
-//     and amending a report;
-//   - an evaluator author: see schemaeval/consumer_examples_test.go, which
-//     runs a third-party evaluator through openbindingstest.
+//     editing a schema with exact numbers, and amending a report;
+//   - an evaluator author: a minimal evaluator here (typeOnly), and in
+//     schemaeval/consumer_examples_test.go a third-party evaluator run
+//     through openbindingstest.
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"math/big"
 	"net/http"
+	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/openbindings/openbindings-go"
 )
@@ -162,12 +171,12 @@ func cliRead(data []byte) (*openbindings.Interface, int, string) {
 		first := violation.Findings[0]
 		return nil, 1, fmt.Sprintf("non-conformant at %s: %s", first.Position, first.Rule)
 	}
-	// C1 item ParseDocument-undecided: the other errors (nesting past the
+	// C1 item K1 (undecided parse errors): the other errors (nesting past the
 	// decoder, a lone surrogate, the document schema reaching no verdict)
 	// carry no type or sentinel, so a caller can tell them apart, or from
 	// an internal failure, only by the message. Their prefix, "parse
 	// document:", is also not the "openbindings:" prefix of the sentinels
-	// (C1 item error-prefix).
+	// (C1 item K6, error prefixes).
 	return nil, 2, fmt.Sprintf("unclassified (%T): %v", err, err)
 }
 
@@ -179,7 +188,7 @@ func Example_cliRead() {
 		[]byte(`{"openbindings":"0.2.0","operations":{},"x-note":"\udc00"}`),
 		[]byte(`{"openbindings":"0.2.0","operations":{},"x-deep":` + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + `}`),
 	}
-	// C1 item d02-member-location: the unknown member's finding is located
+	// C1 item F5 (member location): the unknown member's finding is located
 	// at the object that holds it (the document, 1:1), not at the member.
 	for _, data := range inputs {
 		_, exit, what := cliRead(data)
@@ -211,7 +220,7 @@ func Example_cliVersionDecision() {
 		// OBI-T-04: refuse a declared version outside the supported set,
 		// and never refuse a text that declares no version.
 		refuse := err == nil && !supported
-		// C1 item IsSupportedVersion: the signature invites `if ok, _ :=
+		// C1 item K2 (version decision): the signature invites `if ok, _ :=
 		// IsSupportedVersion(v); !ok { refuse }`, which refuses "0.2" and "",
 		// the refusal OBI-T-04 forbids.
 		naive := !supported
@@ -255,7 +264,7 @@ func cliEdit(data []byte, edit func(*openbindings.Interface)) ([]byte, error) {
 	case errors.As(err, &refusal):
 		return nil, refusal
 	case iface == nil:
-		// C1 item nil-document: the model cannot carry the document (or
+		// C1 item F6 (nil document): the model cannot carry the document (or
 		// OBI-D-01 refuses it), and the only sign of it is a nil
 		// *Interface beside a nil error for a lone surrogate.
 		return nil, fmt.Errorf("cannot edit: %s", before.Conclusion)
@@ -265,7 +274,19 @@ func cliEdit(data []byte, edit func(*openbindings.Interface)) ([]byte, error) {
 		had[f.Rule+" "+f.Path] = true
 	}
 	edit(iface)
-	after, _ := iface.Validate()
+	// The edited value is judged again. Validate's error is a
+	// *ValidationError (violations, compared below), a *VersionRefusalError
+	// when the edit declares a version this SDK does not interpret, or an
+	// encoding error when the edited value cannot be written; the last two
+	// come with no report, so they end the edit here.
+	after, err := iface.Validate()
+	var violations *openbindings.ValidationError
+	switch {
+	case errors.As(err, &refusal):
+		return nil, fmt.Errorf("refused: the edit declares a version this ob does not interpret: %w", refusal)
+	case err != nil && !errors.As(err, &violations):
+		return nil, fmt.Errorf("refused: the edited document cannot be written: %w", err)
+	}
 	var added []string
 	for _, f := range after.Violations() {
 		if !had[f.Rule+" "+f.Path] {
@@ -275,7 +296,11 @@ func cliEdit(data []byte, edit func(*openbindings.Interface)) ([]byte, error) {
 	if len(added) > 0 {
 		return nil, fmt.Errorf("refused: the change would add %s", strings.Join(added, ", "))
 	}
-	return json.MarshalIndent(iface, "", "  ")
+	written, err := json.MarshalIndent(iface, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("refused: the edited document cannot be written: %w", err)
+	}
+	return written, nil
 }
 
 func Example_cliEdit() {
@@ -290,14 +315,23 @@ func Example_cliEdit() {
 	_, err = cliEdit([]byte(tasksOBI), addOperation("x", map[string]any{"type": 42}))
 	fmt.Println(err)
 
-	// C1 item member-order: the same edit to a document holding one x-
+	// An edit that declares a version this SDK does not interpret, and one
+	// that holds bytes the model cannot write, end at the post-edit check.
+	_, err = cliEdit([]byte(tasksOBI), func(i *openbindings.Interface) { i.OpenBindings = "0.3.0" })
+	fmt.Println(err)
+	_, err = cliEdit([]byte(tasksOBI), func(i *openbindings.Interface) {
+		i.Extensions = map[string]json.RawMessage{"x-owner": json.RawMessage(`{"team":`)}
+	})
+	fmt.Println(err)
+
+	// C1 item F1 (member order): the same edit to a document holding one x-
 	// member writes every top-level member in sorted order instead of field
 	// order, so `name` now precedes `openbindings`.
 	withExtension := strings.Replace(tasksOBI, `"name"`, `"x-owner": "tasks-team", "name"`, 1)
 	written, err = cliEdit([]byte(withExtension), addOperation("archiveTask", true))
 	fmt.Println(err, memberOrder(written))
 
-	// C1 item html-escape: a description holding "<" is rewritten as
+	// C1 item F2 (HTML escaping): a description holding "<" is rewritten as
 	// a \u003c escape by any edit, whatever the encoder's SetEscapeHTML.
 	withMarkup := strings.Replace(tasksOBI, `"version": "1.4.0",`, `"version": "1.4.0", "description": "a<b",`, 1)
 	written, _ = cliEdit([]byte(withMarkup), addOperation("archiveTask", true))
@@ -317,13 +351,15 @@ func Example_cliEdit() {
 	// Output:
 	// <nil> [openbindings name version schemas operations dependencies sources bindings]
 	// refused: the change would add OBI-D-10 at /operations/x/input/type
+	// refused: the edit declares a version this ob does not interpret: openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)
+	// refused: the edited document cannot be written: openbindings: encode interface: json: error calling MarshalJSON for type openbindings.Interface: member "x-owner": unexpected end of JSON input
 	// <nil> [bindings dependencies name openbindings operations schemas sources version x-owner]
 	// false true
 	// false true
 }
 
 // bindingsOf finds a resolved operation's bindings by its key (OBI-T-07), in
-// key order. C1 item bindings-by-key: the core has no helper for it, so the
+// key order. C1 item K3 (bindings by key): the core has no helper for it, so the
 // CLI (invoke, show, operation list, mcp), Loop A's adapter, and the spec's
 // Go runner (tool_scenarios.go, resolve-operation) each write this loop.
 func bindingsOf(iface *openbindings.Interface, key string) []string {
@@ -519,10 +555,10 @@ func Example_producer() {
 	}
 	rewritten, _ := json.MarshalIndent(back, "", "  ")
 	fmt.Println("the same document:", bytes.Equal(written, rewritten))
-	// C1 item JSONSchema-any: the same document is not the same Go value.
-	// A schema decodes to generic JSON values, every number a json.Number
-	// and every array an []any, so the producer's own values do not come
-	// back.
+	// C1 item K8 (schemas in the model): the same document is not the same
+	// Go value. A schema decodes to generic JSON values, every number a
+	// json.Number and every array an []any. That is representation, not
+	// loss: Example_producerSchemaEdit shows the exact round trip.
 	fmt.Println("the same Go value:", reflect.DeepEqual(&doc, back))
 	task, readTask := doc.Schemas["Task"].(map[string]any), back.Schemas["Task"].(map[string]any)
 	fmt.Printf("maxProperties: %T then %T; required: %T then %T\n", task["maxProperties"], readTask["maxProperties"], task["required"], readTask["required"])
@@ -540,48 +576,106 @@ func Example_producer() {
 // OBI-D-10's check meets this SDK's limit and stays inconclusive.
 var deeplyNested = strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300)
 
-// A tool that decides a rule this SDK leaves inconclusive (here OBI-D-10,
-// with a meta-schema check of its own that has no depth limit) amends the
-// evidence and concludes again, as ConcludeConformance's documentation
-// suggests.
-func Example_producerAmendReport() {
-	data := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":` + deeplyNested + `}},
-	  "bindings":{"b":{"operation":"gone","source":"s"}},"sources":{"s":{"kind":"k"}}}`)
-	_, report, _ := openbindings.ValidateDocument(data)
-	fmt.Println(report.Conclusion, report.Violated, report.Inconclusive, len(report.Findings), "findings")
-
+// amendRule is the whole amendment workflow on the current API (C1 item K5).
+// A tool that decides a rule this SDK left inconclusive replaces that rule's
+// evidence and findings with its own decision for the entire rule, and the
+// report stays coherent:
+//   - the decision must settle the rule: satisfied, violated (with the
+//     violations' findings), or not applicable; another inconclusive answer
+//     is no amendment;
+//   - the rule's old findings go, and the tool's take their place;
+//   - the conclusion and the derived lists are recomputed from the evidence
+//     (ConcludeConformance), never edited;
+//   - the provenance stays: the tool applied the same specification text,
+//     so Version and Revision still name it (OBI-T-09). A tool applying other
+//     text has no business amending this report.
+func amendRule(report openbindings.ValidationReport, rule string, status openbindings.RuleEvidenceStatus, findings ...openbindings.Finding) (openbindings.ValidationReport, error) {
+	if _, considered := report.Evidence[rule]; !considered {
+		return report, fmt.Errorf("%s is not a rule of this report", rule)
+	}
+	switch status {
+	case openbindings.EvidenceSatisfied, openbindings.EvidenceNotApplicable:
+		if len(findings) > 0 {
+			return report, fmt.Errorf("%s %s carries no findings", rule, status)
+		}
+	case openbindings.EvidenceViolated:
+		if len(findings) == 0 {
+			return report, fmt.Errorf("a violation of %s needs its findings", rule)
+		}
+	default:
+		return report, fmt.Errorf("%s %s decides nothing", rule, status)
+	}
+	for _, finding := range findings {
+		if finding.Rule != rule || finding.Status != openbindings.EvidenceViolated {
+			return report, fmt.Errorf("a finding of %s %s is not this amendment's", finding.Rule, finding.Status)
+		}
+	}
 	evidence := maps.Clone(report.Evidence)
-	evidence["OBI-D-10"] = openbindings.EvidenceSatisfied // the tool's own check
+	evidence[rule] = status
 	amended := openbindings.ConcludeConformance(evidence)
-	fmt.Println(amended.Conclusion, amended.Violated, amended.Inconclusive)
-	// C1 item amend-report: the amended report names no specification text
-	// (OBI-T-09 requires it) and has lost every finding, the OBI-D-07
-	// violation's location included. The caller restores them by hand.
-	fmt.Printf("version %q, revision %q, %d findings\n", amended.Version, amended.Revision, len(amended.Findings))
 	amended.Version, amended.Revision = report.Version, report.Revision
 	for _, finding := range report.Findings {
-		if finding.Rule != "OBI-D-10" {
+		if finding.Rule != rule {
 			amended.Findings = append(amended.Findings, finding)
 		}
 	}
-	fmt.Println(amended.Version, len(amended.Findings), "findings:", amended.Findings[0].Rule, amended.Findings[0].Path)
-	// Output:
-	// non-conformant [OBI-D-07] [OBI-D-10] 2 findings
-	// non-conformant [OBI-D-07] []
-	// version "", revision "", 0 findings
-	// 0.2.0 1 findings: OBI-D-07 /bindings/b/operation
+	amended.Findings = append(amended.Findings, findings...)
+	return amended, nil
 }
 
-// naiveReferrers is what `ob schema list` ("referenced by"), `schema rename`,
-// `schema remove`, and `merge` (which brings the named schemas a merged
-// operation references) need: where the document references a named schema.
-// C1 item references: the core resolves §7 references internally (OBI-D-12,
-// value contracts) but exports no lookup, so the CLI walks the JSONSchema
-// values itself. This walk is the lab's (surface_next_fixture.go,
-// nxSchemaReferrers), and it misreads §7 twice: it misses a fragment that
-// is percent-decoded before lookup (§7.2), and it counts a reference inside
-// a schema that declares $id, which resolves against that resource's base,
-// not the document (§7.2).
+// A tool that decides a rule this SDK leaves inconclusive (here OBI-D-10,
+// with a meta-schema check of its own that has no depth limit) amends the
+// report.
+func Example_producerAmendReport() {
+	undetermined := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":` + deeplyNested + `}}}`)
+	_, report, _ := openbindings.ValidateDocument(undetermined)
+	fmt.Println(report.Conclusion, report.Inconclusive, len(report.Findings), "findings")
+
+	// ConcludeConformance alone concludes from evidence: it keeps neither
+	// the provenance nor the findings, so a report built from it alone names
+	// no specification text.
+	bare := openbindings.ConcludeConformance(maps.Clone(report.Evidence))
+	fmt.Printf("bare: %s, version %q, %d findings\n", bare.Conclusion, bare.Version, len(bare.Findings))
+
+	amended, err := amendRule(report, "OBI-D-10", openbindings.EvidenceSatisfied)
+	fmt.Println(err, amended.Conclusion, amended.Version, amended.Revision[:7], len(amended.Findings), "findings")
+
+	// With a violation elsewhere, the other rule's findings stay.
+	violating := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":` + deeplyNested + `}},
+	  "bindings":{"b":{"operation":"gone","source":"s"}},"sources":{"s":{"kind":"k"}}}`)
+	_, report, _ = openbindings.ValidateDocument(violating)
+	amended, err = amendRule(report, "OBI-D-10", openbindings.EvidenceSatisfied)
+	fmt.Println(err, amended.Conclusion, amended.Violated, amended.Inconclusive, amended.Findings[0].Rule, amended.Findings[0].Path)
+
+	// The tool's own violation replaces the rule's undecided finding.
+	amended, err = amendRule(report, "OBI-D-10", openbindings.EvidenceViolated, openbindings.Finding{
+		Rule: "OBI-D-10", Status: openbindings.EvidenceViolated, Path: "/operations/op/input", Message: "found by the tool's own check",
+	})
+	fmt.Println(err, amended.Violated, len(amended.Violations()), "violations")
+
+	// An amendment that leaves the rule undecided is refused.
+	_, err = amendRule(report, "OBI-D-10", openbindings.EvidenceInconclusive)
+	fmt.Println(err)
+	// Output:
+	// conformance-undetermined [OBI-D-10] 1 findings
+	// bare: conformance-undetermined, version "", 0 findings
+	// <nil> conformant 0.2.0 9812702 0 findings
+	// <nil> non-conformant [OBI-D-07] [] OBI-D-07 /bindings/b/operation
+	// <nil> [OBI-D-07 OBI-D-10] 2 violations
+	// OBI-D-10 inconclusive decides nothing
+}
+
+// naiveReferrers is the first answer a CLI writes for `ob schema list`
+// ("referenced by"), `schema rename`, `schema remove`, and `merge`: where the
+// document references a named schema. It is a keyword walk, already closer
+// than the lab's, which searches each operation's and schema's serialized
+// text for the quoted string "#/schemas/<name>" (nxSchemaReferrers) and
+// rewrites every "$ref" string equal to it anywhere, content and examples
+// included (nxRewriteRefs). It still misreads §7 twice: it misses a fragment
+// that is percent-decoded before lookup (§7.2), and it counts a reference
+// inside a schema that declares $id, which resolves against that resource's
+// base, not the document (§7.2). C1 item F4 (references): the references
+// section below writes the lookup that gets these right.
 func naiveReferrers(iface *openbindings.Interface, name string) []string {
 	target := "#/schemas/" + name
 	var found []string
@@ -658,31 +752,847 @@ func Example_cliMediaType() {
 	// Output: application/vnd.openbindings+json, application/json;q=0.5
 }
 
+// ------------------------------------------- equality for merge (C1 item F7)
+
+// sameJSON reports whether two JSON texts hold the same JSON value: objects
+// as unordered members, strings as they decode, arrays in order, and numbers
+// by exact decimal value (§10 reads numbers "by their exact decimal value").
+// It is the comparison `ob merge` needs to skip identical entries; neither
+// reflect.DeepEqual on the model nor comparing encodings gives it.
+func sameJSON(a, b []byte) (bool, error) {
+	var x, y any
+	for _, side := range []struct {
+		text []byte
+		into *any
+	}{{a, &x}, {b, &y}} {
+		dec := json.NewDecoder(bytes.NewReader(side.text))
+		dec.UseNumber()
+		if err := dec.Decode(side.into); err != nil {
+			return false, err
+		}
+	}
+	return sameValue(x, y), nil
+}
+
+func sameValue(a, b any) bool {
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for name, member := range x {
+			other, present := y[name]
+			if !present || !sameValue(member, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !sameValue(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	case json.Number:
+		y, ok := b.(json.Number)
+		return ok && canonicalDecimal(string(x)) == canonicalDecimal(string(y))
+	}
+	return a == b
+}
+
+// canonicalDecimal writes a JSON number's exact value as a sign, its
+// significant digits, and a power of ten, so 1, 1.0, 1e0, and 10e-1 all give
+// "+1e0". The exponent is a big.Int, so no spelling overflows it.
+func canonicalDecimal(number string) string {
+	negative := strings.HasPrefix(number, "-")
+	mantissa, exponent, _ := strings.Cut(strings.ToLower(strings.TrimPrefix(number, "-")), "e")
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	power := new(big.Int)
+	if exponent != "" {
+		power.SetString(exponent, 10)
+	}
+	power.Sub(power, big.NewInt(int64(len(fraction))))
+	digits := strings.TrimLeft(whole+fraction, "0")
+	if digits == "" {
+		return "0"
+	}
+	significant := strings.TrimRight(digits, "0")
+	power.Add(power, big.NewInt(int64(len(digits)-len(significant))))
+	sign := "+"
+	if negative {
+		sign = "-"
+	}
+	return sign + significant + "e" + power.String()
+}
+
 // `ob merge <obi> <from>` skips an entry both documents hold identically and
-// refuses one they hold differently, so it compares entries as JSON values.
-// C1 item json-equality: the model keeps raw members as written, so two
-// decodings of one JSON value differ as Go values when their whitespace
-// differs; the caller compares encodings instead, which compacts raw
-// members but keeps number spellings (1.0 and 1) and string escapes.
+// refuses one they hold differently.
 func Example_cliMergeIdentical() {
-	ours, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"ping":{"input":{"maximum":1}}},
-	  "sources":{"api":{"kind":"example.openapi@1","content":{ "location" : "https://api.example.com" }}}}`))
+	// One operation and one source, written two ways: other member order,
+	// an escaped "A", and 1 against 1e0 and 1.0.
+	backslash := string(rune(92))
+	ours, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0",
+	  "operations":{"ping":{"input":{"maximum":1,"title":"A"}}},
+	  "sources":{"api":{"kind":"example.openapi@1","content":{ "n" : 1.0, "location" : "https://api.example.com" }}}}`))
 	if err != nil {
 		panic(err)
 	}
-	theirs, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"ping":{"input":{"maximum":1.0}}},
-	  "sources":{"api":{"kind":"example.openapi@1","content":{"location":"https://api.example.com"}}}}`))
+	theirs, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0",
+	  "operations":{"ping":{"input":{"title":"` + backslash + `u0041","maximum":1e0}}},
+	  "sources":{"api":{"kind":"example.openapi@1","content":{"location":"https://api.example.com","n":1}}}}`))
 	if err != nil {
 		panic(err)
 	}
-	encodedEqual := func(a, b any) bool {
-		x, errX := json.Marshal(a)
-		y, errY := json.Marshal(b)
-		return errX == nil && errY == nil && bytes.Equal(x, y)
+	compare := func(name string, a, b any) {
+		x, _ := json.Marshal(a)
+		y, _ := json.Marshal(b)
+		same, err := sameJSON(x, y)
+		fmt.Printf("%s: same Go value %v, same encoding %v, same JSON value %v %v\n", name, reflect.DeepEqual(a, b), bytes.Equal(x, y), same, err)
 	}
-	fmt.Println("source: same Go value", reflect.DeepEqual(ours.Sources["api"], theirs.Sources["api"]), "same encoding", encodedEqual(ours.Sources["api"], theirs.Sources["api"]))
-	fmt.Println("operation: same Go value", reflect.DeepEqual(ours.Operations["ping"], theirs.Operations["ping"]), "same encoding", encodedEqual(ours.Operations["ping"], theirs.Operations["ping"]))
+	compare("operation", ours.Operations["ping"], theirs.Operations["ping"])
+	compare("source", ours.Sources["api"], theirs.Sources["api"])
+	changed := theirs.Sources["api"]
+	changed.Content = json.RawMessage(`{"location":"https://api.example.com","n":1.5}`)
+	compare("changed source", ours.Sources["api"], changed)
 	// Output:
-	// source: same Go value false same encoding true
-	// operation: same Go value false same encoding false
+	// operation: same Go value false, same encoding false, same JSON value true <nil>
+	// source: same Go value false, same encoding false, same JSON value true <nil>
+	// changed source: same Go value false, same encoding false, same JSON value false <nil>
+}
+
+// ------------------------------------- schemas in the model (C1 item K8)
+
+// A producer or editor changes a schema it read from a document. The model
+// carries schema numbers as json.Number, so they come back as written; what
+// the caller adds in Go is written as Go encodes it, and a json.RawMessage
+// held in the any-typed member is written as given. A number is lost only
+// when a caller decodes schema text into float64 itself.
+func Example_producerSchemaEdit() {
+	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"setLimit":{"input":
+	  {"type":"object","properties":{"limit":{"type":"integer","maximum":9007199254740993,"multipleOf":1.0,"minimum":1e0}}}}}}`))
+	if err != nil {
+		panic(err)
+	}
+	operation := iface.Operations["setLimit"]
+	input := operation.Input.(map[string]any)
+	input["required"] = []any{"limit"}
+	input["properties"].(map[string]any)["note"] = map[string]any{"type": "string", "maxLength": 280}
+	// A schema the user typed as text is handed over as text.
+	operation.Output = json.RawMessage(`{"type": "integer", "exclusiveMaximum": 18014398509481985}`)
+	iface.Operations["setLimit"] = operation
+	if _, err := iface.Validate(); err != nil {
+		panic(err)
+	}
+	written, err := json.Marshal(iface)
+	if err != nil {
+		panic(err)
+	}
+	for _, spelling := range []string{`"maximum":9007199254740993`, `"multipleOf":1.0`, `"minimum":1e0`, `"maxLength":280`, `"exclusiveMaximum":18014398509481985`} {
+		fmt.Println(spelling, bytes.Contains(written, []byte(spelling)))
+	}
+	back, err := openbindings.ParseDocument(written)
+	if err != nil {
+		panic(err)
+	}
+	again, _ := json.Marshal(back)
+	same, _ := sameJSON(written, again)
+	// The held json.RawMessage keeps its member order; read back, the
+	// schema is a map, written in key order. The value is the same, and the
+	// bytes are stable from the second write on.
+	backAgain, err := openbindings.ParseDocument(again)
+	if err != nil {
+		panic(err)
+	}
+	settled, _ := json.Marshal(backAgain)
+	fmt.Println("read back and written again: same bytes", bytes.Equal(written, again), "same value", same, "stable after", bytes.Equal(again, settled))
+
+	// The trap is the caller's own decoding: json.Unmarshal reads a number
+	// into float64, and a decoder with UseNumber keeps it.
+	var lossy, exact any
+	_ = json.Unmarshal([]byte(`{"maximum":9007199254740993}`), &lossy)
+	dec := json.NewDecoder(strings.NewReader(`{"maximum":9007199254740993}`))
+	dec.UseNumber()
+	_ = dec.Decode(&exact)
+	l, _ := json.Marshal(lossy)
+	e, _ := json.Marshal(exact)
+	fmt.Println(string(l), string(e))
+
+	// K8's defined-type option needs JSON methods: a named byte slice
+	// without them encodes as base64.
+	type rawSchema json.RawMessage
+	b, _ := json.Marshal(struct{ Input rawSchema }{rawSchema(`{"type":"string"}`)})
+	fmt.Println(string(b))
+	// Output:
+	// "maximum":9007199254740993 true
+	// "multipleOf":1.0 true
+	// "minimum":1e0 true
+	// "maxLength":280 true
+	// "exclusiveMaximum":18014398509481985 true
+	// read back and written again: same bytes false same value true stable after true
+	// {"maximum":9007199254740992} {"maximum":9007199254740993}
+	// {"Input":"eyJ0eXBlIjoic3RyaW5nIn0="}
+}
+
+// ------------------------------------------- the formatting boundary (F1)
+
+// `ob fmt` promises "Entries keep the order you gave them" and "Values,
+// including numbers, are kept exactly as written". The model cannot keep
+// either: maps hold the entries, so encoding writes them in key order, and
+// a preference is an int64, so 1e0 comes back as 1. Typed members come back
+// in field order whatever order the input used. C1 item F1 allocates
+// source order and token spelling to the CLI's own representation.
+func Example_cliFormatBoundary() {
+	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"zeta":{},"alpha":{}},
+	  "sources":{"s":{"kind":"k"}},
+	  "bindings":{"zeta.s":{"operation":"zeta","source":"s","preference":1e0},"alpha.s":{"source":"s","operation":"alpha"}}}`))
+	if err != nil {
+		panic(err)
+	}
+	written, err := json.Marshal(iface)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(written))
+	// Output:
+	// {"openbindings":"0.2.0","operations":{"alpha":{},"zeta":{}},"sources":{"s":{"kind":"k"}},"bindings":{"alpha.s":{"operation":"alpha","source":"s"},"zeta.s":{"operation":"zeta","source":"s","preference":1}}}
+}
+
+// --------------------------------------------- references (C1 item F4)
+
+// docRef is one schema reference keyword in the schemas a document contains
+// (§3, §7), with where its initial lookup lands. It has the shape of the
+// bounded lookup C1 item F4 proposes core export: the keyword's location,
+// the initial target or why there is none, and whether evaluation may land
+// elsewhere. Here a caller writes it, re-implementing the §7 index core
+// already keeps.
+type docRef struct {
+	At         string // RFC 6901 pointer to the keyword member
+	Keyword    string // $ref or $dynamicRef
+	Value      string // as written
+	Base       string // "" in the document resource; otherwise the $id it resolves against
+	Target     string // pointer to the schema the initial lookup identifies
+	Unresolved string // why Target is empty
+}
+
+// Dynamic reports whether evaluation may land elsewhere than Target: a
+// $dynamicRef's initial target is where dynamic resolution starts (§7.4).
+func (r docRef) Dynamic() bool { return r.Keyword == "$dynamicRef" }
+
+func (r docRef) String() string {
+	landing := "-> " + r.Target
+	if r.Target == "" {
+		landing = "unresolved: " + r.Unresolved
+	}
+	if r.Dynamic() {
+		landing += " (initial; dynamic)"
+	}
+	return fmt.Sprintf("%s %q %s", r.At, r.Value, landing)
+}
+
+type refIndex struct {
+	refs      []docRef
+	schemas   map[string]string // every schema the document contains: pointer -> its resource ("" = the document resource)
+	resources map[string]string // $id resource -> pointer of its root
+	anchors   map[string]string // resource + "#" + plain name -> pointer
+}
+
+var (
+	refMapKeywords   = []string{"$defs", "definitions", "properties", "patternProperties", "dependentSchemas", "dependencies"}
+	refValueKeywords = []string{"additionalProperties", "propertyNames", "items", "contains", "not", "if", "then", "else", "unevaluatedItems", "unevaluatedProperties", "contentSchema"}
+	refArrayKeywords = []string{"prefixItems", "allOf", "anyOf", "oneOf"}
+)
+
+func pointerOf(tokens ...string) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		b.WriteString("/" + strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1"))
+	}
+	return b.String()
+}
+
+func genericView(doc *openbindings.Interface) (map[string]any, error) {
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var view map[string]any
+	return view, dec.Decode(&view)
+}
+
+// indexReferences walks the OBI positions (§7): schemas entries and
+// operation input and output, through the keywords §7 lists, entering $id
+// resources. Source and binding content, examples, and x- members are not
+// schemas, so a $ref-shaped member there is ordinary data and never listed.
+// It follows no reference, so a cycle cannot trap it.
+func indexReferences(view map[string]any) *refIndex {
+	ix := &refIndex{schemas: map[string]string{}, resources: map[string]string{}, anchors: map[string]string{}}
+	if schemas, ok := view["schemas"].(map[string]any); ok {
+		for _, name := range slices.Sorted(maps.Keys(schemas)) {
+			ix.walk(schemas[name], []string{"schemas", name}, "")
+		}
+	}
+	if operations, ok := view["operations"].(map[string]any); ok {
+		for _, key := range slices.Sorted(maps.Keys(operations)) {
+			operation, _ := operations[key].(map[string]any)
+			for _, side := range []string{"input", "output"} {
+				if schema, present := operation[side]; present {
+					ix.walk(schema, []string{"operations", key, side}, "")
+				}
+			}
+		}
+	}
+	for i := range ix.refs {
+		ix.resolve(&ix.refs[i])
+	}
+	slices.SortFunc(ix.refs, func(a, b docRef) int { return strings.Compare(a.At, b.At) })
+	return ix
+}
+
+func (ix *refIndex) walk(v any, at []string, base string) {
+	here := pointerOf(at...)
+	switch schema := v.(type) {
+	case bool:
+		ix.schemas[here] = base
+	case map[string]any:
+		if id, ok := schema["$id"].(string); ok {
+			base = resolveReference(base, id)
+			ix.resources[base] = here
+		}
+		ix.schemas[here] = base
+		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
+			if name, ok := schema[keyword].(string); ok {
+				ix.anchors[base+"#"+name] = here
+			}
+		}
+		for _, keyword := range []string{"$ref", "$dynamicRef"} {
+			if value, ok := schema[keyword].(string); ok {
+				ix.refs = append(ix.refs, docRef{At: pointerOf(append(slices.Clone(at), keyword)...), Keyword: keyword, Value: value, Base: base})
+			}
+		}
+		for _, keyword := range refMapKeywords {
+			members, _ := schema[keyword].(map[string]any)
+			for _, name := range slices.Sorted(maps.Keys(members)) {
+				if _, isArray := members[name].([]any); isArray {
+					continue // a legacy dependencies array lists names, not a schema
+				}
+				ix.walk(members[name], append(slices.Clone(at), keyword, name), base)
+			}
+		}
+		for _, keyword := range refValueKeywords {
+			if sub, ok := schema[keyword]; ok {
+				ix.walk(sub, append(slices.Clone(at), keyword), base)
+			}
+		}
+		for _, keyword := range refArrayKeywords {
+			items, _ := schema[keyword].([]any)
+			for i, sub := range items {
+				ix.walk(sub, append(slices.Clone(at), keyword, strconv.Itoa(i)), base)
+			}
+		}
+	}
+}
+
+// resolveReference resolves ref against base (RFC 3986 §5.2) and drops an
+// empty fragment.
+func resolveReference(base, ref string) string {
+	r, err := url.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	if b, err := url.Parse(base); base != "" && err == nil {
+		r = b.ResolveReference(r)
+	}
+	return strings.TrimSuffix(r.String(), "#")
+}
+
+func (ix *refIndex) resolve(r *docRef) {
+	if r.Base == "" && (r.Value == "" || strings.HasPrefix(r.Value, "#")) {
+		ix.lookUpInDocument(r) // OBI-D-12's lookup (§7.2, §7.3)
+		return
+	}
+	if parsed, err := url.Parse(r.Value); r.Base == "" && (err != nil || !parsed.IsAbs()) {
+		r.Unresolved = "neither absolute nor same-document (OBI-D-05)"
+		return
+	}
+	resource, fragment, _ := strings.Cut(resolveReference(r.Base, r.Value), "#")
+	root, inDocument := ix.resources[resource]
+	if !inDocument {
+		r.Unresolved = "outside the document, an external schema (§7.4)"
+		return
+	}
+	name, err := url.PathUnescape(fragment)
+	switch {
+	case err != nil:
+		r.Unresolved = "its fragment does not percent-decode"
+	case name == "":
+		r.Target = root
+	case strings.HasPrefix(name, "/"):
+		if ix.schemas[root+name] == resource {
+			r.Target = root + name
+		} else {
+			r.Unresolved = "no schema of " + resource + " there"
+		}
+	default:
+		if target, ok := ix.anchors[resource+"#"+name]; ok {
+			r.Target = target
+		} else {
+			r.Unresolved = "no plain name " + name + " in " + resource
+		}
+	}
+}
+
+func (ix *refIndex) lookUpInDocument(r *docRef) {
+	name, err := url.PathUnescape(strings.TrimPrefix(r.Value, "#"))
+	switch {
+	case err != nil || !utf8.ValidString(name):
+		r.Unresolved = "its fragment does not decode to UTF-8"
+	case name == "":
+		r.Unresolved = "it names the document, not a schema (§7.2)"
+	case strings.HasPrefix(name, "/"):
+		resource, isSchema := ix.schemas[name]
+		switch {
+		case !isSchema:
+			r.Unresolved = "no schema at an OBI position there (§7.3)"
+		case resource != "" && ix.resources[resource] != name:
+			r.Unresolved = "inside a schema that declares $id (§7.3)"
+		default:
+			r.Target = name
+		}
+	default:
+		if target, ok := ix.anchors["#"+name]; ok {
+			r.Target = target
+		} else {
+			r.Unresolved = "no plain name " + name + " in the document resource"
+		}
+	}
+}
+
+func under(pointer, root string) bool {
+	return pointer == root || strings.HasPrefix(pointer, root+"/")
+}
+
+func setAt(view any, pointer string, value any) {
+	tokens := strings.Split(pointer, "/")[1:]
+	for i, token := range tokens {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		switch node := view.(type) {
+		case map[string]any:
+			if i == len(tokens)-1 {
+				node[token] = value
+				return
+			}
+			view = node[token]
+		case []any:
+			n, _ := strconv.Atoi(token)
+			if i == len(tokens)-1 {
+				node[n] = value
+				return
+			}
+			view = node[n]
+		}
+	}
+}
+
+// retarget rewrites, in view, the references whose initial target lies
+// under from and whose spelling names it by a same-document pointer, so they
+// name the same place under to. Anchors, $id references, references inside
+// $id resources, and ordinary data are left alone: they do not spell the
+// renamed key. This is the CLI's rewriting policy, outside core.
+func retarget(view map[string]any, ix *refIndex, from, to string) []string {
+	var rewritten []string
+	for _, r := range ix.refs {
+		if r.Base != "" || !strings.HasPrefix(r.Value, "#/") || r.Target == "" || !under(r.Target, from) {
+			continue
+		}
+		spelled := (&url.URL{Fragment: to + strings.TrimPrefix(r.Target, from)}).String()
+		setAt(view, r.At, spelled)
+		rewritten = append(rewritten, r.At+": "+r.Value+" -> "+spelled)
+	}
+	return rewritten
+}
+
+func fromView(view map[string]any) *openbindings.Interface {
+	data, err := json.Marshal(view)
+	if err != nil {
+		panic(err)
+	}
+	var doc openbindings.Interface
+	if err := json.Unmarshal(data, &doc); err != nil {
+		panic(err)
+	}
+	return &doc
+}
+
+// labRewrite is the lab's nxRewriteRefs: every "$ref" string equal to from,
+// anywhere in the document. It returns where it would write.
+func labRewrite(v any, at []string, from string) []string {
+	var hits []string
+	switch node := v.(type) {
+	case map[string]any:
+		for _, name := range slices.Sorted(maps.Keys(node)) {
+			if ref, ok := node[name].(string); ok && name == "$ref" && ref == from {
+				hits = append(hits, pointerOf(append(slices.Clone(at), name)...))
+				continue
+			}
+			hits = append(hits, labRewrite(node[name], append(slices.Clone(at), name), from)...)
+		}
+	case []any:
+		for i, item := range node {
+			hits = append(hits, labRewrite(item, append(slices.Clone(at), strconv.Itoa(i)), from)...)
+		}
+	}
+	return hits
+}
+
+// referencesOBI holds an anchor, a percent-encoded pointer, a self-reference
+// (a cycle), a $dynamicRef, an $id resource referenced by its $id and holding
+// a reference of its own, an operation-schema target, an external schema,
+// and $ref-shaped ordinary data in content, an example, and an x- member.
+const referencesOBI = `{
+  "openbindings": "0.2.0",
+  "schemas": {
+    "Task": { "$anchor": "task", "type": "object", "properties": { "id": { "type": "string" }, "next": { "$ref": "#/schemas/Task" } } },
+    "List": { "type": "array", "items": { "$ref": "#/schemas/T%61sk" } },
+    "Tree": { "$dynamicAnchor": "node", "type": "object", "properties": { "kids": { "type": "array", "items": { "$dynamicRef": "#node" } } } },
+    "Wrapped": { "$id": "https://example.com/wrapped", "$defs": { "x": { "$ref": "#/schemas/Task" } }, "properties": { "t": { "$ref": "https://example.com/wrapped#/$defs/x" } } }
+  },
+  "operations": {
+    "a": { "input": { "$ref": "#task" }, "output": { "$ref": "#/schemas/List" }, "examples": { "e": { "input": { "$ref": "#/schemas/Task" } } } },
+    "b": { "input": { "$ref": "#/operations/a/output" }, "output": { "$ref": "https://example.com/wrapped" } },
+    "c": { "input": { "$ref": "https://schemas.example.com/address.json" } }
+  },
+  "sources": { "s": { "kind": "example.openapi@1", "content": { "$ref": "#/schemas/Task" } } },
+  "x-note": { "$ref": "#/schemas/Task" }
+}`
+
+func referencesDocument() (*openbindings.Interface, map[string]any, *refIndex) {
+	doc, err := openbindings.ParseDocument([]byte(referencesOBI))
+	if err != nil {
+		panic(err)
+	}
+	view, err := genericView(doc)
+	if err != nil {
+		panic(err)
+	}
+	return doc, view, indexReferences(view)
+}
+
+// The lookup over the document: every reference keyword in the schemas the
+// document contains, and nothing from content, examples, or x- members.
+func Example_cliReferenceLookup() {
+	doc, _, ix := referencesDocument()
+	report, _ := doc.Validate()
+	fmt.Println(report.Conclusion)
+	for _, r := range ix.refs {
+		fmt.Println(r)
+	}
+	// Output:
+	// conformant
+	// /operations/a/input/$ref "#task" -> /schemas/Task
+	// /operations/a/output/$ref "#/schemas/List" -> /schemas/List
+	// /operations/b/input/$ref "#/operations/a/output" -> /operations/a/output
+	// /operations/b/output/$ref "https://example.com/wrapped" -> /schemas/Wrapped
+	// /operations/c/input/$ref "https://schemas.example.com/address.json" unresolved: outside the document, an external schema (§7.4)
+	// /schemas/List/items/$ref "#/schemas/T%61sk" -> /schemas/Task
+	// /schemas/Task/properties/next/$ref "#/schemas/Task" -> /schemas/Task
+	// /schemas/Tree/properties/kids/items/$dynamicRef "#node" -> /schemas/Tree (initial; dynamic)
+	// /schemas/Wrapped/$defs/x/$ref "#/schemas/Task" unresolved: no schema of https://example.com/wrapped there
+	// /schemas/Wrapped/properties/t/$ref "https://example.com/wrapped#/$defs/x" -> /schemas/Wrapped/$defs/x
+}
+
+// `ob schema rename <obi> Task Todo` and `ob operation rename <obi> a alpha`
+// on the lookup, against the lab's rewrite.
+func Example_cliSchemaRename() {
+	_, view, ix := referencesDocument()
+	for _, line := range retarget(view, ix, "/schemas/Task", "/schemas/Todo") {
+		fmt.Println(line)
+	}
+	schemas := view["schemas"].(map[string]any)
+	schemas["Todo"] = schemas["Task"]
+	delete(schemas, "Task")
+	renamed := fromView(view)
+	report, _ := renamed.Validate()
+	fmt.Println("after schema rename:", report.Conclusion)
+	fmt.Println("ordinary data untouched:", string(renamed.Sources["s"].Content), string(renamed.Operations["a"].Examples["e"].Input), string(renamed.Extensions["x-note"]))
+
+	// Renaming an operation moves the schemas at its input and output too.
+	_, view, ix = referencesDocument()
+	for _, line := range retarget(view, ix, "/operations/a", "/operations/alpha") {
+		fmt.Println(line)
+	}
+	operations := view["operations"].(map[string]any)
+	operations["alpha"] = operations["a"]
+	delete(operations, "a")
+	report, _ = fromView(view).Validate()
+	fmt.Println("after operation rename:", report.Conclusion)
+
+	// The lab's rewrite of "#/schemas/Task": it writes into content, an
+	// example, an x- member, and a reference inside the $id resource, and
+	// misses the percent-encoded one.
+	_, view, _ = referencesDocument()
+	fmt.Println("lab rewrite writes:", labRewrite(view, nil, "#/schemas/Task"))
+	// Output:
+	// /schemas/List/items/$ref: #/schemas/T%61sk -> #/schemas/Todo
+	// /schemas/Task/properties/next/$ref: #/schemas/Task -> #/schemas/Todo
+	// after schema rename: conformant
+	// ordinary data untouched: {"$ref":"#/schemas/Task"} {"$ref":"#/schemas/Task"} {"$ref":"#/schemas/Task"}
+	// /operations/b/input/$ref: #/operations/a/output -> #/operations/alpha/output
+	// after operation rename: conformant
+	// lab rewrite writes: [/operations/a/examples/e/input/$ref /schemas/Task/properties/next/$ref /schemas/Wrapped/$defs/x/$ref /sources/s/content/$ref /x-note/$ref]
+}
+
+// `ob schema remove <obi> <name>` refuses while a reference outside the
+// schema lands in it, whatever the spelling: a pointer, an anchor, or an $id.
+func Example_cliSchemaRemove() {
+	doc, _, ix := referencesDocument()
+	referrers := func(name string) []string {
+		root := pointerOf("schemas", name)
+		var out []string
+		for _, r := range ix.refs {
+			if !under(r.At, root) && r.Target != "" && under(r.Target, root) {
+				out = append(out, r.At)
+			}
+		}
+		return out
+	}
+	for _, name := range []string{"Task", "Wrapped", "Tree", "List"} {
+		fmt.Println(name, referrers(name))
+	}
+	// The lab's answer (nxSchemaReferrers): the serialized text of each
+	// operation and other schema holding "#/schemas/Task".
+	var lab []string
+	for _, key := range slices.Sorted(maps.Keys(doc.Operations)) {
+		text, _ := json.Marshal(doc.Operations[key])
+		if bytes.Contains(text, []byte(`"#/schemas/Task"`)) {
+			lab = append(lab, "operation "+key)
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(doc.Schemas)) {
+		text, _ := json.Marshal(doc.Schemas[key])
+		if key != "Task" && bytes.Contains(text, []byte(`"#/schemas/Task"`)) {
+			lab = append(lab, "schema "+key)
+		}
+	}
+	fmt.Println("lab says Task is referenced by:", lab)
+	// Output:
+	// Task [/operations/a/input/$ref /schemas/List/items/$ref]
+	// Wrapped [/operations/b/output/$ref]
+	// Tree []
+	// List [/operations/a/output/$ref]
+	// lab says Task is referenced by: [operation a schema Wrapped]
+}
+
+// `ob merge <obi> <from> --operation <key>` brings the named schemas an
+// operation's schemas reach, transitively; a cycle ends where it began. A
+// target in another operation's schema, and an unresolved reference, are the
+// merge policy's to decide, so the lookup only reports them.
+func Example_cliMergeClosure() {
+	_, _, ix := referencesDocument()
+	closure := func(key string) (schemas, operations, unresolved []string) {
+		visited := map[string]bool{}
+		queue := []string{pointerOf("operations", key, "input"), pointerOf("operations", key, "output")}
+		for len(queue) > 0 {
+			here := queue[0]
+			queue = queue[1:]
+			if visited[here] {
+				continue
+			}
+			visited[here] = true
+			for _, r := range ix.refs {
+				if !under(r.At, here) {
+					continue
+				}
+				tokens := strings.Split(r.Target, "/")
+				switch {
+				case r.Target == "":
+					unresolved = append(unresolved, r.At)
+				case tokens[1] == "schemas":
+					root := pointerOf("schemas", tokens[2])
+					if !visited[root] && !slices.Contains(schemas, tokens[2]) {
+						schemas = append(schemas, tokens[2])
+						queue = append(queue, root)
+					}
+				case tokens[1] == "operations" && tokens[2] != key:
+					operations = append(operations, r.Target)
+				}
+			}
+		}
+		slices.Sort(schemas)
+		return schemas, operations, unresolved
+	}
+	for _, key := range []string{"a", "b", "c"} {
+		schemas, operations, unresolved := closure(key)
+		fmt.Printf("%s: schemas %v, other operations %v, unresolved %v\n", key, schemas, operations, unresolved)
+	}
+	// Output:
+	// a: schemas [List Task], other operations [], unresolved []
+	// b: schemas [Wrapped], other operations [/operations/a/output], unresolved [/schemas/Wrapped/$defs/x/$ref]
+	// c: schemas [], other operations [], unresolved [/operations/c/input/$ref]
+}
+
+// ---------------------------------- a minimal evaluator (C1 item F17)
+
+// typeOnly is the smallest evaluator that keeps the evaluator contract: it
+// decides a schema whose only assertion is "type" with one type name,
+// constructs a *MismatchError for a failure, gives no verdict for anything
+// else with an ordinary error, and returns the ctx's own error when the ctx
+// is done. It would pass the kit only with an exemption for nearly every
+// case, since the kit covers all of 2020-12.
+type typeOnly struct{}
+
+func (typeOnly) Compile(ctx context.Context, bundle openbindings.SchemaBundle) (openbindings.CompiledSchema, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var root map[string]any
+	if err := json.Unmarshal(bundle.Document, &root); err != nil {
+		return nil, fmt.Errorf("typeOnly: the bundle is not JSON: %v", err)
+	}
+	defs, _ := root["$defs"].(map[string]any)
+	structural := map[string]bool{"$schema": true, "$id": true, "$defs": true, "$ref": true}
+	entry := root
+	for hops := 0; ; hops++ {
+		ref, isRef := entry["$ref"].(string)
+		if !isRef {
+			break
+		}
+		for _, keyword := range slices.Sorted(maps.Keys(entry)) {
+			if !structural[keyword] {
+				return nil, fmt.Errorf("typeOnly: cannot decide %s beside $ref", keyword)
+			}
+		}
+		// Core writes a reference to a resource's root as its $id (SchemaBundle).
+		var next map[string]any
+		for _, def := range defs {
+			if schema, ok := def.(map[string]any); ok && schema["$id"] == ref {
+				next = schema
+			}
+		}
+		if next == nil || hops > len(defs) {
+			return nil, fmt.Errorf("typeOnly: cannot follow %s", ref)
+		}
+		entry = next
+	}
+	for _, keyword := range slices.Sorted(maps.Keys(entry)) {
+		if keyword != "$id" && keyword != "type" {
+			return nil, fmt.Errorf("typeOnly: cannot decide %s", keyword)
+		}
+	}
+	want, ok := entry["type"].(string)
+	if !ok {
+		return nil, errors.New("typeOnly: decides only one type name")
+	}
+	return typeCheck{want}, nil
+}
+
+type typeCheck struct{ want string }
+
+func (c typeCheck) Validate(ctx context.Context, value any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	got := jsonTypeOf(value)
+	if got == c.want || c.want == "number" && got == "integer" {
+		return nil
+	}
+	return &openbindings.MismatchError{Problems: []openbindings.SchemaProblem{{
+		InstanceLocation: "",
+		Message:          fmt.Sprintf("type: got %s, want %s", got, c.want),
+	}}}
+}
+
+// jsonTypeOf names a JSON value's type as JSON Schema does: a number with no
+// fractional part is an integer, whatever its spelling (1.0 included).
+func jsonTypeOf(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	case json.Number:
+		canonical := canonicalDecimal(string(v))
+		_, power, _ := strings.Cut(canonical, "e")
+		if canonical == "0" || !strings.HasPrefix(power, "-") {
+			return "integer"
+		}
+		return "number"
+	}
+	return fmt.Sprintf("%T", value)
+}
+
+func Example_evaluatorAuthorMinimal() {
+	ctx := context.Background()
+	compiler, err := openbindings.NewValueContractCompiler(typeOnly{})
+	if err != nil {
+		panic(err)
+	}
+	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","schemas":{"Name":{"type":"string"}},"operations":{
+	  "name":{"input":{"$ref":"#/schemas/Name"}},
+	  "count":{"input":{"type":"integer"}},
+	  "short":{"input":{"type":"string","maxLength":3}}}}`))
+	if err != nil {
+		panic(err)
+	}
+	contracts, err := compiler.Resolve(ctx, iface)
+	if err != nil {
+		panic(err)
+	}
+	check := func(operation, value string) {
+		contract, err := contracts.CompileInput(ctx, operation)
+		if err != nil {
+			panic(err)
+		}
+		var mismatch *openbindings.MismatchError
+		var noVerdict *openbindings.NoVerdictError
+		switch err := contract.ValidateJSON(ctx, []byte(value)); {
+		case err == nil:
+			fmt.Println(operation, value, "valid")
+		case errors.As(err, &mismatch):
+			fmt.Println(operation, value, "mismatch at", strconv.Quote(mismatch.Problems[0].InstanceLocation)+":", mismatch.Problems[0].Message)
+		case errors.As(err, &noVerdict):
+			fmt.Println(operation, value, "no verdict:", noVerdict.Cause)
+		}
+	}
+	check("name", `"Ada"`)
+	check("name", `5`)
+	check("count", `2.0`)
+	check("count", `2.5`)
+	check("short", `"abc"`)
+
+	// Cancellation: through core, a done ctx is a no-verdict holding the
+	// ctx's error; on the evaluator directly, the ctx's error itself.
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	contract, _ := contracts.CompileInput(ctx, "name")
+	err = contract.ValidateJSON(done, []byte(`"Ada"`))
+	fmt.Println("through core:", errors.Is(err, openbindings.ErrNoVerdict), errors.Is(err, context.Canceled))
+	compiled, err := typeOnly{}.Compile(ctx, openbindings.SchemaBundle{Document: json.RawMessage(
+		`{"$id":"https://e.invalid/","$ref":"https://e.invalid/n","$defs":{"n":{"$id":"https://e.invalid/n","type":"string"}}}`)})
+	if err != nil {
+		panic(err)
+	}
+	err = compiled.Validate(done, "Ada")
+	fmt.Println("directly:", err == context.Canceled)
+	// Output:
+	// name "Ada" valid
+	// name 5 mismatch at "": type: got integer, want string
+	// count 2.0 valid
+	// count 2.5 mismatch at "": type: got number, want integer
+	// short "abc" no verdict: typeOnly: cannot decide maxLength
+	// through core: true true
+	// directly: true
 }
