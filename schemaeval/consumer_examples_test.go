@@ -1,13 +1,11 @@
 package schemaeval_test
 
-// Consumer exercises for the core API (Loop C, stage C1, at 166b9b4) that
-// need an evaluator, which the core module cannot import: the 0.2 CLI's
-// value checks (ob-cli-surface-lab at f7a9d16: validate --operation,
-// validate --examples, and invoke's checks), and an evaluator author's
-// third-party evaluator run through openbindingstest. The other exercises
-// are in the core module's consumer_examples_test.go. Comments marked
-// "C1 item" name the report item (K1 to K8, F1 to F17) an awkward step
-// supports.
+// Consumer exercises for the core API that need an evaluator, which the
+// core module cannot import: the 0.2 CLI's value checks
+// (ob-cli-surface-lab at f7a9d16: validate --operation, validate
+// --examples, and invoke's checks), and an evaluator author's third-party
+// evaluator run through openbindingstest. The other exercises are in the
+// core module's consumer_examples_test.go.
 
 import (
 	"context"
@@ -73,7 +71,7 @@ func cliValueCheck(ctx context.Context, document []byte, operation, side string,
 	cancelled := func(err error) bool {
 		return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 	}
-	iface, err := openbindings.ParseDocument(document)
+	doc, err := openbindings.ParseDocument(document)
 	var refusal *openbindings.VersionRefusalError
 	switch {
 	case errors.As(err, &refusal):
@@ -83,14 +81,14 @@ func cliValueCheck(ctx context.Context, document []byte, operation, side string,
 		fmt.Println("cannot read the document:", err)
 		return 2
 	}
-	// C1 item K4 (four calls): one value takes a compiler, a resolution, a
-	// compile, and a validation.
+	// One value takes a compiler, a resolution, a compile, and a
+	// validation; a service keeps each step's result as long as it serves.
 	compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}), resources...)
 	if err != nil {
 		fmt.Println("a supplied schema cannot be used:", err)
 		return 2
 	}
-	contracts, err := compiler.Resolve(ctx, iface)
+	contracts, err := compiler.Resolve(ctx, doc)
 	switch {
 	case cancelled(err):
 		fmt.Println("cancelled")
@@ -243,25 +241,25 @@ func Example_cliValueResources() {
 // again picks up the change.
 func Example_valueContractSnapshot() {
 	ctx := context.Background()
-	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"rename":{"input":{"type":"string"}}}}`))
+	doc, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"rename":{"input":{"type":"string"}}}}`))
 	if err != nil {
 		panic(err)
 	}
 	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
-	before, err := compiler.Resolve(ctx, iface)
+	before, err := compiler.Resolve(ctx, doc)
 	if err != nil {
 		panic(err)
 	}
 	kept, _ := before.CompileInput(ctx, "rename")
 
-	operation := iface.Operations["rename"]
+	operation := doc.Operations["rename"]
 	operation.Input = map[string]any{"type": "integer"}
-	iface.Operations["rename"] = operation
-	iface.Operations["purge"] = openbindings.Operation{Input: true}
+	doc.Operations["rename"] = operation
+	doc.Operations["purge"] = openbindings.Operation{Input: true}
 
 	recompiled, _ := before.CompileInput(ctx, "rename")
 	_, purgeErr := before.CompileInput(ctx, "purge")
-	after, err := compiler.Resolve(ctx, iface)
+	after, err := compiler.Resolve(ctx, doc)
 	if err != nil {
 		panic(err)
 	}
@@ -292,18 +290,18 @@ func Example_valueContractSnapshot() {
 // present null is a value like any other.
 func Example_cliValidateExamples() {
 	ctx := context.Background()
-	iface, err := openbindings.ParseDocument([]byte(valuesOBI))
+	doc, err := openbindings.ParseDocument([]byte(valuesOBI))
 	if err != nil {
 		panic(err)
 	}
 	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
-	contracts, err := compiler.Resolve(ctx, iface)
+	contracts, err := compiler.Resolve(ctx, doc)
 	if err != nil {
 		panic(err)
 	}
 	misfits, unchecked := 0, 0
-	for _, key := range slices.Sorted(maps.Keys(iface.Operations)) {
-		operation := iface.Operations[key]
+	for _, key := range slices.Sorted(maps.Keys(doc.Operations)) {
+		operation := doc.Operations[key]
 		if len(operation.Examples) == 0 {
 			continue
 		}
@@ -400,12 +398,12 @@ func invokeChecks(ctx context.Context, input *openbindings.ValueContract, stdin 
 
 func Example_cliInvokeChecks() {
 	ctx := context.Background()
-	iface, err := openbindings.ParseDocument([]byte(valuesOBI))
+	doc, err := openbindings.ParseDocument([]byte(valuesOBI))
 	if err != nil {
 		panic(err)
 	}
 	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
-	contracts, err := compiler.Resolve(ctx, iface)
+	contracts, err := compiler.Resolve(ctx, doc)
 	if err != nil {
 		panic(err)
 	}
@@ -520,11 +518,11 @@ func Example_evaluatorAuthor() {
 	if err != nil {
 		panic(err)
 	}
-	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"sum":{"input":{"type":"array","items":{"type":"integer"}}}}}`))
+	doc, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"sum":{"input":{"type":"array","items":{"type":"integer"}}}}}`))
 	if err != nil {
 		panic(err)
 	}
-	contracts, _ := compiler.Resolve(ctx, iface)
+	contracts, _ := compiler.Resolve(ctx, doc)
 	input, _ := contracts.CompileInput(ctx, "sum")
 	for _, value := range []string{`[1,2,3]`, `[1,"2"]`, `[1,2,3,4,5]`} {
 		err := input.ValidateJSON(ctx, []byte(value))
@@ -546,8 +544,8 @@ func Example_evaluatorAuthor() {
 
 // The kit run an evaluator author writes. A decorator inherits its inner
 // evaluator's exemptions, and with a budget no case reaches, only those.
-// C1 item F10 (copied exemptions): schemaeval's exemptions live in its own test file
-// (TestConformance), so a decorator copies them.
+// schemaeval's exemptions live in its own test file (TestConformance), so a
+// decorator copies them, and must follow them when they change.
 func TestBudgetEvaluatorConformance(t *testing.T) {
 	const propertyEscape = "a Unicode property escape, whose tables the inner evaluator does not match to ECMA-262's"
 	openbindingstest.TestSchemaEvaluator(t, budget{inner: schemaeval.New(schemaeval.Options{}), maxNodes: 1 << 20}, openbindingstest.Options{

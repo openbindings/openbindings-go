@@ -1,19 +1,16 @@
 package openbindings_test
 
-// Consumer exercises for the core API (Loop C, stage C1, at 166b9b4).
-//
-// Each example is a caller's code at the current API, written to show
-// where the API serves the caller and where it does not. Comments marked
-// "C1 item" name the report item (K1 to K8, F1 to F17) an awkward step
-// supports. Three callers:
+// Consumer exercises for the core API: each example is a caller's code,
+// written to show how the API serves it, and where a caller's own policy
+// begins. Three callers:
 //
 //   - the 0.2 CLI (ob-cli-surface-lab at f7a9d16, NewNextSurfaceRoot):
 //     reading a document, validating and reporting it, refusing an
 //     unsupported version, editing in place, resolving an operation and
 //     choosing its binding, checking a dependency's kinds, the media type,
-//     the formatting boundary, and, on a reference lookup the caller writes,
-//     schema and operation rename, schema remove, and merge closure, with
-//     an exact-value comparison for merge.
+//     the formatting boundary, and, on Document.References, schema and
+//     operation rename, schema remove, and merge closure, with an
+//     exact-value comparison for merge.
 //     Validating values against value contracts needs an evaluator, so
 //     those exercises are in schemaeval/consumer_examples_test.go;
 //   - a producer: building a document in code, writing it, reading it back,
@@ -159,12 +156,12 @@ func Example_cliValidate() {
 // cliRead is how a command that interprets a document (invoke, mcp, codegen)
 // reads one: ParseDocument, then an exit status for each way it can fail.
 func cliRead(data []byte) (*openbindings.Document, int, string) {
-	iface, err := openbindings.ParseDocument(data)
+	doc, err := openbindings.ParseDocument(data)
 	var refusal *openbindings.VersionRefusalError
 	var violation *openbindings.ValidationError
 	switch {
 	case err == nil:
-		return iface, 0, "read"
+		return doc, 0, "read"
 	case errors.As(err, &refusal):
 		return nil, 3, "refused (OBI-T-04): declares " + refusal.Version
 	case errors.As(err, &violation):
@@ -172,8 +169,8 @@ func cliRead(data []byte) (*openbindings.Document, int, string) {
 		return nil, 1, fmt.Sprintf("non-conformant at %s: %s", first.Position, first.Rule)
 	case errors.Is(err, openbindings.ErrInconclusive):
 		// The SDK could not read the document in full (nesting past the
-		// decoder, a lone surrogate, the document schema reaching no
-		// verdict): no verdict either way.
+		// decoder, a lone surrogate, a document the model does not carry,
+		// the document schema reaching no verdict): no verdict either way.
 		return nil, 4, "no verdict: " + err.Error()
 	}
 	// ParseDocument returns no other error.
@@ -251,28 +248,28 @@ func cliEdit(data []byte, edit func(*openbindings.Document)) ([]byte, error) {
 	// ParseDocument refuses a document violating the document schema, which
 	// an editor must still open, so the editor reads with ValidateDocument:
 	// the decoded document and the rules it already breaks.
-	iface, before, err := openbindings.ValidateDocument(data)
+	doc, before, err := openbindings.ValidateDocument(data)
 	var refusal *openbindings.VersionRefusalError
 	switch {
 	case errors.As(err, &refusal):
 		return nil, refusal
-	case iface == nil:
-		// C1 item F6 (nil document): the model cannot carry the document (or
-		// OBI-D-01 refuses it), and the only sign of it is a nil
-		// *Document beside a nil error for a lone surrogate.
+	case doc == nil:
+		// The model does not carry the document (ValidateDocument's doc
+		// lists when), whether or not a violation was established, so
+		// there is nothing to edit; the report says what was decided.
 		return nil, fmt.Errorf("cannot edit: %s", before.Conclusion)
 	}
 	had := map[string]bool{}
 	for _, f := range before.Violations() {
 		had[f.Rule+" "+f.Path] = true
 	}
-	edit(iface)
+	edit(doc)
 	// The edited value is judged again. Validate's error is a
 	// *ValidationError (violations, compared below), a *VersionRefusalError
 	// when the edit declares a version this SDK does not interpret, or an
 	// encoding error when the edited value cannot be written; the last two
 	// come with no report, so they end the edit here.
-	after, err := iface.Validate()
+	after, err := doc.Validate()
 	var violations *openbindings.ValidationError
 	switch {
 	case errors.As(err, &refusal):
@@ -289,7 +286,7 @@ func cliEdit(data []byte, edit func(*openbindings.Document)) ([]byte, error) {
 	if len(added) > 0 {
 		return nil, fmt.Errorf("refused: the change would add %s", strings.Join(added, ", "))
 	}
-	written, err := json.MarshalIndent(iface, "", "  ")
+	written, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("refused: the edited document cannot be written: %w", err)
 	}
@@ -357,14 +354,14 @@ func Example_cliEdit() {
 // named binding ob can invoke, or the sole one; otherwise refuse, listing
 // the candidates with preference and deprecation, which are shown and never
 // used to choose.
-func cliInvokeChoice(iface *openbindings.Document, name string, canInvoke map[string]bool, named ...string) string {
-	key, _, found := iface.ResolveOperation(name)
+func cliInvokeChoice(doc *openbindings.Document, name string, canInvoke map[string]bool, named ...string) string {
+	key, _, found := doc.ResolveOperation(name)
 	if !found {
 		return fmt.Sprintf("refused: no operation named %q", name)
 	}
-	bindings := iface.OperationBindings(key)
+	bindings := doc.OperationBindings(key)
 	kindOf := func(binding string) string {
-		return iface.Sources[iface.Bindings[binding].Source].Kind
+		return doc.Sources[doc.Bindings[binding].Source].Kind
 	}
 	if len(named) > 0 {
 		for _, b := range named {
@@ -390,7 +387,7 @@ func cliInvokeChoice(iface *openbindings.Document, name string, canInvoke map[st
 	}
 	var listing []string
 	for _, b := range bindings {
-		entry := iface.Bindings[b]
+		entry := doc.Bindings[b]
 		signals := kindOf(b)
 		if entry.Preference != nil {
 			signals += fmt.Sprintf(", preference %d", *entry.Preference)
@@ -404,17 +401,17 @@ func cliInvokeChoice(iface *openbindings.Document, name string, canInvoke map[st
 }
 
 func Example_cliInvokeChoice() {
-	iface, err := openbindings.ParseDocument([]byte(tasksOBI))
+	doc, err := openbindings.ParseDocument([]byte(tasksOBI))
 	if err != nil {
 		panic(err)
 	}
 	httpOnly := map[string]bool{"example.openapi@1": true}
 	both := map[string]bool{"example.openapi@1": true, "example.mcp@1": true}
-	fmt.Println(cliInvokeChoice(iface, "acme.tasks.createTask", httpOnly))
-	fmt.Println(cliInvokeChoice(iface, "createTask", both))
-	fmt.Println(cliInvokeChoice(iface, "createTask", both, "createTask.mcp", "createTask.http"))
-	fmt.Println(cliInvokeChoice(iface, "createTask", both, "listTasks.http"))
-	fmt.Println(cliInvokeChoice(iface, "CreateTask", both))
+	fmt.Println(cliInvokeChoice(doc, "acme.tasks.createTask", httpOnly))
+	fmt.Println(cliInvokeChoice(doc, "createTask", both))
+	fmt.Println(cliInvokeChoice(doc, "createTask", both, "createTask.mcp", "createTask.http"))
+	fmt.Println(cliInvokeChoice(doc, "createTask", both, "listTasks.http"))
+	fmt.Println(cliInvokeChoice(doc, "CreateTask", both))
 	// Output:
 	// acme.tasks.createTask -> createTask via createTask.http (example.openapi@1)
 	// refused: choose a binding of createTask: createTask.http (example.openapi@1, preference 10); createTask.mcp (example.mcp@1, deprecated)
@@ -533,10 +530,10 @@ func Example_producer() {
 	}
 	rewritten, _ := json.MarshalIndent(back, "", "  ")
 	fmt.Println("the same document:", bytes.Equal(written, rewritten))
-	// C1 item K8 (schemas in the model): the same document is not the same
-	// Go value. A schema decodes to generic JSON values, every number a
-	// json.Number and every array an []any. That is representation, not
-	// loss: Example_producerSchemaEdit shows the exact round trip.
+	// The same document is not the same Go value: a schema decodes to
+	// generic JSON values, every number a json.Number and every array an
+	// []any (see JSONSchema). That is representation, not loss:
+	// Example_producerSchemaEdit shows the exact round trip.
 	fmt.Println("the same Go value:", reflect.DeepEqual(&doc, back))
 	task, readTask := doc.Schemas["Task"].(map[string]any), back.Schemas["Task"].(map[string]any)
 	fmt.Printf("maxProperties: %T then %T; required: %T then %T\n", task["maxProperties"], readTask["maxProperties"], task["required"], readTask["required"])
@@ -554,11 +551,10 @@ func Example_producer() {
 // OBI-D-10's check meets this SDK's limit and stays inconclusive.
 var deeplyNested = strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300)
 
-// amendRule is the whole amendment workflow on the current API.
-// C1 item K5 (amendment).
-// A tool that decides a rule this SDK left inconclusive replaces that rule's
-// evidence and findings with its own decision for the entire rule, and the
-// report stays coherent:
+// amendRule is the whole amendment workflow, under the invariants
+// ConcludeConformance's doc states. A tool that decides a rule this SDK left
+// inconclusive replaces that rule's evidence and findings with its own
+// decision for the entire rule, and the report stays coherent:
 //   - the decision must settle the rule: satisfied, violated (with the
 //     violations' findings), or not applicable; another inconclusive answer
 //     is no amendment;
@@ -615,6 +611,10 @@ func Example_producerAmendReport() {
 	// no specification text.
 	bare := openbindings.ConcludeConformance(maps.Clone(report.Evidence))
 	fmt.Printf("bare: %s, version %q, %d findings\n", bare.Conclusion, bare.Version, len(bare.Findings))
+	// Evidence that leaves out a document rule leaves it inconclusive
+	// (OBI-T-09): no evidence concludes nothing.
+	partial := openbindings.ConcludeConformance(map[string]openbindings.RuleEvidenceStatus{"OBI-D-01": openbindings.EvidenceSatisfied})
+	fmt.Println("one rule satisfied:", partial.Conclusion, len(partial.Inconclusive), "inconclusive")
 
 	amended, err := amendRule(report, "OBI-D-10", openbindings.EvidenceSatisfied)
 	fmt.Println(err, amended.Conclusion, amended.Version, amended.Revision[:7], len(amended.Findings), "findings")
@@ -638,6 +638,7 @@ func Example_producerAmendReport() {
 	// Output:
 	// conformance-undetermined [OBI-D-10] 1 findings
 	// bare: conformance-undetermined, version "", 0 findings
+	// one rule satisfied: conformance-undetermined 12 inconclusive
 	// <nil> conformant 0.2.0 9812702 0 findings
 	// <nil> non-conformant [OBI-D-07] [] OBI-D-07 /bindings/b/operation
 	// <nil> [OBI-D-07 OBI-D-10] 2 violations
@@ -654,7 +655,7 @@ func Example_producerAmendReport() {
 // that is percent-decoded before lookup (§7.2), and it counts a reference
 // inside a schema that declares $id, which resolves against that resource's
 // base, not the document (§7.2). Document.References gets both right.
-func naiveReferrers(iface *openbindings.Document, name string) []string {
+func naiveReferrers(doc *openbindings.Document, name string) []string {
 	target := "#/schemas/" + name
 	var found []string
 	var walk func(at string, v any)
@@ -673,12 +674,12 @@ func naiveReferrers(iface *openbindings.Document, name string) []string {
 			}
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(iface.Schemas)) {
-		walk("/schemas/"+key, iface.Schemas[key])
+	for _, key := range slices.Sorted(maps.Keys(doc.Schemas)) {
+		walk("/schemas/"+key, doc.Schemas[key])
 	}
-	for _, key := range slices.Sorted(maps.Keys(iface.Operations)) {
-		walk("/operations/"+key+"/input", iface.Operations[key].Input)
-		walk("/operations/"+key+"/output", iface.Operations[key].Output)
+	for _, key := range slices.Sorted(maps.Keys(doc.Operations)) {
+		walk("/operations/"+key+"/input", doc.Operations[key].Input)
+		walk("/operations/"+key+"/output", doc.Operations[key].Output)
 	}
 	return found
 }
@@ -695,7 +696,7 @@ func Example_cliSchemaReferrers() {
 	    "b": { "output": { "$ref": "#/schemas/Task/properties/id" } }
 	  }
 	}`)
-	iface, report, err := openbindings.ValidateDocument(data)
+	doc, report, err := openbindings.ValidateDocument(data)
 	if err != nil {
 		panic(err)
 	}
@@ -703,8 +704,8 @@ func Example_cliSchemaReferrers() {
 	// The document resource references Task from /operations/a/output and
 	// /operations/b/output; Wrapped's "#/schemas/Task" names a location in
 	// https://example.com/wrapped instead.
-	fmt.Println("naive:", naiveReferrers(iface, "Task"))
-	refs, err := iface.References()
+	fmt.Println("naive:", naiveReferrers(doc, "Task"))
+	refs, err := doc.References()
 	if err != nil {
 		panic(err)
 	}
@@ -717,8 +718,8 @@ func Example_cliSchemaReferrers() {
 	fmt.Println("References:", referrers)
 	// `ob schema remove` acting on the naive answer: the edit gate catches
 	// the missed reference only as a new OBI-D-12 violation.
-	delete(iface.Schemas, "Task")
-	after, _ := iface.Validate()
+	delete(doc.Schemas, "Task")
+	after, _ := doc.Validate()
 	for _, f := range after.Violations() {
 		fmt.Println(f.Rule, f.Path)
 	}
@@ -742,7 +743,7 @@ func Example_cliMediaType() {
 	// Output: application/vnd.openbindings+json, application/json;q=0.5
 }
 
-// ------------------------- equality for merge: C1 item F7 (merge equality)
+// ------------------------------------------------- equality for merge
 
 // sameJSON reports whether two JSON texts hold the same JSON value: objects
 // as unordered members, strings as they decode, arrays in order, and numbers
@@ -856,7 +857,7 @@ func Example_cliMergeIdentical() {
 	// changed source: same Go value false, same encoding false, same JSON value false <nil>
 }
 
-// ---------------------------- C1 item K8 (schemas in the model)
+// ------------------------------------------------- schemas in the model
 
 // A producer or editor changes a schema it read from a document. The model
 // carries schema numbers as json.Number, so they come back as written; what
@@ -865,22 +866,22 @@ func Example_cliMergeIdentical() {
 // when a caller decodes schema text into float64 itself. The any-typed
 // member has its own hazard: a typed nil held there is a present null.
 func Example_producerSchemaEdit() {
-	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"setLimit":{"input":
+	doc, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"setLimit":{"input":
 	  {"type":"object","properties":{"limit":{"type":"integer","maximum":9007199254740993,"multipleOf":1.0,"minimum":1e0}}}}}}`))
 	if err != nil {
 		panic(err)
 	}
-	operation := iface.Operations["setLimit"]
+	operation := doc.Operations["setLimit"]
 	input := operation.Input.(map[string]any)
 	input["required"] = []any{"limit"}
 	input["properties"].(map[string]any)["note"] = map[string]any{"type": "string", "maxLength": 280}
 	// A schema the user typed as text is handed over as text.
 	operation.Output = json.RawMessage(`{"type": "integer", "exclusiveMaximum": 18014398509481985}`)
-	iface.Operations["setLimit"] = operation
-	if _, err := iface.Validate(); err != nil {
+	doc.Operations["setLimit"] = operation
+	if _, err := doc.Validate(); err != nil {
 		panic(err)
 	}
-	written, err := json.Marshal(iface)
+	written, err := json.Marshal(doc)
 	if err != nil {
 		panic(err)
 	}
@@ -914,8 +915,8 @@ func Example_producerSchemaEdit() {
 	e, _ := json.Marshal(exact)
 	fmt.Println(string(l), string(e))
 
-	// K8's defined-type option needs JSON methods: a named byte slice
-	// without them encodes as base64.
+	// A defined type is written by its own encoding: a named byte slice
+	// without JSON methods encodes as base64, which is no schema.
 	type rawSchema json.RawMessage
 	b, _ := json.Marshal(struct{ Input rawSchema }{rawSchema(`{"type":"string"}`)})
 	fmt.Println(string(b))
@@ -924,9 +925,9 @@ func Example_producerSchemaEdit() {
 	// typed nil held there (a nil json.RawMessage or a nil map) is a present
 	// null, which OBI-D-02 and OBI-D-10 then report.
 	for _, held := range []openbindings.JSONSchema{nil, json.RawMessage(nil), map[string]any(nil)} {
-		doc := openbindings.Document{OpenBindings: openbindings.AuthoringVersion, Operations: map[string]openbindings.Operation{"o": {Input: held}}}
-		out, _ := json.Marshal(doc)
-		report, _ := doc.Validate()
+		built := openbindings.Document{OpenBindings: openbindings.AuthoringVersion, Operations: map[string]openbindings.Operation{"o": {Input: held}}}
+		out, _ := json.Marshal(built)
+		report, _ := built.Validate()
 		fmt.Printf("%T: %s %s\n", held, out, report.Conclusion)
 	}
 	// Output:
@@ -943,22 +944,22 @@ func Example_producerSchemaEdit() {
 	// map[string]interface {}: {"openbindings":"0.2.0","operations":{"o":{"input":null}}} non-conformant
 }
 
-// ------------------------------------------- the formatting boundary (F1)
+// ------------------------------------------------- the formatting boundary
 
 // `ob fmt` promises "Entries keep the order you gave them" and "Values,
 // including numbers, are kept exactly as written". The model cannot keep
 // either: maps hold the entries, so encoding writes them in key order, and
 // a preference is an int64, so 1e0 comes back as 1. Typed members come back
-// in field order whatever order the input used. C1 item F1 (member order) allocates
-// source order and token spelling to the CLI's own representation.
+// in field order whatever order the input used. Source order and token
+// spelling belong to the CLI's own representation of the text.
 func Example_cliFormatBoundary() {
-	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"zeta":{},"alpha":{}},
+	doc, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"zeta":{},"alpha":{}},
 	  "sources":{"s":{"kind":"k"}},
 	  "bindings":{"zeta.s":{"operation":"zeta","source":"s","preference":1e0},"alpha.s":{"source":"s","operation":"alpha"}}}`))
 	if err != nil {
 		panic(err)
 	}
-	written, err := json.Marshal(iface)
+	written, err := json.Marshal(doc)
 	if err != nil {
 		panic(err)
 	}
@@ -1506,7 +1507,7 @@ func Example_cliReferenceFailures() {
 	// nil document: 0 references, complete
 }
 
-// ---------------------------------- C1 item F17 (evaluator cost)
+// ------------------------------------------------- a minimal evaluator
 
 // typeOnly is the smallest evaluator that keeps the evaluator contract: it
 // decides a schema whose only assertion is "type" with one type name,
@@ -1608,14 +1609,14 @@ func Example_evaluatorAuthorMinimal() {
 	if err != nil {
 		panic(err)
 	}
-	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","schemas":{"Name":{"type":"string"}},"operations":{
+	doc, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","schemas":{"Name":{"type":"string"}},"operations":{
 	  "name":{"input":{"$ref":"#/schemas/Name"}},
 	  "count":{"input":{"type":"integer"}},
 	  "short":{"input":{"type":"string","maxLength":3}}}}`))
 	if err != nil {
 		panic(err)
 	}
-	contracts, err := compiler.Resolve(ctx, iface)
+	contracts, err := compiler.Resolve(ctx, doc)
 	if err != nil {
 		panic(err)
 	}
