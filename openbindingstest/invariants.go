@@ -167,12 +167,17 @@ func (k *kit) cancellation() {
 // to compile or evaluates, no value whose evaluation reaches the reference
 // may get a verdict, valid or mismatch, under not too (OBI-T-08).
 func (k *kit) unresolvable() {
-	// Each schema with values whose evaluation reaches the reference.
-	for root, values := range map[string][]string{
-		`{"$ref":"https://kit.invalid/missing"}`:                         {`{"a":1}`, `"s"`, `null`},
-		`{"not":{"$ref":"https://kit.invalid/missing"}}`:                 {`{"a":1}`, `"s"`, `null`},
-		`{"properties":{"a":{"$ref":"https://kit.invalid/missing#/x"}}}`: {`{"a":1}`, `{"a":"s"}`},
+	// Each schema with values whose evaluation reaches the reference, in a
+	// fixed order, so the kit reports in the same order every run.
+	for _, c := range []struct {
+		root   string
+		values []string
+	}{
+		{`{"$ref":"https://kit.invalid/missing"}`, []string{`{"a":1}`, `"s"`, `null`}},
+		{`{"not":{"$ref":"https://kit.invalid/missing"}}`, []string{`{"a":1}`, `"s"`, `null`}},
+		{`{"properties":{"a":{"$ref":"https://kit.invalid/missing#/x"}}}`, []string{`{"a":1}`, `{"a":"s"}`}},
 	} {
+		root, values := c.root, c.values
 		var schema map[string]any
 		_ = json.Unmarshal([]byte(root), &schema)
 		schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"

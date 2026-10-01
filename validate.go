@@ -75,10 +75,11 @@ import (
 // JSON, nesting past that depth is this SDK's limit, as the first bullet
 // says. A document holding both kinds of defect is decided by the first that
 // encoding meets. Each object the model encodes checks, in order, the
-// members it carries as raw JSON; the Go strings it holds, and any value
-// that holds itself; its schemas, each encoded once; its other members, each
-// object among them checked in this same order; and the text it wrote, with
-// core's scan.
+// members it carries as raw JSON; the Go strings it holds, at any depth, and
+// any value that holds itself, so a document's string check covers every
+// object in it before any nested raw-member check; its schemas, each encoded
+// once; its other members, each object among them checked in this same
+// order; and the text it wrote, with core's scan.
 func (d Document) Validate() (ValidationReport, error) {
 	if refusal := versionRefusalOf(d.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal

@@ -62,3 +62,54 @@ func TestFixedSchemaPatterns(t *testing.T) {
 		t.Fatalf("the fixed schemas' patterns are\n%q\nreview each for Go regexp reading it as ECMA-262 does, then update this list", patterns)
 	}
 }
+
+// namedMaps holds every map whose member names the document schema
+// constrains, so a refused name is located where the document holds it. A
+// schema update adding a propertyNames fails here, for review.
+func TestDocumentSchema_NamedMapsAreEveryConstrainedMap(t *testing.T) {
+	var document any
+	if err := json.Unmarshal(openbindingsSchemaJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	constrained := 0
+	var walk func(value any)
+	walk = func(value any) {
+		switch value := value.(type) {
+		case map[string]any:
+			if _, ok := value["propertyNames"]; ok {
+				constrained++
+			}
+			for _, child := range value {
+				walk(child)
+			}
+		case []any:
+			for _, child := range value {
+				walk(child)
+			}
+		}
+	}
+	walk(document)
+	if constrained != len(namedMaps) {
+		t.Fatalf("the document schema constrains the names of %d maps; namedMaps lists %d", constrained, len(namedMaps))
+	}
+	base := `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"s":{"kind":"k"}}`
+	for path, document := range map[string]string{
+		"/schemas/<":                base + `,"schemas":{"<":{}}}`,
+		"/operations/<":             `{"openbindings":"0.2.0","operations":{"<":{}}}`,
+		"/dependencies/<":           base + `,"dependencies":{"<":{"operation":"op"}}}`,
+		"/sources/<":                `{"openbindings":"0.2.0","operations":{},"sources":{"<":{"kind":"k"}}}`,
+		"/bindings/<":               base + `,"bindings":{"<":{"operation":"op","source":"s"}}}`,
+		"/operations/op/examples/<": `{"openbindings":"0.2.0","operations":{"op":{"examples":{"<":{}}}}}`,
+	} {
+		_, report, _ := ValidateDocument([]byte(document))
+		var at []string
+		for _, finding := range report.Findings {
+			if finding.Rule == "OBI-D-02" {
+				at = append(at, finding.Path)
+			}
+		}
+		if !slices.Equal(at, []string{path}) {
+			t.Errorf("OBI-D-02 findings at %q, want one at %s", at, path)
+		}
+	}
+}

@@ -100,10 +100,14 @@ type ValidationReport struct {
 	Violated     []string
 	Inconclusive []string
 	// Findings locate every established violation and every undecided check,
-	// in the order the validator encountered them. A report is as large as
-	// what it reports: each finding's Path is as long as its location is
-	// deep, so a deeply nested document with a finding at every level makes a
-	// report that grows with the square of its depth. Findings are not capped.
+	// in the order the validator records them, which is the same every time
+	// for the same document: its checks run in a fixed sequence, and the
+	// document schema's findings (OBI-D-02), which its library reports in no
+	// fixed order, are ordered by where the failing keyword applies, by
+	// reference token, then by message. A report is as large as what it
+	// reports: each finding's Path is as long as its location is deep, so a
+	// deeply nested document with a finding at every level makes a report
+	// that grows with the square of its depth. Findings are not capped.
 	Findings []Finding
 }
 

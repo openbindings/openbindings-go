@@ -306,10 +306,10 @@ func preferenceValue(token string) (int64, bool) {
 // encoder set not to (SetEscapeHTML(false)) writes them as held.
 //
 // It checks in this order, and the first failure met decides: the members
-// it carries as raw JSON; the Go strings it holds, and whether a value holds
-// itself; its schemas, each encoded once; its other typed members, an
-// OBI-defined object among them encoded the same way; and, with core's scan,
-// the text it wrote.
+// it carries as raw JSON; the Go strings it holds, at any depth, and whether
+// a value holds itself; its schemas, each encoded once; its other typed
+// members, an OBI-defined object among them encoded the same way; and, with
+// core's scan, the text it wrote.
 func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyRawMembers(typed, lossless); err != nil {
 		return nil, err

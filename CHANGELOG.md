@@ -313,6 +313,16 @@
   so a later sibling could overwrite it and the finding pointed somewhere
   else on most runs. Core now locates the finding where the document holds
   the name, in every map whose names the document schema constrains.
+- **The same document gives the same findings in the same order.** OBI-D-02's
+  findings were still ordered by the library's overwritten location, so a
+  document with a refused member name beside other document-schema problems
+  gave its findings in different orders across runs, and a refused empty
+  name was not recognized as a name and kept the overwritten location
+  (`/openbindings/` for `/operations/`). OBI-D-02's findings are now
+  ordered by where the failing keyword applies, by reference token, then by
+  message, and a refused name, the empty one included, is located at each
+  member that holds it. The openbindingstest kit and the corpus harness
+  report in a fixed order too.
 - **A cycle every evaluation enters is an undefined result.** A value
   contract whose evaluation must apply a cycle of schemas in place without
   advancing (a schema that is only a `$ref` to itself, for one) now refuses

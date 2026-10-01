@@ -271,7 +271,7 @@ func runCoreToolScenarioDir(t *testing.T, dir string) {
 	}
 	seen := map[string]bool{}
 	defer func() {
-		for id := range corpusDefects {
+		for _, id := range slices.Sorted(maps.Keys(corpusDefects)) {
 			if !seen[id] {
 				t.Errorf("corpusDefects names %s, which the corpus does not hold", id)
 			}

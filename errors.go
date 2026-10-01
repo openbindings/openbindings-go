@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// ValidationError lists, in a deterministic order, the document-rule
-// violations validation established, each a Finding that names its rule and
-// locates it. Document.Validate and ValidateDocument return it beside their
+// ValidationError lists the document-rule violations validation established,
+// in the order the report's Findings hold them (ValidationReport.Findings),
+// each a Finding that names its rule and locates it. Document.Validate and ValidateDocument return it beside their
 // report, and ParseDocument returns it for violations of OBI-D-01 and the
 // document schema.
 type ValidationError struct {

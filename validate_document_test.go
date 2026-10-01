@@ -406,24 +406,85 @@ func TestInputContract_ThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
 	}
 }
 
-// A document schema failure on a map key is located at the key. Only the
-// key's own token is asserted: santhosh-tekuri/jsonschema v6.0.3 records a
+// A document schema failure on a map key is located at the key, the empty
+// key included, every time: santhosh-tekuri/jsonschema v6.0.3 records a
 // propertyNames failure's location without copying it, so a later sibling can
-// overwrite the tokens above the key.
+// overwrite the tokens above the key, and core locates the key itself.
 func TestValidateDocument_KeyFindingsAreLocatedAtTheKey(t *testing.T) {
-	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a/b~c":{}}}`)
-	found := false
-	for _, finding := range report.Findings {
-		if finding.Rule != "OBI-D-02" {
-			continue
-		}
-		found = true
-		if !strings.HasSuffix(finding.Path, "/a~1b~0c") {
-			t.Fatalf("OBI-D-02 finding at %q, want it located at the key", finding.Path)
+	for key, want := range map[string]string{"a/b~c": "/operations/a~1b~0c", "": "/operations/"} {
+		encoded, _ := json.Marshal(key)
+		for range 50 {
+			report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{`+string(encoded)+`:{}}}`)
+			var at []string
+			for _, finding := range report.Findings {
+				if finding.Rule == "OBI-D-02" {
+					at = append(at, finding.Path)
+				}
+			}
+			if !slices.Equal(at, []string{want}) {
+				t.Fatalf("key %q: OBI-D-02 findings at %q, want one at %q", key, at, want)
+			}
 		}
 	}
-	if !found {
-		t.Fatal("want an OBI-D-02 finding for the key")
+}
+
+// Validation records the same findings in the same order every time, for a
+// document with many sibling problems across its maps, whether it is given
+// as bytes, decoded, or built in memory. The document schema check, whose
+// library walks a document's objects in no fixed order, orders its findings
+// by where the failing keyword applies, then by message.
+func TestValidate_FindingsAreDeterministic(t *testing.T) {
+	documents := map[string]string{
+		"names and unknown members":            `{"openbindings":"0.2.0","operations":{"op":{"zz":1,"aa":2,"examples":{"e<1>":{}}}}}`,
+		"an empty name beside unknown members": `{"openbindings":"0.2.0","zz":1,"aa":2,"operations":{"":{},"op":{"zz":1,"aa":2}}}`,
+		"problems in every map": `{"openbindings":"0.2.0","zz":1,"aa":2,
+			"schemas":{"s<1>":{"type":"nope","$ref":"#/nowhere"},"ok":{"properties":{"a":{"type":3}}}},
+			"operations":{"o<1>":{"bad":1,"examples":{"e<1>":{},"e 2":{"x":1}},"aliases":["a","a","b<"]},
+				"o2":{"zz":1,"aa":[],"input":{"$ref":"#/schemas/missing"},"examples":{"f<":{}}},
+				"o3":{"aliases":["b<"],"tags":[1]}},
+			"dependencies":{"d<":{"operation":"none","kinds":[]},"d2":{"operation":3}},
+			"sources":{"s<":{"kind":""},"s2":{"kind":"k","zz":1}},
+			"bindings":{"b<":{"operation":"o9","source":"s9","preference":1.5},"b2":{"operation":"o2","source":"s2","aa":1,"zz":2},
+				"b3":{"operation":"o2","source":"s2","preference":1e400}}}`,
+	}
+	built := Document{OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{"s<1>": map[string]any{"type": "nope"}, "s 2": map[string]any{"$ref": "#/nowhere"}},
+		Operations: map[string]Operation{
+			"o<1>": {Aliases: []string{"a", "a"}, Examples: map[string]OperationExample{"e<1>": {}, "e 2": {}}},
+			"o 2":  {Input: map[string]any{"$ref": "#/schemas/missing"}, LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"zz": json.RawMessage(`1`), "aa": json.RawMessage(`2`)}}},
+		},
+		Bindings: map[string]Binding{"b<": {Operation: "o9", Source: "s9"}, "b 2": {Operation: "o 2", Source: "s 2"}},
+	}
+	outcome := func(report ValidationReport, err error) string {
+		return fmt.Sprintf("%v\n%v", report.Findings, err)
+	}
+	for name, text := range documents {
+		_, report, err := ValidateDocument([]byte(text))
+		first := outcome(report, err)
+		doc, err := ParseDocument([]byte(text))
+		if err != nil {
+			doc = nil // a document the model refuses is judged as bytes alone
+		}
+		var firstDecoded string
+		if doc != nil {
+			firstDecoded = outcome(doc.Validate())
+		}
+		for i := range 200 {
+			if _, report, err := ValidateDocument([]byte(text)); outcome(report, err) != first {
+				t.Fatalf("%s, as bytes, run %d:\n%s\nwant\n%s", name, i, outcome(report, err), first)
+			}
+			if doc != nil {
+				if got := outcome(doc.Validate()); got != firstDecoded {
+					t.Fatalf("%s, decoded, run %d:\n%s\nwant\n%s", name, i, got, firstDecoded)
+				}
+			}
+		}
+	}
+	first := outcome(built.Validate())
+	for i := range 200 {
+		if got := outcome(built.Validate()); got != first {
+			t.Fatalf("built in memory, run %d:\n%s\nwant\n%s", i, got, first)
+		}
 	}
 }
 

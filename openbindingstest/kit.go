@@ -469,7 +469,7 @@ func (k *kit) checkOptions() {
 		given map[string]string
 		used  []string
 	}{{"Undecided", k.o.Undecided, k.usedUndecided}, {"Unlocated", k.o.Unlocated, k.usedUnlocated}} {
-		for id := range entries.given {
+		for _, id := range sortedNames(entries.given) {
 			switch {
 			case !k.seen[id] && k.filtered:
 			case !k.seen[id]:

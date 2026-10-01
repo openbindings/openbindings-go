@@ -1,12 +1,14 @@
 package openbindings
 
 import (
+	"cmp"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"
@@ -175,7 +177,16 @@ func cutSchema(schema map[string]any, limit int) (map[string]any, string) {
 // is never handed a number beyond the numeric limits of schema evaluation: a
 // preference holding one is decided exactly here, and any other is checked
 // as a stand-in (schemacompiler.Substitute).
+//
+// Its violations are recorded in the order of where the failing keyword
+// applies, by reference token (the object, for a member the schema does not
+// allow; the member, for a member name it refuses; the value otherwise), then
+// of their messages. The schema library finds them in the order it walks the
+// document's objects, which is not fixed, and locates a refused member name
+// by a location a later sibling can overwrite, so each is located here
+// first.
 func validateAgainstOBISchema(c *ruleChecks, view any) {
+	var found []schemaFinding
 	var decided [][]string
 	for _, member := range membersAt(view, []string{"bindings", "*", "preference"}, nil) {
 		number, isNumber := member.value.(json.Number)
@@ -183,47 +194,68 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 			continue
 		}
 		if _, inRange := preferenceValue(string(number)); !inRange {
-			c.violated("OBI-D-02", jsonpointer.Format(member.tokens...), fmt.Sprintf("does not validate against the document schema: a preference is an integer from -%d through %d", maxPreference, maxPreference))
+			found = append(found, schemaFinding{member.tokens, member.tokens, fmt.Sprintf("a preference is an integer from -%d through %d", maxPreference, maxPreference)})
 		}
 		decided = append(decided, member.tokens)
 	}
 	checked := schemacompiler.Substitute(withoutMembers(view, decided))
 	verr := compiledOBISchema.Validate(checked.Value)
+	var problems []schemacompiler.Problem
 	if verr != nil {
-		problems, mismatch := checked.Outcome(verr)
-		if !mismatch {
+		var mismatch bool
+		if problems, mismatch = checked.Outcome(verr); !mismatch {
+			recordSchemaFindings(c, found)
 			// An exceeded resource limit is not evidence of violation (§10.4).
 			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
 			return
 		}
-		located := map[string]bool{}
-		for _, problem := range problems {
-			if len(problem.Members) > 0 {
-				// A member the document schema does not allow is located
-				// at the member, each one a finding of its own.
-				for _, name := range problem.Members {
-					c.violated("OBI-D-02", jsonpointer.Format(append(slices.Clone(problem.Location), name)...), fmt.Sprintf("does not validate against the document schema: additional property %q not allowed", name))
-				}
-				continue
+	}
+	located := map[string]bool{}
+	for _, problem := range problems {
+		switch {
+		case len(problem.Members) > 0:
+			// A member the document schema does not allow is located at the
+			// member, each one a finding of its own.
+			for _, name := range problem.Members {
+				found = append(found, schemaFinding{problem.Location, append(slices.Clone(problem.Location), name), fmt.Sprintf("additional property %q not allowed", name)})
 			}
-			if problem.Name == "" {
-				c.violated("OBI-D-02", jsonpointer.Format(problem.Location...), "does not validate against the document schema: "+problem.Message)
-				continue
-			}
+		case problem.Name == nil:
+			found = append(found, schemaFinding{problem.Location, problem.Location, problem.Message})
+		case !located[*problem.Name]:
 			// A member name the schema refuses is located where the document
 			// holds it, once per such member however often it is reported.
-			if located[problem.Name] {
-				continue
-			}
-			located[problem.Name] = true
-			at := memberNamesAt(view, problem.Name)
+			// namedMaps holds every map whose names the schema constrains
+			// (TestDocumentSchema_NamedMapsAreEveryConstrainedMap); a name
+			// found in none is still a violation, of the whole document.
+			located[*problem.Name] = true
+			at := memberNamesAt(view, *problem.Name)
 			if len(at) == 0 {
-				at = []string{jsonpointer.Format(problem.Location...)}
+				at = [][]string{nil}
 			}
-			for _, path := range at {
-				c.violated("OBI-D-02", path, "does not validate against the document schema: "+problem.Message)
+			for _, tokens := range at {
+				found = append(found, schemaFinding{tokens, tokens, problem.Message})
 			}
 		}
+	}
+	recordSchemaFindings(c, found)
+}
+
+// schemaFinding is an OBI-D-02 violation: where the failing keyword applies
+// and where the violation is, as reference tokens, and what the document
+// schema refused there.
+type schemaFinding struct {
+	applies, at []string
+	message     string
+}
+
+// recordSchemaFindings records OBI-D-02 violations in the order of where the
+// failing keyword applies, by reference token, then of their messages.
+func recordSchemaFindings(c *ruleChecks, found []schemaFinding) {
+	slices.SortStableFunc(found, func(a, b schemaFinding) int {
+		return cmp.Or(slices.Compare(a.applies, b.applies), strings.Compare(a.message, b.message))
+	})
+	for _, f := range found {
+		c.violated("OBI-D-02", jsonpointer.Format(f.at...), "does not validate against the document schema: "+f.message)
 	}
 }
 
@@ -233,17 +265,16 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 var namedMaps = [][]string{{"schemas"}, {"operations"}, {"dependencies"}, {"sources"}, {"bindings"}, {"operations", "*", "examples"}}
 
 // memberNamesAt returns where the document holds a member named name in one
-// of namedMaps, in sorted order.
-func memberNamesAt(view any, name string) []string {
-	var out []string
+// of namedMaps, as reference tokens.
+func memberNamesAt(view any, name string) [][]string {
+	var out [][]string
 	for _, at := range namedMaps {
 		for _, m := range membersAt(view, append(slices.Clone(at), "*"), nil) {
 			if m.tokens[len(m.tokens)-1] == name {
-				out = append(out, jsonpointer.Format(m.tokens...))
+				out = append(out, m.tokens)
 			}
 		}
 	}
-	slices.Sort(out)
 	return out
 }
 
