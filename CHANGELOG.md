@@ -99,6 +99,10 @@
   one that declares none: core gives each OBI position of the document
   resource an `$id` of its own, which would otherwise make a misplaced one
   declare its unit's dialect. `SchemaBundle` states this ("One dialect").
+- **The 2020-12-only dialect limit is a declared capability limit.** The
+  package doc and the README now list it beside the others: a value
+  contract copying a schema whose resource names a dialect other than
+  2020-12 gets no verdict. This documents existing behavior.
 - **The model's types and lookups take the spec's names (breaking,
   pre-1.0).** `Interface` is `Document`, `BindingEntry` is `Binding`, and
   `DependencyEntry` is `Dependency`, the spec's terms (§3);

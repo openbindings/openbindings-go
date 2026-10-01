@@ -108,6 +108,9 @@
 //   - The schemaeval evaluator does not match a Unicode property escape in
 //     a pattern, since Go's Unicode tables are not ECMA-262's, so evaluation
 //     that reaches one gives no verdict.
+//   - Core evaluates JSON Schema 2020-12 alone: a value contract copying a
+//     schema whose resource names another dialect, by its root's $schema or
+//     by inheriting it (§5.2), gets no verdict.
 //
 // # An Exact Document Model
 //

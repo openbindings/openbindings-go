@@ -93,7 +93,10 @@ evaluation would never reach it (a reference to a resource nobody supplied,
 on a branch the value does not take). A value holding a string with a lone
 UTF-16 surrogate, which a Go string cannot carry, gets no verdict. And
 `schemaeval` gives no verdict where evaluation reaches a Unicode property
-escape in a pattern, since Go's Unicode tables are not ECMA-262's.
+escape in a pattern, since Go's Unicode tables are not ECMA-262's. Core
+evaluates JSON Schema 2020-12 alone, so a value contract copying a schema
+whose resource names another dialect, by its root's `$schema` or by
+inheriting it (§5.2), gets no verdict.
 The Core corpus does not exercise every behavior in OBI-T-01: the exact kind
 comparison has direct Go tests, while Core has no kind-support registry or
 implicit dereferencing path.
