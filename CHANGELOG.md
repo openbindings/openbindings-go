@@ -333,7 +333,8 @@
   their signatures, so the module is green at the baseline, a regression
   fails it, and a keyed case that passes fails as stale.
   Kind retrieval is observed through a local TCP listener whose address the
-  kind names, so a connection from any client counts. Each module records
+  kind names, so a connection from any client counts; a case whose
+  sentinels cannot start fails rather than being skipped. Each module records
   every case executed or omitted with a reason and checks the counts
   against the corpus manifest. Format @1, the corpus at the applied
   revision, reads as before, its keyed corpus defect included; format @2's

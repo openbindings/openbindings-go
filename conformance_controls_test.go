@@ -125,3 +125,16 @@ func TestUncarriedOmission(t *testing.T) {
 		t.Errorf("a keyed case whose document comes back: %+v, %v", j, stale)
 	}
 }
+
+// A case whose retrieval sentinels cannot start fails: an adapter that cannot
+// observe retrieval cannot judge it, and skipping it would hide that.
+func TestSentinelsThatCannotStart(t *testing.T) {
+	defer func(previous func([]string) (*sentinels, error)) { sentinelStarter = previous }(sentinelStarter)
+	sentinelStarter = func([]string) (*sentinels, error) { return nil, errors.New("no FIFOs on this platform") }
+	raw := `{"given": {"document": {"openbindings": "0.2.0", "operations": {"op": {}}, "sources": {"s": {"kind": "{retrieval-sentinel:file}"}},
+		"bindings": {"b": {"operation": "op", "source": "s"}}, "dependencies": {"d": {"operation": "op", "kinds": ["a@1"]}}},
+		"dependency": "d", "binding": "b", "retrievalSentinels": ["file"]}, "expected": {"outcome": "does-not-meet"}}`
+	if j := judgeKind(corpus.Case{ID: "T01-S-15", Action: "check-dependency-kind", Raw: []byte(raw)}); j.Category != corpus.Fail || !strings.Contains(j.Detail, "cannot start") {
+		t.Errorf("a case whose sentinels cannot start: %+v", j)
+	}
+}

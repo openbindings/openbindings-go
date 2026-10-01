@@ -775,6 +775,10 @@ func judgeConcludeUnder(defects map[string]corpusDefect, cs corpus.Case) corpus.
 	return pass(string(report.Conclusion))
 }
 
+// sentinelStarter starts a check-dependency-kind action's retrieval
+// sentinels; a control replaces it with one that cannot start.
+var sentinelStarter = startSentinels
+
 // judgeKind executes check-dependency-kind: the model ValidateDocument
 // returns and Dependency.AcceptsKind, with the kind compared never retrieved:
 // a retrieval sentinel's channel is observed for the whole action, loading
@@ -799,9 +803,11 @@ func judgeKind(cs corpus.Case) corpus.Judgment {
 	var observe *sentinels
 	if len(s.Given.Sentinels) > 0 {
 		var err error
-		observe, err = startSentinels(s.Given.Sentinels)
+		observe, err = sentinelStarter(s.Given.Sentinels)
 		if err != nil {
-			return omit(err.Error())
+			// An adapter that cannot observe retrieval cannot judge the case,
+			// and skipping it would hide that: the case fails.
+			return fail("the retrieval sentinels cannot start here: %v", err)
 		}
 		data = observe.substitute(data)
 	}
