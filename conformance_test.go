@@ -82,13 +82,13 @@ const appliedTextSHA256 = "e70cbc8b3b6d4096fd83f694dc093d3ce6d6c87319aeb97b8ae9e
 // pins (verifyAppliedText), for the history of the specification repository
 // holding the corpus.
 func appliedTextVerified(corpusDir string) (bool, string) {
-	return verifyAppliedText(corpusDir, appliedRevision, appliedTextRevision, appliedTextSHA256, openbindingsSchemaJSON)
+	return verifyAppliedText(corpusDir, appliedRelease, appliedRevision, appliedTextRevision, appliedTextSHA256, openbindingsSchemaJSON)
 }
 
 var fullRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-// verifyAppliedText verifies a declared applied text: the revision must be a
-// full 40-hex commit of the specification repository holding corpusDir (git
+// verifyAppliedText verifies a declared applied text: the release must be a
+// SemVer 2.0.0 version, the revision a full 40-hex commit of the specification repository holding corpusDir (git
 // rev-parse --verify REV^{commit} gives it back), the pinned hash must be
 // bound to it, the openbindings.md at it must hash to the pinned sha256, and
 // its schema must be the one this SDK embeds. Both are read from the history,
@@ -96,8 +96,10 @@ var fullRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // part and an unrelated specification commit cannot change the result. A
 // release named alone (OBI-T-09/c3a) is not verified: no verification against
 // a release snapshot exists.
-func verifyAppliedText(corpusDir, revision, pinnedRevision, pinnedSHA256 string, schema []byte) (bool, string) {
+func verifyAppliedText(corpusDir, release, revision, pinnedRevision, pinnedSHA256 string, schema []byte) (bool, string) {
 	switch {
+	case !isValidSemver(release):
+		return false, fmt.Sprintf("appliedRelease %q is not a SemVer 2.0.0 version", release)
 	case revision == "":
 		return false, "a release named alone (OBI-T-09/c3a) is not verified: no verification against a release snapshot exists"
 	case !fullRevision.MatchString(revision):

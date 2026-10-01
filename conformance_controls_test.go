@@ -57,6 +57,7 @@ func TestAppliedTextControls(t *testing.T) {
 		why                      string
 	}{
 		{"the pinned commit", commit, commit, pinned, openbindingsSchemaJSON, true, ""},
+		{"an empty release", commit, commit, pinned, openbindingsSchemaJSON, false, "not a SemVer"},
 		{"an empty revision (a release named alone)", "", "", pinned, openbindingsSchemaJSON, false, "release snapshot"},
 		{"a symbolic revision", "HEAD", "HEAD", pinned, openbindingsSchemaJSON, false, "not a full 40-hex commit"},
 		{"an abbreviated revision", commit[:7], commit[:7], pinned, openbindingsSchemaJSON, false, "not a full 40-hex commit"},
@@ -66,7 +67,11 @@ func TestAppliedTextControls(t *testing.T) {
 		{"another text", commit, commit, strings.Repeat("0", 64), openbindingsSchemaJSON, false, "hashes to"},
 		{"another schema", commit, commit, pinned, []byte("{}"), false, "not the schema this SDK embeds"},
 	} {
-		verified, why := verifyAppliedText(corpusDir, c.revision, c.pinnedRevision, c.sum, c.schema)
+		release := "0.2.0"
+		if c.name == "an empty release" {
+			release = ""
+		}
+		verified, why := verifyAppliedText(corpusDir, release, c.revision, c.pinnedRevision, c.sum, c.schema)
 		if verified != c.verified || !strings.Contains(why, c.why) {
 			t.Errorf("%s: %v, %q", c.name, verified, why)
 		}
