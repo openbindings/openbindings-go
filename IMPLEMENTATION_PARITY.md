@@ -58,39 +58,53 @@ Document validation reports the core's §10.4 conformance conclusion in Go:
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
-The revised 0.2 working draft (spec `99f8acd`, the text of `8ea5a30`,
-adopted 2026-10-01) is established in Go first; TypeScript alignment is
-pending for each of these, each marked by its ruling:
+The revised 0.2 working draft (spec `99f8acd`, adopted 2026-10-01) is
+established in Go first; TypeScript alignment is pending for each of these,
+each with the spec CHANGELOG entry (0.2.0 working draft) that states it:
 
-- **OBI-D-01 decides alone (S1).** On a text violating OBI-D-01, OBI-D-02
+- **OBI-D-01 decides alone** (Changed, "What the other document rules say
+  about a text OBI-D-01 rejects"). On a text violating OBI-D-01, OBI-D-02
   through OBI-D-13 are not applicable, recorded so with no finding, and the
   conclusion is non-conformant from OBI-D-01 alone; nothing is left
   inconclusive. A validator that has not decided OBI-D-01 and fails a check
   it could make exactly concludes non-conformant (§10).
-- **Plain names by the grammar (S3).** Only an `$anchor` or
-  `$dynamicAnchor` whose value matches JSON Schema Core §8.2.2's grammar as
-  a whole declares a name, for OBI-D-12's lookup, OBI-D-13's count, and
-  reference resolution everywhere (`#1bad` never targets `"$anchor":
-  "1bad"`); OBI-D-10 still reports the value.
-- **Dialects by resource (S4).** A schema is read under its resource's
-  dialect: the document resource's is 2020-12 whatever `$schema` it holds,
-  an `$id` resource takes its root's `$schema` or its enclosing resource's,
-  and a misplaced `$schema` selects nothing. A foreign `$schema` still
-  violates OBI-D-06; value validation gives no verdict only where the
-  resource's dialect is one the tool lacks.
-- **Malformed strings are no references (S6).** A `$ref` or `$dynamicRef`
-  string that is not a well-formed URI-reference is not a reference of any
-  form: OBI-D-05 reports it in the document resource, OBI-D-12 does not
-  govern it, a value whose evaluation depends on it gets no verdict, and
-  the schema-reference listing omits it.
-- **Ambiguous dynamic capture (B6 round 2).** A value whose evaluation,
+- **A check made while OBI-D-01 is undecided** (the same entry). Go's
+  `Document.Validate` cannot write a host object beyond the SDK's own
+  limits, so it leaves OBI-D-01 undecided, and it decides OBI-D-09 on the
+  declared version, which it holds exactly. A failed check is recorded as
+  OBI-D-09 violated and concludes non-conformant, as §10 permits, though
+  the check establishes only that OBI-D-01 or OBI-D-09 is violated, not
+  which. This attribution is accepted as Go's; TypeScript makes the same
+  one, so the two SDKs report the same rule-level evidence for such a
+  value.
+- **Plain names by the grammar** (Changed, "Only a grammatical anchor
+  declares a plain name"). Only an `$anchor` or `$dynamicAnchor` whose
+  value matches JSON Schema Core §8.2.2's grammar as a whole declares a
+  name, for OBI-D-12's lookup, OBI-D-13's count, and reference resolution
+  everywhere (`#1bad` never targets `"$anchor": "1bad"`); OBI-D-10 still
+  reports the value.
+- **Dialects by resource** (Changed, "A schema resource without `$schema`
+  inherits its dialect"). A schema is read under its resource's dialect:
+  the document resource's is 2020-12 whatever `$schema` it holds, an `$id`
+  resource takes its root's `$schema` or its enclosing resource's, and a
+  misplaced `$schema` selects nothing. A foreign `$schema` still violates
+  OBI-D-06; value validation gives no verdict only where the resource's
+  dialect is one the tool lacks.
+- **Malformed strings are no references** (Changed, "A malformed reference
+  string is not a reference"). A `$ref` or `$dynamicRef` string that is not
+  a well-formed URI-reference is not a reference of any form: OBI-D-05
+  reports it in the document resource, OBI-D-12 does not govern it, a value
+  whose evaluation depends on it gets no verdict, and the schema-reference
+  listing omits it.
+- **Ambiguous dynamic capture** (no spec change: JSON Schema Core §8.2.2,
+  §8.2.3.2, with §7.2's outermost scope). A value whose evaluation,
   beginning in the document resource, looks a `$dynamicRef`'s name up in
   the dynamic scope gets no verdict when the document resource declares
-  that name more than once, by either keyword (JSON Schema Core §8.2.2,
-  §8.2.3.2; §7.2).
-- **Corpus format @2.** The revised text's corpus holds scenarios in
-  format `openbindings.core-tool-scenarios@2` alone; `resolve-schema-cycle`,
-  the old outcome tokens (`graph-unavailable`, `resolver-error`), and the
+  that name more than once, by either keyword.
+- **Corpus format @2** (Added, "`openbindings.core-tool-scenarios@2`").
+  The revised text's corpus holds scenarios in format
+  `openbindings.core-tool-scenarios@2` alone; `resolve-schema-cycle`, the
+  old outcome tokens (`graph-unavailable`, `resolver-error`), and the
   validity fixtures that listed OBI-T-04 as a version refusal are gone. A
   corpus runner reads @2's actions and expectations: value results as
   `valid`, `instance-mismatch`, or `no-verdict` (bare or in object form

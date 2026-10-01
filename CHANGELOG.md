@@ -15,11 +15,8 @@
   value is a well-formed URI-reference, as a `Reference`: its location,
   keyword, and value, the base it resolves against, and the schema its
   initial lookup identifies or why there is none, looked up by the
-  resolution OBI-D-12 and value validation use. A string that is not a
-  well-formed URI-reference is not a reference of any form (ruling S6,
-  §7.1), so it is not listed, where it was listed with that as the reason
-  it identified nothing; OBI-D-05 reports it in the document resource. It
-  refuses an unsupported version, does not interpret a document declaring no
+  resolution OBI-D-12 and value validation use. It refuses an unsupported
+  version, does not interpret a document declaring no
   valid version, and returns what it found with `ErrInconclusive` where a
   schema nests past the index's 256 levels. Its doc states what a caller may
   and may not conclude, `$dynamicRef` included.
@@ -52,14 +49,17 @@
 - **The SDK applies the revised 0.2 working draft.** The text it applies,
   which a report names (`ValidationReport.Revision`) and Go CI checks the
   spec repository out at, moves from `98127021` to `99f8acd5`, whose
-  `openbindings.md` (sha256 `95846137…0198`) carries the checkpoint 1 and 2
-  rulings: R1 and R2 in OBI-T-09, and S1 to S6 with the OBI-D-01 note. The
-  corpus adapter pins that revision's hash beside it. The document schema
-  is unchanged; it was synced from that revision and compared byte for
-  byte. The entries below marked with a ruling are the behavior the revised
-  text changes.
+  `openbindings.md` (sha256 `95846137…0198`) is the one the spec's
+  CHANGELOG describes in its 0.2.0 working-draft entries under "Changed",
+  from "OBI-T-09 forbids an unestablished non-conformance claim" to
+  "OBI-D-01's note cites RFC 7493 for duplicate names only". The corpus
+  adapter pins that revision's hash beside it. The document schema is
+  unchanged; it was synced from that revision and compared byte for byte.
+  The entries below that cite one of those spec entries are the behavior
+  the revised text changes.
 - **A text violating OBI-D-01 leaves the other rules not applicable
-  (ruling S1, §10; pre-1.0).** `ValidateDocument` records OBI-D-02 through
+  (§10; spec CHANGELOG, "What the other document rules say about a text
+  OBI-D-01 rejects"; pre-1.0).** `ValidateDocument` records OBI-D-02 through
   OBI-D-13 as `not-applicable`, with no finding, where it recorded each
   inconclusive with a finding: they govern a JSON value only when OBI-D-01
   holds, impose no further requirements on a text that violates it, and the
@@ -70,8 +70,8 @@
   failed OBI-D-09 check there establishes non-conformance (the paragraph's
   second half: either rule may be the one violated). `ConcludeConformance`
   states the applicability the same way; its behavior is unchanged.
-- **Only a name in JSON Schema's grammar is declared (ruling S3, §7.3;
-  pre-1.0).** An `$anchor` or `$dynamicAnchor` declares a plain name only
+- **Only a name in JSON Schema's grammar is declared (§7.3; spec
+  CHANGELOG, "Only a grammatical anchor declares a plain name"; pre-1.0).** An `$anchor` or `$dynamicAnchor` declares a plain name only
   when its value matches, as a whole, the grammar of JSON Schema Core
   §8.2.2 (a letter or underscore, then letters, digits, hyphens,
   underscores, and periods). Any other value, such as `"1bad"`,
@@ -84,7 +84,8 @@
   names the schema space indexes by the same grammar. The corpus adapter's
   two keyed expected failures for this (the OBI-D-10 and OBI-D-12 fixtures
   that needed it) are removed: the stale check reported both passing.
-- **Dialects go by resource (ruling S4, §5.2; pre-1.0 for evaluator
+- **Dialects go by resource (§5.2; spec CHANGELOG, "A schema resource
+  without `$schema` inherits its dialect"; pre-1.0 for evaluator
   authors).** The document resource's dialect is 2020-12 and a `$schema` in
   it declares none; a resource an `$id` declares takes the dialect its
   `$schema` names, or its enclosing resource's (JSON Schema Core §9.3.2);
@@ -99,6 +100,14 @@
   one that declares none: core gives each OBI position of the document
   resource an `$id` of its own, which would otherwise make a misplaced one
   declare its unit's dialect. `SchemaBundle` states this ("One dialect").
+- **`Document.References` leaves out a string that is not a URI-reference
+  (§7.1; spec CHANGELOG, "A malformed reference string is not a reference";
+  pre-1.0).** A `$ref` or `$dynamicRef` string that is not a well-formed
+  URI-reference is not a reference of any form, so `References` no longer
+  lists it, where it listed it with that as the reason it identified
+  nothing. OBI-D-05 still reports it in the document resource, OBI-D-12
+  does not govern it, and a value whose evaluation depends on it still gets
+  no verdict.
 - **The 2020-12-only dialect limit is a declared capability limit.** The
   package doc and the README now list it beside the others: a value
   contract copying a schema whose resource names a dialect other than
@@ -403,15 +412,15 @@
 ### Fixed
 
 - **A dynamic capture into a name the document resource declares twice
-  gets no verdict (B6 round 2, cold read Q08).** An evaluation beginning
-  in the document resource makes it outermost in the dynamic scope (§7.2),
-  so a `$dynamicRef` whose initial target declares a `$dynamicAnchor`
-  looks the name up there first (JSON Schema Core §8.2.3.2). Where the
-  document resource declares that name more than once, by `$anchor` or
-  `$dynamicAnchor`, the capture is undefined (Core §8.2.2), so the value
-  contract is refused as `ErrUndefined`; it counted only `$dynamicAnchor`
-  declarations, so one beside an `$anchor` of the same name, in another
-  OBI position, gave a verdict. The names counted are OBI-D-12's (§7.3),
+  gets no verdict (§7.2; JSON Schema Core §8.2.2, §8.2.3.2).** An
+  evaluation beginning in the document resource makes it outermost in the
+  dynamic scope (§7.2), so a `$dynamicRef` whose initial target declares a
+  `$dynamicAnchor` looks the name up there first (JSON Schema Core
+  §8.2.3.2). Where the document resource declares that name more than
+  once, by `$anchor` or `$dynamicAnchor`, the capture is undefined (Core
+  §8.2.2), so the value contract is refused as `ErrUndefined`; it counted
+  only `$dynamicAnchor` declarations, so one beside an `$anchor` of the
+  same name, in another OBI position, gave a verdict. The names counted are OBI-D-12's (§7.3),
   and a capturing declaration past the 256 levels core indexes is now
   core's limit, where the capture was left out.
 - **OBI-D-02 findings on a refused member name point at the member.** The

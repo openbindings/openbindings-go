@@ -209,9 +209,8 @@ func TestBundle_ScopeWrappers(t *testing.T) {
 // $dynamicAnchor looks the name up there first (JSON Schema Core §8.2.3.2).
 // A name the document resource declares more than once, by $anchor or
 // $dynamicAnchor, leaves that capture undefined (Core §8.2.2): no verdict,
-// whichever schema would have won. The first case is the B6 builders'
-// (cold read Q08); a name declared once captures as before, and one past
-// core's index is core's limit, not a verdict.
+// whichever schema would have won. A name declared once captures as before,
+// and one past core's index is core's limit, not a verdict.
 func TestDynamicScope_DuplicateDocumentNames(t *testing.T) {
 	inner := `"Inner":{"$id":"https://e.test/inner","$dynamicAnchor":"node","type":"string"}`
 	entry := `"operations":{"op":{"input":{"$dynamicRef":"https://e.test/inner#node"}}}`
@@ -302,7 +301,7 @@ func TestBundle_SuppliedResources(t *testing.T) {
 // verdict, though the $schema still violates OBI-D-06; so is one below an
 // $id resource's root, where $schema is misplaced. A resource whose root
 // names another dialect, and a resource inheriting it, get no verdict:
-// this SDK evaluates 2020-12 alone. The cases are the B6 builders'.
+// this SDK evaluates 2020-12 alone.
 func TestDialects_ByResource(t *testing.T) {
 	const draft07 = `"http://json-schema.org/draft-07/schema#"`
 	for _, c := range []struct {
