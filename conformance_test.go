@@ -243,6 +243,7 @@ var expectsConformantWithoutEveryRule = corpusDefect{
 // its scenario is gone. Retiring a defect is removing its entry, nothing
 // else.
 var corpusDefects = map[string]corpusDefect{
+	// One entry per line: a scenario ID and its defect.
 	"T09-S-01": expectsConformantWithoutEveryRule,
 }
 
