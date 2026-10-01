@@ -206,3 +206,41 @@ func ExampleDocument_OperationBindings() {
 	// createTask.tools example.mcp@1
 	// []
 }
+
+func ExampleDocument_References() {
+	doc, err := openbindings.ParseDocument([]byte(`{
+		"openbindings": "0.2.0",
+		"schemas": {
+			"Task": {"$anchor": "task", "type": "object"},
+			"List": {"type": "array", "items": {"$ref": "#/schemas/T%61sk"}}
+		},
+		"operations": {
+			"createTask": {"input": {"$ref": "#task"}, "output": {"$ref": "#/schemas/Missing"}}
+		},
+		"sources": {
+			"api": {"kind": "example.openapi@1", "content": {"$ref": "#/schemas/Task"}}
+		}
+	}`))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Every reference keyword in the schemas the document contains, with
+	// the schema its initial lookup identifies. Source content is not a
+	// schema, so its $ref-shaped member is not listed.
+	refs, err := doc.References()
+	if err != nil {
+		log.Fatal(err) // refused, or an index this SDK could not complete
+	}
+	for _, r := range refs {
+		if r.Target != "" {
+			fmt.Println(r.Location, "->", r.Target)
+		} else {
+			fmt.Println(r.Location, "identifies no schema")
+		}
+	}
+	// Output:
+	// /operations/createTask/input/$ref -> /schemas/Task
+	// /operations/createTask/output/$ref identifies no schema
+	// /schemas/List/items/$ref -> /schemas/Task
+}

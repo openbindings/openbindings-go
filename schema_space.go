@@ -269,6 +269,8 @@ type schemaSpace struct {
 	// document is what OBI-D-12 looks same-document references in the
 	// document resource up in.
 	document documentSchemas
+	// supplied is nil in a space no application supplies resources to
+	// (Document.References).
 	supplied *suppliedResources
 	// byName maps each exact name to the resources carrying it, and byNormal
 	// each normal-form name, across the OBI document and the supplied
@@ -282,7 +284,7 @@ type schemaSpace struct {
 
 func newSchemaSpace(view any, supplied *suppliedResources) *schemaSpace {
 	s := &schemaSpace{obi: indexDocument(obiDocument, "", view), document: collectDocumentSchemas(view), supplied: supplied, byName: map[string][]*docResource{}, byNormal: map[string][]*docResource{}}
-	for _, d := range append([]*schemaDoc{s.obi}, supplied.docs...) {
+	for _, d := range append([]*schemaDoc{s.obi}, supplied.documents()...) {
 		for _, r := range d.resources {
 			for _, name := range r.names {
 				s.byName[name] = append(s.byName[name], r)
@@ -330,6 +332,9 @@ func (s *schemaSpace) resolve(ref string, holder *docResource) (schemaTarget, *f
 	}
 	if meta := embeddedMetaSchemas()[name]; meta != nil {
 		return s.resolveWithin(meta, fragment, ref)
+	}
+	if s.supplied == nil {
+		return schemaTarget{}, &failure{missingCapability, fmt.Sprintf("%q names %s, a resource the document does not embed (§7.4)", ref, name)}
 	}
 	return schemaTarget{}, &failure{missingCapability, fmt.Sprintf("%q names %s, a resource the document does not embed and the application did not supply (§7.4)", ref, name)}
 }
@@ -470,6 +475,15 @@ var embeddedMetaSchemas = sync.OnceValue(func() map[string]*docResource {
 // indexed once.
 type suppliedResources struct {
 	docs []*schemaDoc
+}
+
+// documents returns the supplied documents, of which a nil
+// *suppliedResources has none.
+func (r *suppliedResources) documents() []*schemaDoc {
+	if r == nil {
+		return nil
+	}
+	return r.docs
 }
 
 // newSuppliedResources reads and indexes supplied resources, refusing one

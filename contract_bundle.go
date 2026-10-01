@@ -312,7 +312,7 @@ func (w *bundleWriter) namespace() string {
 
 func (w *bundleWriter) chooseNamespace() string {
 	var words []string
-	for _, d := range append([]*schemaDoc{w.space.obi}, w.space.supplied.docs...) {
+	for _, d := range append([]*schemaDoc{w.space.obi}, w.space.supplied.documents()...) {
 		words = append(words, d.words...)
 		words = append(words, spelledForNamespace(d.uri))
 	}

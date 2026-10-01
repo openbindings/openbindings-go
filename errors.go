@@ -36,9 +36,11 @@ var (
 	//
 	// It is wrapped by ParseDocument's errors other than a
 	// *VersionRefusalError and a *ValidationError; by
-	// ValueContractCompiler.Resolve's error for a document declaring no valid
-	// version, which it does not interpret; and by ValueContract.Validate's
-	// and ValidateJSON's errors for input that is not one JSON value.
+	// ValueContractCompiler.Resolve's and Document.References' errors for a
+	// document declaring no valid version, which they do not interpret; by
+	// Document.References' error for an index it could not complete; and by
+	// ValueContract.Validate's and ValidateJSON's errors for input that is
+	// not one JSON value.
 	ErrInconclusive = errors.New("openbindings: inconclusive")
 
 	// ErrOperationNotFound is wrapped by the errors returned for a name that

@@ -209,6 +209,21 @@ func declaredVersionRefusal(view any) *VersionRefusalError {
 	return versionRefusalOf(version)
 }
 
+// interpretable applies the version decision an entry point that interprets
+// a Document in memory makes first: a *VersionRefusalError for a well-formed
+// version outside the supported set (OBI-T-04), and an error matching
+// ErrInconclusive for no valid version (OBI-D-09), neither of which it
+// interprets; nil otherwise.
+func interpretable(version string) error {
+	if refusal := versionRefusalOf(version); refusal != nil {
+		return refusal
+	}
+	if !IsValidSemver(version) {
+		return fmt.Errorf("%w: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", ErrInconclusive, version)
+	}
+	return nil
+}
+
 // versionRefusalOf applies OBI-T-04 to a declared version. It returns nil for
 // an accepted version and for a malformed one, which is OBI-D-09's concern
 // rather than a refusal.

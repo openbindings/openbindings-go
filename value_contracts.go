@@ -61,11 +61,8 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*Va
 	if doc == nil {
 		return nil, errors.New("openbindings: the document is nil")
 	}
-	if refusal := versionRefusalOf(doc.OpenBindings); refusal != nil {
-		return nil, refusal
-	}
-	if !IsValidSemver(doc.OpenBindings) {
-		return nil, fmt.Errorf("%w: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", ErrInconclusive, doc.OpenBindings)
+	if err := interpretable(doc.OpenBindings); err != nil {
+		return nil, err
 	}
 	view, err := documentView(*doc)
 	if err != nil {
