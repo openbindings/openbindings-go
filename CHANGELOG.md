@@ -316,11 +316,20 @@
   Version gates are judged against `SupportedVersions`' declaration, never
   the version decision under test. A fixture's `notViolated` rules must not
   be reported violated. A version refusal must come with nothing else at
-  every entry point that refuses. A conclusion's applied text is verified
-  against the corpus's specification text, by hash. Each module records
+  every entry point that refuses, and a violating fixture expects a
+  conclusion, not a refusal. A conclusion must name the applied text
+  (`appliedRelease` and `appliedRevision`); the text it names is then
+  verified by reading that revision's `openbindings.md` from the spec
+  repository's history and comparing its hash with the one the adapter pins
+  for that revision, never against the text checked out beside the corpus.
+  A SHORTFALL against the capability profile the adapter declares fails.
+  Kind retrieval is observed through a local TCP listener whose address the
+  kind names, so a connection from any client counts. Each module records
   every case executed or omitted with a reason and checks the counts
   against the corpus manifest. Format @1, the corpus at the applied
-  revision, reads as before.
+  revision, reads as before, its keyed corpus defect included; format @2's
+  `conformant` conclusion admits `conformance-undetermined`. CI checks out
+  the spec repository's full history for the applied-text check.
 
 ### Fixed
 

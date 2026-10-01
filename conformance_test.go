@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -9,8 +10,8 @@ import (
 	"fmt"
 	"maps"
 	"math/big"
-	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -69,31 +70,52 @@ func sdkDeclaration() corpus.Declaration {
 	return corpus.Declaration{Lines: []string{line}, Prereleases: slices.Clone(supportedPrereleases)}
 }
 
-// appliedTextSHA256 is the sha256 of openbindings.md at appliedRevision, the
-// text this SDK applies. With the embedded schema it verifies the identity
-// the SDK's conclusions name against the corpus's own specification text.
+// appliedTextRevision and appliedTextSHA256 bind the text this SDK applies:
+// the revision of github.com/openbindings/spec it pins, which must be
+// appliedRevision, and the sha256 of that revision's openbindings.md.
+const appliedTextRevision = "98127021a7e2fa08a8c7b2e6bead1c847c9b6e1f"
+
 const appliedTextSHA256 = "e70cbc8b3b6d4096fd83f694dc093d3ce6d6c87319aeb97b8ae9ec12ebe63a4f"
 
-// appliedTextVerified reports whether the specification beside the corpus is
-// the text this SDK applies: its openbindings.md hashes to appliedTextSHA256
-// and its schema is the one embedded here.
+// appliedTextVerified verifies the text this SDK names against the bytes it
+// pins: appliedTextRevision is appliedRevision, the openbindings.md at that
+// revision hashes to appliedTextSHA256, and the schema at that revision is
+// the one embedded here. Both are read from the history of the specification
+// repository holding the corpus, never from its checkout, so the text beside
+// the corpus plays no part and an unrelated specification commit cannot
+// change the result.
 func appliedTextVerified(corpusDir string) (bool, string) {
-	text, err := os.ReadFile(filepath.Join(corpusDir, "..", "openbindings.md"))
+	if appliedTextRevision != appliedRevision {
+		return false, fmt.Sprintf("appliedTextSHA256 is the hash of the text at %s, but appliedRevision is %s: pin the named revision's hash", appliedTextRevision, appliedRevision)
+	}
+	text, err := gitShow(corpusDir, appliedRevision+":openbindings.md")
 	if err != nil {
-		return false, fmt.Sprintf("the corpus's openbindings.md is unreadable: %v", err)
+		return false, fmt.Sprintf("the specification history holding the corpus does not give the text at %s: %v", appliedRevision, err)
 	}
-	schema, err := os.ReadFile(filepath.Join(corpusDir, "..", "openbindings.schema.json"))
+	sum := sha256.Sum256(text)
+	if got := hex.EncodeToString(sum[:]); got != appliedTextSHA256 {
+		return false, fmt.Sprintf("openbindings.md at %s hashes to %s, not the pinned %s", appliedRevision, got, appliedTextSHA256)
+	}
+	schema, err := gitShow(corpusDir, appliedRevision+":openbindings.schema.json")
 	if err != nil {
-		return false, fmt.Sprintf("the corpus's openbindings.schema.json is unreadable: %v", err)
+		return false, fmt.Sprintf("the specification history holding the corpus does not give the schema at %s: %v", appliedRevision, err)
 	}
-	textSum := sha256.Sum256(text)
-	if got := hex.EncodeToString(textSum[:]); got != appliedTextSHA256 {
-		return false, fmt.Sprintf("the corpus's openbindings.md (sha256 %s) is not the text appliedRevision %s names (sha256 %s)", got, appliedRevision, appliedTextSHA256)
-	}
-	if string(schema) != string(openbindingsSchemaJSON) {
-		return false, "the corpus's openbindings.schema.json is not the schema this SDK embeds"
+	if !bytes.Equal(schema, openbindingsSchemaJSON) {
+		return false, fmt.Sprintf("openbindings.schema.json at %s is not the schema this SDK embeds", appliedRevision)
 	}
 	return true, ""
+}
+
+// gitShow reads an object from the git repository holding dir.
+func gitShow(dir, object string) ([]byte, error) {
+	cmd := exec.Command("git", "-C", dir, "show", object)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show %s: %v %s", object, err, strings.TrimSpace(stderr.String()))
+	}
+	return out, nil
 }
 
 func TestConformanceCorpus(t *testing.T) {
@@ -112,8 +134,8 @@ func TestConformanceCorpus(t *testing.T) {
 
 // runRootCorpus executes the cases designated to the core module, records
 // each, and checks that every one was executed or omitted with a reason.
-// For the specification's corpus, every corpusDefects entry must name a case
-// the corpus holds.
+// For the specification's corpus, it reports stale corpusDefects entries on
+// their own.
 func runRootCorpus(t *testing.T, dir string, specCorpus bool) {
 	c, err := corpus.Load(dir)
 	if err != nil {
@@ -122,7 +144,6 @@ func runRootCorpus(t *testing.T, dir string, specCorpus bool) {
 	verified, why := appliedTextVerified(dir)
 	run := rootRun{declaration: sdkDeclaration(), verified: verified, unverified: why}
 	var ledger corpus.Ledger
-	seen := map[string]bool{}
 	for _, cs := range c.Cases {
 		module, reason := corpus.Designate(cs)
 		switch module {
@@ -132,7 +153,6 @@ func runRootCorpus(t *testing.T, dir string, specCorpus bool) {
 			ledger.Record(cs.ID, corpus.Judgment{Category: corpus.Omitted, Detail: reason})
 			continue
 		}
-		seen[cs.ID] = true
 		t.Run(cs.ID+"/"+cs.Description, func(t *testing.T) {
 			j := run.judge(cs)
 			ledger.Record(cs.ID, j)
@@ -148,9 +168,9 @@ func runRootCorpus(t *testing.T, dir string, specCorpus bool) {
 			}
 		})
 	}
-	for _, id := range slices.Sorted(maps.Keys(corpusDefects)) {
-		if specCorpus && !seen[id] {
-			t.Errorf("corpusDefects names %s, which the corpus does not hold", id)
+	if specCorpus {
+		for _, stale := range staleDefects(corpusDefects, c.Cases) {
+			t.Error(stale)
 		}
 	}
 	problems, summary := c.Reconcile(corpus.ModuleRoot, &ledger)
@@ -561,38 +581,66 @@ var expectsConformantWithoutEveryRule = corpusDefect{
 	corrected: ConclusionConformanceUndetermined,
 }
 
-// corpusDefects are the scenarios, in the corpus of the specification
-// revision this SDK applies, whose expected conclusion the specification
-// text contradicts, keyed by scenario ID, each with its defect. While a
-// defect holds, its scenario is held to the corrected conclusion and then
-// reported as a keyed expected failure, a skip, never a pass. An entry fails
-// once its defect no longer holds, telling the reader to remove it, and once
-// its scenario is gone. Retiring a defect is removing its entry, nothing
+// corpusDefects are the format @1 scenarios, in the corpus of the
+// specification revision this SDK applies, whose expected conclusion the
+// specification text contradicts, keyed by scenario ID, each with its defect.
+// While a defect holds, its scenario is held to the corrected conclusion and
+// then reported as a keyed expected failure, a skip, never a pass. They
+// concern format @1 only: a format @2 scenario is judged by its own
+// expectation. An entry whose defect no longer holds, or whose @1 scenario
+// is gone, is reported on its own (staleDefects), never in place of a
+// scenario's judgment. Retiring a defect is removing its entry, nothing
 // else.
 var corpusDefects = map[string]corpusDefect{
 	// One entry per line: a scenario ID and its defect.
 	"T09-S-01": expectsConformantWithoutEveryRule,
 }
 
-// concludeExpectation returns the conclusion a conclude-conformance scenario
-// must reach under defects: the corrected one, with why, for a keyed corpus
-// defect that still holds, and otherwise the scenario's own. It returns an
-// error for a keyed defect that no longer holds.
-func concludeExpectation(defects map[string]corpusDefect, id string, evidence map[string]RuleEvidenceStatus, expected string) (want ConformanceConclusion, defect string, err error) {
-	keyed, known := defects[id]
-	if !known {
-		return ConformanceConclusion(expected), "", nil
+// concludeExpectation returns the conclusion a format @1 conclude-conformance
+// scenario must reach under defects: the corrected one, with why, for a keyed
+// corpus defect that holds, and otherwise the scenario's own.
+func concludeExpectation(defects map[string]corpusDefect, id string, evidence map[string]RuleEvidenceStatus, expected string) (want ConformanceConclusion, defect string) {
+	if keyed, known := defects[id]; known {
+		if how, has := keyed.found(evidence, expected); has {
+			return keyed.corrected, how
+		}
 	}
-	how, has := keyed.found(evidence, expected)
-	if !has {
-		return "", "", fmt.Errorf("the keyed corpus defect %s no longer holds (its condition: %s): remove its corpusDefects entry", id, keyed.condition)
-	}
-	return keyed.corrected, how, nil
+	return ConformanceConclusion(expected), ""
 }
 
-// judgeConclude executes conclude-conformance through ConcludeConformance,
-// in either format.
-func judgeConclude(cs corpus.Case) corpus.Judgment {
+// staleDefects reports each entry of defects that names no format @1
+// scenario of the corpus, or one whose defect no longer holds. For a corpus
+// holding no format @1 scenario, the entries do not apply.
+func staleDefects(defects map[string]corpusDefect, cases []corpus.Case) []string {
+	v1 := map[string]corpus.Case{}
+	for _, cs := range cases {
+		if cs.Format == corpus.FormatV1 {
+			v1[cs.ID] = cs
+		}
+	}
+	if len(v1) == 0 {
+		return nil
+	}
+	var out []string
+	for _, id := range slices.Sorted(maps.Keys(defects)) {
+		cs, held := v1[id]
+		if !held {
+			out = append(out, fmt.Sprintf("corpusDefects names %s, which the corpus does not hold in format @1", id))
+			continue
+		}
+		evidence, expected, err := concludeGiven(cs)
+		if err != nil {
+			out = append(out, fmt.Sprintf("corpusDefects names %s: %v", id, err))
+			continue
+		}
+		if _, has := defects[id].found(evidence, expected); !has {
+			out = append(out, fmt.Sprintf("the keyed corpus defect %s no longer holds (its condition: %s): remove its corpusDefects entry", id, defects[id].condition))
+		}
+	}
+	return out
+}
+
+func concludeGiven(cs corpus.Case) (map[string]RuleEvidenceStatus, string, error) {
 	var s struct {
 		Given struct {
 			Evidence map[string]RuleEvidenceStatus `json:"evidence"`
@@ -602,13 +650,31 @@ func judgeConclude(cs corpus.Case) corpus.Judgment {
 		} `json:"expected"`
 	}
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
-		return fail("unreadable scenario: %v", err)
+		return nil, "", fmt.Errorf("unreadable scenario: %v", err)
 	}
-	report := ConcludeConformance(s.Given.Evidence)
-	want, defect, err := concludeExpectation(corpusDefects, cs.ID, s.Given.Evidence, s.Expected.Conclusion)
+	return s.Given.Evidence, s.Expected.Conclusion, nil
+}
+
+// judgeConclude executes conclude-conformance through ConcludeConformance.
+// Format @2's conformant admits conformance-undetermined, as
+// validate-document's does: OBI-T-09 only prohibits. Format @1 expects its
+// conclusion exactly, with the keyed corpus defects.
+func judgeConclude(cs corpus.Case) corpus.Judgment { return judgeConcludeUnder(corpusDefects, cs) }
+
+// judgeConcludeUnder is judgeConclude under defects.
+func judgeConcludeUnder(defects map[string]corpusDefect, cs corpus.Case) corpus.Judgment {
+	evidence, expected, err := concludeGiven(cs)
 	if err != nil {
 		return fail("%v", err)
 	}
+	report := ConcludeConformance(evidence)
+	if cs.Format != corpus.FormatV1 {
+		if string(report.Conclusion) != expected && !(expected == string(ConclusionConformant) && report.Conclusion == ConclusionConformanceUndetermined) {
+			return fail("concluded %s; expected %s", report.Conclusion, expected)
+		}
+		return pass(string(report.Conclusion))
+	}
+	want, defect := concludeExpectation(defects, cs.ID, evidence, expected)
 	if report.Conclusion != want {
 		return fail("concluded %s; expected %s", report.Conclusion, want)
 	}
@@ -682,14 +748,6 @@ func judgeKind(cs corpus.Case) corpus.Judgment {
 	return pass(got)
 }
 
-// trapTransport counts http requests instead of sending them.
-type trapTransport struct{ attempts *int }
-
-func (t trapTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	*t.attempts++
-	return nil, fmt.Errorf("retrieval of %s is observed and refused by the corpus adapter", r.URL)
-}
-
 // successor returns the SemVer numeric identifier one greater than n.
 func successor(n string) string {
 	value, _ := new(big.Int).SetString(n, 10)
@@ -736,11 +794,13 @@ func TestConformanceGates(t *testing.T) {
 	runRootCorpus(t, dir, false)
 }
 
-// A keyed corpus defect holds the scenario to the corrected conclusion while
-// the defect stands, and tells the reader to remove its entry once the corpus
-// is corrected, whatever the corrected scenario expects. The mechanism is
-// tested on a synthetic scenario, so retiring a live entry needs no edit
-// here.
+// A keyed corpus defect holds a format @1 scenario to the corrected
+// conclusion while the defect stands. Once the corpus is corrected, the
+// scenario is judged by its own expectation and the entry is reported stale
+// on its own, never in place of the judgment; a format @2 scenario of the
+// same ID is judged by its own expectation, and the entries do not apply to
+// a corpus with no format @1 scenario. The mechanism is tested on synthetic
+// scenarios, so retiring a live entry needs no edit here.
 func TestCorpusDefects_Retire(t *testing.T) {
 	defects := map[string]corpusDefect{"SYNTHETIC-01": expectsConformantWithoutEveryRule}
 	evidence := allRules(EvidenceSatisfied)
@@ -748,20 +808,41 @@ func TestCorpusDefects_Retire(t *testing.T) {
 	defective := maps.Clone(evidence)
 	delete(defective, "OBI-D-12")
 	delete(defective, "OBI-D-13")
-	want, defect, err := concludeExpectation(defects, "SYNTHETIC-01", defective, "conformant")
-	if err != nil || want != ConclusionConformanceUndetermined || !strings.Contains(defect, "omits OBI-D-12, OBI-D-13") {
-		t.Fatalf("the defect as it stands: %q, %q, %v", want, defect, err)
+	want, defect := concludeExpectation(defects, "SYNTHETIC-01", defective, "conformant")
+	if want != ConclusionConformanceUndetermined || !strings.Contains(defect, "omits OBI-D-12, OBI-D-13") {
+		t.Fatalf("the defect as it stands: %q, %q", want, defect)
 	}
-	for _, expected := range []string{"conformant", "conformance-undetermined"} {
-		corrected := evidence
-		if expected != "conformant" {
-			corrected = defective
-		}
-		if _, _, err := concludeExpectation(defects, "SYNTHETIC-01", corrected, expected); err == nil || !strings.Contains(err.Error(), "its condition: the scenario expects conformant") || !strings.Contains(err.Error(), "remove its corpusDefects entry") {
-			t.Errorf("a corrected scenario expecting %s: %v", expected, err)
-		}
+	scenario := func(format string, evidence map[string]RuleEvidenceStatus, expected string) corpus.Case {
+		raw, _ := json.Marshal(map[string]any{"id": "SYNTHETIC-01", "given": map[string]any{"evidence": evidence}, "expected": map[string]any{"conclusion": expected}})
+		return corpus.Case{ID: "SYNTHETIC-01", Format: format, Action: "conclude-conformance", Raw: raw}
 	}
-	if want, defect, err := concludeExpectation(defects, "SYNTHETIC-02", defective, "conformance-undetermined"); want != ConclusionConformanceUndetermined || defect != "" || err != nil {
-		t.Errorf("a scenario no entry names: %q, %q, %v", want, defect, err)
+	if j := judgeConcludeUnder(defects, scenario(corpus.FormatV1, defective, "conformant")); j.Category != corpus.Omitted {
+		t.Errorf("the defective @1 scenario: %+v", j)
+	}
+	if stale := staleDefects(defects, []corpus.Case{scenario(corpus.FormatV1, defective, "conformant")}); len(stale) != 0 {
+		t.Errorf("a defect that holds is reported stale: %v", stale)
+	}
+	corrected := scenario(corpus.FormatV1, evidence, "conformant")
+	if j := judgeConcludeUnder(defects, corrected); j.Category != corpus.Pass {
+		t.Errorf("a corrected @1 scenario is judged by its own expectation: %+v", j)
+	}
+	if stale := staleDefects(defects, []corpus.Case{corrected}); len(stale) != 1 || !strings.Contains(stale[0], "its condition: the scenario expects conformant") || !strings.Contains(stale[0], "remove its corpusDefects entry") {
+		t.Errorf("a corrected @1 scenario's entry: %v", stale)
+	}
+	if stale := staleDefects(defects, []corpus.Case{scenario(corpus.FormatV1, defective, "conformant"), {ID: "T01-S-01", Format: corpus.FormatV1}}); len(stale) != 0 {
+		t.Errorf("stale: %v", stale)
+	}
+	if stale := staleDefects(defects, []corpus.Case{{ID: "T01-S-01", Format: corpus.FormatV1}}); len(stale) != 1 || !strings.Contains(stale[0], "does not hold in format @1") {
+		t.Errorf("an @1 corpus without the scenario: %v", stale)
+	}
+	v2 := scenario(corpus.FormatV2, defective, "conformant")
+	if j := judgeConcludeUnder(defects, v2); j.Category != corpus.Pass {
+		t.Errorf("an @2 scenario is judged by its own expectation (conformant admits conformance-undetermined): %+v", j)
+	}
+	if stale := staleDefects(defects, []corpus.Case{v2}); len(stale) != 0 {
+		t.Errorf("the entries do not apply to a corpus with no @1 scenario: %v", stale)
+	}
+	if j := judgeConcludeUnder(defects, scenario(corpus.FormatV2, defective, "non-conformant")); j.Category != corpus.Fail {
+		t.Errorf("an @2 scenario expecting non-conformant from evidence with no violation: %+v", j)
 	}
 }

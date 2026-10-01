@@ -1,96 +1,81 @@
-//go:build linux || darwin
-
 package openbindings
 
 import (
 	"bytes"
 	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
+	"net"
 	"slices"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
-// sentinels observe retrieval during one check-dependency-kind action: the
-// http channel through a counting transport in place of
-// http.DefaultTransport, and the file channel through a FIFO whose every
-// open for reading is seen. The corpus places {retrieval-sentinel:http} and
-// {retrieval-sentinel:file} in the kinds; the adapter replaces them with
-// addresses on the observed channels.
+// sentinels observe retrieval during one check-dependency-kind action. The
+// corpus places {retrieval-sentinel:http} and {retrieval-sentinel:file} in
+// the kinds; the adapter replaces them with addresses on channels it observes
+// for the whole action, loading included:
+//   - http: a TCP listener bound to an ephemeral local port for the action,
+//     whose address the kind names. Every accepted connection counts,
+//     whatever client, transport, or protocol made it.
+//   - file: a FIFO whose every open for reading is seen, where the platform
+//     has FIFOs.
 type sentinels struct {
-	httpAttempts int
-	previous     http.RoundTripper
-	fifo         string
-	dir          string
-	opened       atomic.Int64
-	stopWatch    chan struct{}
-	watching     chan struct{}
+	listener  *net.TCPListener
+	accepted  atomic.Int64
+	accepting chan struct{}
+	file      *fileSentinel
 }
 
 func startSentinels(channels []string) (*sentinels, error) {
-	s := &sentinels{previous: http.DefaultTransport}
-	http.DefaultTransport = trapTransport{attempts: &s.httpAttempts}
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, fmt.Errorf("the http channel cannot be observed here: %v", err)
+	}
+	s := &sentinels{listener: ln, accepting: make(chan struct{})}
+	go func() {
+		defer close(s.accepting)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			s.accepted.Add(1)
+			conn.Close()
+		}
+	}()
 	if slices.Contains(channels, "file") {
-		dir, err := os.MkdirTemp("", "obi-kind-sentinel")
-		if err != nil {
+		if s.file, err = startFileSentinel(); err != nil {
 			s.stop()
 			return nil, err
 		}
-		s.dir, s.fifo = dir, filepath.Join(dir, "kind")
-		if err := syscall.Mkfifo(s.fifo, 0o600); err != nil {
-			s.stop()
-			return nil, fmt.Errorf("the file channel cannot be observed here: %v", err)
-		}
-		s.stopWatch, s.watching = make(chan struct{}), make(chan struct{})
-		go func() {
-			defer close(s.watching)
-			for {
-				select {
-				case <-s.stopWatch:
-					return
-				default:
-				}
-				// An open for writing succeeds without blocking only while
-				// a reader holds the FIFO open: someone opened the kind.
-				if f, err := os.OpenFile(s.fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-					s.opened.Add(1)
-					f.Close()
-				}
-				time.Sleep(time.Millisecond)
-			}
-		}()
 	}
 	return s, nil
 }
 
 func (s *sentinels) substitute(doc []byte) []byte {
-	fifo := s.fifo
-	if fifo == "" {
-		fifo = "/nonexistent/obi-kind-sentinel"
+	fifo := "/nonexistent/obi-kind-sentinel"
+	if s.file != nil {
+		fifo = s.file.path
 	}
 	doc = bytes.ReplaceAll(doc, []byte("{retrieval-sentinel:file}"), []byte(fifo))
-	return bytes.ReplaceAll(doc, []byte("{retrieval-sentinel:http}"), []byte("http://127.0.0.1:9/obi-kind-sentinel"))
+	return bytes.ReplaceAll(doc, []byte("{retrieval-sentinel:http}"), []byte("http://"+s.listener.Addr().String()+"/obi-kind-sentinel"))
 }
 
-// stop ends the observation and describes any retrieval it saw.
+// stop ends the observation and describes any retrieval it saw. A
+// connection the action completed waits in the listener's queue, so the
+// listener drains the queue before it closes.
 func (s *sentinels) stop() string {
-	http.DefaultTransport = s.previous
-	if s.stopWatch != nil {
-		time.Sleep(5 * time.Millisecond)
-		close(s.stopWatch)
-		<-s.watching
-	}
-	if s.dir != "" {
-		os.RemoveAll(s.dir)
+	s.listener.SetDeadline(time.Now().Add(20 * time.Millisecond))
+	<-s.accepting
+	s.listener.Close()
+	opened := int64(0)
+	if s.file != nil {
+		opened = s.file.stop()
 	}
 	switch {
-	case s.httpAttempts > 0:
-		return fmt.Sprintf("observed %d http retrieval attempt(s) during the action", s.httpAttempts)
-	case s.opened.Load() > 0:
-		return fmt.Sprintf("observed %d open(s) of the file sentinel during the action", s.opened.Load())
+	case s.accepted.Load() > 0:
+		return fmt.Sprintf("observed %d connection(s) to the http sentinel during the action", s.accepted.Load())
+	case opened > 0:
+		return fmt.Sprintf("observed %d open(s) of the file sentinel during the action", opened)
 	}
 	return ""
 }

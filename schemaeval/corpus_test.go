@@ -66,6 +66,11 @@ func TestConformanceCorpusValues(t *testing.T) {
 				t.Logf("pass: %s", j.Detail)
 			case corpus.Fail:
 				t.Error(j.Detail)
+			case corpus.Shortfall:
+				// OBI-T-08 permits declining, but valueProfile is this
+				// executor's own declaration: no verdict where it declares
+				// every feature the case depends on supported is its defect.
+				t.Errorf("SHORTFALL against this executor's declared profile: %s", j.Detail)
 			default:
 				t.Skipf("%s: %s", j.Category, j.Detail)
 			}

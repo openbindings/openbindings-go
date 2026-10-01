@@ -4,12 +4,11 @@ package openbindings
 
 import "errors"
 
-type sentinels struct{}
+// fileSentinel is unavailable where the platform has no FIFOs.
+type fileSentinel struct{ path string }
 
-func startSentinels([]string) (*sentinels, error) {
-	return nil, errors.New("retrieval cannot be observed on this platform")
+func startFileSentinel() (*fileSentinel, error) {
+	return nil, errors.New("the file channel cannot be observed on this platform")
 }
 
-func (*sentinels) substitute(doc []byte) []byte { return doc }
-
-func (*sentinels) stop() string { return "" }
+func (*fileSentinel) stop() int64 { return 0 }
