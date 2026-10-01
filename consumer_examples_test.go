@@ -1055,8 +1055,10 @@ var (
 	refArrayKeywords = []string{"prefixItems", "allOf", "anyOf", "oneOf"}
 )
 
-// refNestingLimit is where the walk stops, as core's index does (256
-// levels); a stopped walk makes the result incomplete, not empty.
+// refNestingLimit is where the walk stops: 256 levels, core's schema index
+// limit (schemaDepthLimit). A stopped walk makes the result incomplete, not
+// empty. This is conservative relative to the validator: OBI-D-12's own
+// reference walk goes deeper and still reports broken references there.
 const refNestingLimit = 256
 
 func pointerOf(tokens ...string) string {
@@ -1418,12 +1420,15 @@ const referencesOBI = `{
   "x-note": { "$ref": "#/schemas/Task" }
 }`
 
-// dynamicOBI is the SDK's own scope-wrapper fixture (value_contracts_test.go,
-// TestBundle_ScopeWrappers): List's $dynamicRef initially targets List's own
-// string schema, but an evaluation beginning in the document resource finds
-// Override's $dynamicAnchor first, so inDocument's items must be numbers.
+// dynamicOBI is the SDK's own scope-wrapper fixture, in full
+// (value_contracts_test.go, TestBundle_ScopeWrappers): List's $dynamicRef
+// initially targets List's own string schema, but an evaluation beginning in
+// the document resource finds Override's $dynamicAnchor first, so
+// inDocument's items must be numbers, while inResource, beginning in its own
+// resource, takes strings.
 const dynamicOBI = `{"openbindings":"0.2.0","operations":{
-  "inDocument":{"input":{"$ref":"https://ex.test/list"}}},
+  "inDocument":{"input":{"$ref":"https://ex.test/list"}},
+  "inResource":{"input":{"$id":"https://ex.test/entry","$ref":"https://ex.test/list"}}},
   "schemas":{
   "List":{"$id":"https://ex.test/list","type":"array","items":{"$dynamicRef":"#item"},"$defs":{"item":{"$dynamicAnchor":"item","type":"string"}}},
   "Override":{"$dynamicAnchor":"item","type":"number"}}}`
@@ -1728,12 +1733,14 @@ func Example_cliMergeClosure() {
 	}
 	_, _, refs, ix = lookUp(dynamicOBI)
 	fmt.Printf("inDocument: %s\n", closure(ix, refs, "inDocument"))
+	fmt.Printf("inResource: %s\n", closure(ix, refs, "inResource"))
 	// Output:
 	// a: schemas [List Task], other operations [], unresolved []
 	// b: schemas [Wrapped], other operations [/operations/a/output], unresolved [/schemas/Wrapped/$defs/x/$ref]
 	// c: schemas [], other operations [], unresolved [/operations/c/input/$ref]
 	// d: schemas [Task], other operations [], unresolved []
 	// inDocument: refused, incomplete: [/schemas/List/items/$dynamicRef may resolve to [/schemas/List/$defs/item /schemas/Override]]
+	// inResource: refused, incomplete: [/schemas/List/items/$dynamicRef may resolve to [/schemas/List/$defs/item /schemas/Override]]
 }
 
 // The lookup's whole-call failures, which per-reference Unresolved cannot
