@@ -1168,3 +1168,53 @@ func FuzzDeepInput(f *testing.F) {
 		}
 	})
 }
+
+// ValidateDocument's results take the five shapes its doc lists.
+func TestValidateDocument_ResultShapes(t *testing.T) {
+	deep := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
+	for _, tc := range []struct {
+		name, input string
+		document    bool
+		report      ConformanceConclusion // "" for the zero report
+		err         string                // "refusal", "violation", or ""
+		decided     []string              // the rules decided, when not all are
+	}{
+		{"refused", `{"openbindings":"0.3.0","operations":{}}`, false, "", "refusal", nil},
+		{"OBI-D-01 refuses it", `{"openbindings":"0.2.0","operations":{},"operations":{}}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01"}},
+		{"a lone surrogate", `{"openbindings":"0.2.0","operations":{},"x-note":"\ud800"}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}},
+		{"a lone surrogate, no valid version", `{"openbindings":"0.2","operations":{},"x-note":"\ud800"}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01", "OBI-D-09"}},
+		{"nested past the decoder", `{"openbindings":"0.2.0","operations":{},"x-deep":` + deep + `}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}},
+		{"a null the model does not carry", `{"openbindings":"0.2.0","operations":{"a":{"tags":null}}}`, false, ConclusionNonConformant, "violation", nil},
+		{"carried, conformant", `{"openbindings":"0.2.0","operations":{}}`, true, ConclusionConformant, "", nil},
+		{"carried, violated", `{"openbindings":"0.2.0","operations":{},"bindings":{"b":{"operation":"x","source":"y"}}}`, true, ConclusionNonConformant, "violation", nil},
+	} {
+		doc, report, err := ValidateDocument([]byte(tc.input))
+		got := ""
+		switch {
+		case errors.As(err, new(*VersionRefusalError)):
+			got = "refusal"
+		case errors.As(err, new(*ValidationError)):
+			got = "violation"
+		case err != nil:
+			got = err.Error()
+		}
+		if (doc != nil) != tc.document || report.Conclusion != tc.report || got != tc.err {
+			t.Errorf("%s: document %v, conclusion %q, error %q; want %v, %q, %q", tc.name, doc != nil, report.Conclusion, got, tc.document, tc.report, tc.err)
+		}
+		if tc.report == "" {
+			if !reflect.DeepEqual(report, ValidationReport{}) {
+				t.Errorf("%s: want the zero report, got %+v", tc.name, report)
+			}
+			continue
+		}
+		var decided []string
+		for _, rule := range DocumentRules() {
+			if report.Evidence[rule] != EvidenceInconclusive {
+				decided = append(decided, rule)
+			}
+		}
+		if want := tc.decided; want == nil && len(decided) != len(documentRules) || want != nil && !slices.Equal(decided, want) {
+			t.Errorf("%s: decided %v, want %v", tc.name, decided, want)
+		}
+	}
+}
