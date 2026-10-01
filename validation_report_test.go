@@ -46,14 +46,27 @@ func TestConcludeConformance(t *testing.T) {
 		{"a rule inconclusive", with(satisfied, "OBI-D-10", EvidenceInconclusive), ConclusionConformanceUndetermined, nil, []string{"OBI-D-10"}},
 		{"a violation among missing rules", map[string]RuleEvidenceStatus{"OBI-D-05": EvidenceViolated}, ConclusionNonConformant, []string{"OBI-D-05"}, slices.DeleteFunc(DocumentRules(), func(rule string) bool { return rule == "OBI-D-05" })},
 		{"an unknown status", with(satisfied, "OBI-D-03", "maybe"), ConclusionConformanceUndetermined, nil, []string{"OBI-D-03"}},
-		{"a rule outside the document rules", with(satisfied, "X-01", EvidenceViolated), ConclusionNonConformant, []string{"X-01"}, nil},
+		// Evidence under an identifier that is not a document rule decides
+		// nothing (§10.4 concludes from the document rules alone).
+		{"complete evidence and a foreign violation", with(satisfied, "X-01", EvidenceViolated), ConclusionConformant, nil, nil},
+		{"complete evidence and a foreign inconclusive", with(satisfied, "OBI-T-09", EvidenceInconclusive), ConclusionConformant, nil, nil},
+		{"incomplete evidence and a foreign satisfied", with(without(satisfied, "OBI-D-07"), "X-01", EvidenceSatisfied), ConclusionConformanceUndetermined, nil, []string{"OBI-D-07"}},
+		{"incomplete evidence and a foreign violation", with(without(satisfied, "OBI-D-07"), "X-01", EvidenceViolated), ConclusionConformanceUndetermined, nil, []string{"OBI-D-07"}},
+		// A typo leaves its rule missing, so inconclusive: never a false
+		// conformant, and never a false non-conformant.
+		{"a satisfied typo", with(without(satisfied, "OBI-D-01"), "OBI-D-1", EvidenceSatisfied), ConclusionConformanceUndetermined, nil, []string{"OBI-D-01"}},
+		{"a violated typo", with(without(satisfied, "OBI-D-01"), "OBI-D-1", EvidenceViolated), ConclusionConformanceUndetermined, nil, []string{"OBI-D-01"}},
+		{"only foreign evidence", map[string]RuleEvidenceStatus{"X-01": EvidenceViolated, "OBI-T-04": EvidenceSatisfied}, ConclusionConformanceUndetermined, nil, DocumentRules()},
 	} {
 		report := ConcludeConformance(tc.evidence)
 		if report.Conclusion != tc.conclusion || !slices.Equal(report.Violated, tc.violated) || !slices.Equal(report.Inconclusive, tc.inconclusive) {
 			t.Errorf("%s: %s, violated %v, inconclusive %v; want %s, %v, %v", tc.name, report.Conclusion, report.Violated, report.Inconclusive, tc.conclusion, tc.violated, tc.inconclusive)
 		}
-		// The report carries the evidence it concluded from: every document
-		// rule, a missing one as inconclusive.
+		// The report carries the evidence it concluded from: exactly the
+		// document rules, a missing one as inconclusive.
+		if keys := slices.Sorted(maps.Keys(report.Evidence)); !slices.Equal(keys, DocumentRules()) {
+			t.Errorf("%s: Evidence holds %v, want exactly the document rules", tc.name, keys)
+		}
 		for _, rule := range DocumentRules() {
 			want, given := tc.evidence[rule]
 			if !given {
@@ -67,10 +80,15 @@ func TestConcludeConformance(t *testing.T) {
 			t.Errorf("%s: a report from evidence alone carries %q, %q, %v", tc.name, report.Version, report.Revision, report.Findings)
 		}
 	}
-	// The caller's map is not changed.
-	evidence := map[string]RuleEvidenceStatus{"OBI-D-01": EvidenceSatisfied}
-	ConcludeConformance(evidence)
-	if len(evidence) != 1 {
+	// The caller's map is not changed, its foreign entries included.
+	evidence := map[string]RuleEvidenceStatus{"OBI-D-01": EvidenceSatisfied, "X-01": EvidenceViolated}
+	kept := maps.Clone(evidence)
+	report := ConcludeConformance(evidence)
+	if !maps.Equal(evidence, kept) {
 		t.Errorf("ConcludeConformance changed its argument: %v", evidence)
+	}
+	report.Evidence["OBI-D-02"] = EvidenceViolated
+	if !maps.Equal(evidence, kept) {
+		t.Errorf("the report's Evidence shares the caller's map: %v", evidence)
 	}
 }

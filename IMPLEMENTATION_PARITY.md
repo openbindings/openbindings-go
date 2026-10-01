@@ -80,8 +80,11 @@ behavior and recognizable names, not identical signatures:
   why there is none, by the same lookup as OBI-D-12 and value validation;
   the same whole-call refusals; an incomplete index returned with the
   inconclusive category.
-- **Concluding from evidence.** A document rule missing from the evidence is
-  inconclusive, so empty evidence concludes undetermined.
+- **Concluding from evidence.** The conclusion is reached from the document
+  rules alone: evidence under any other identifier is dropped and decides
+  nothing, and a document rule missing from the evidence is inconclusive, so
+  empty evidence concludes undetermined. The concluded evidence holds exactly
+  the document rules.
 - **Locating unknown members.** OBI-D-02 reports each member the document
   schema does not allow at the member, one finding each.
 - **Writing a document.** Typed members in field order, then kept members in

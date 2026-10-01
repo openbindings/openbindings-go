@@ -2,8 +2,6 @@ package openbindings
 
 import (
 	"fmt"
-	"maps"
-	"sort"
 )
 
 // RuleEvidenceStatus records a validator's evidence for one applicable or
@@ -86,11 +84,12 @@ type ValidationReport struct {
 	// builds from evidence alone.
 	Revision   string
 	Conclusion ConformanceConclusion
-	// Evidence holds one status per rule considered. Reports from
-	// Document.Validate and ValidateDocument carry every document rule; a
-	// rule with nothing to govern in the document is vacuously satisfied. A
-	// version refusal, or a host object that cannot be encoded, returns no
-	// report, whose Evidence is nil.
+	// Evidence holds one status per document rule (DocumentRules), the
+	// evidence the conclusion was reached from. Reports from
+	// Document.Validate, ValidateDocument, and ConcludeConformance carry
+	// exactly the document rules; a rule with nothing to govern in the
+	// document is vacuously satisfied. A version refusal, or a host object
+	// that cannot be encoded, returns no report, whose Evidence is nil.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
 	// Version, in identifier order. These lists are SDK report fields.
@@ -125,22 +124,27 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 }
 
 // ConcludeConformance applies OBI-T-09's truth conditions to rule evidence
-// and returns the report they conclude. Every document rule of the
-// specification this SDK applies (DocumentRules) applies to every document,
-// so a document rule missing from evidence is treated as inconclusive:
-// absence is no evidence, and an empty map concludes conformance
-// undetermined. A violation is decisive even when other rules remain
-// inconclusive. In the absence of a violation, any inconclusive rule makes
-// the conclusion undetermined; otherwise the conclusion is conformant. A
-// status other than the four this package defines is treated as
-// inconclusive, so malformed evidence never concludes conformant. Evidence
-// under an identifier that is not a document rule is concluded from like any
-// other.
+// and returns the report they conclude. It concludes from the document rules
+// alone (DocumentRules), since §10.4 defines each conclusion by the document
+// rules: evidence under any other identifier is dropped and decides nothing.
+// Every document rule applies to every document, so one missing from the
+// evidence is inconclusive: absence is no evidence, and an empty map
+// concludes conformance undetermined. A mistyped identifier, such as
+// "OBI-D-1", is therefore dropped and leaves its rule missing, so it never
+// makes a conclusion conformant or non-conformant.
 //
-// The returned report's Evidence is the evidence it concluded from: the
-// evidence given, with each missing document rule recorded as inconclusive.
-// It carries no findings, and no Version or Revision, since evidence alone
-// names no specification text.
+// A violation is decisive even when other rules remain inconclusive. In the
+// absence of a violation, any inconclusive rule makes the conclusion
+// undetermined; otherwise the conclusion is conformant. A status other than
+// the four this package defines is treated as inconclusive, so malformed
+// evidence never concludes conformant.
+//
+// The returned report's Evidence holds exactly the document rules, the
+// evidence it concluded from: each rule's status as given, or inconclusive
+// where the evidence omits the rule. It has the shape of the Evidence
+// Document.Validate and ValidateDocument return. The report carries no
+// findings, and no Version or Revision, since evidence alone names no
+// specification text. The caller's map is not changed.
 //
 // A caller holding evidence this SDK cannot produce, such as its own
 // decision of a rule a report left inconclusive, amends that report under
@@ -157,25 +161,24 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 //     applied the same specification text (OBI-T-09). A caller that applied
 //     other text does not amend this report.
 func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationReport {
-	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, max(len(evidence), len(documentRules)))}
+	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, len(documentRules))}
+	// documentRules is in identifier order, so the lists built here are too.
 	for _, rule := range documentRules {
-		report.Evidence[rule] = EvidenceInconclusive
-	}
-	maps.Copy(report.Evidence, evidence)
-	for rule, status := range report.Evidence {
+		status, given := evidence[rule]
+		if !given {
+			status = EvidenceInconclusive
+		}
+		report.Evidence[rule] = status
 		switch status {
 		case EvidenceViolated:
 			report.Violated = append(report.Violated, rule)
-		case EvidenceInconclusive:
-			report.Inconclusive = append(report.Inconclusive, rule)
 		case EvidenceSatisfied, EvidenceNotApplicable:
 			// Neither contributes to the decisive or incomplete sets.
 		default:
+			// Inconclusive, or a status this package does not define.
 			report.Inconclusive = append(report.Inconclusive, rule)
 		}
 	}
-	sort.Strings(report.Violated)
-	sort.Strings(report.Inconclusive)
 	switch {
 	case len(report.Violated) > 0:
 		report.Conclusion = ConclusionNonConformant

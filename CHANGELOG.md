@@ -56,12 +56,17 @@
   - Removed: `IsSupportedVersion`, whose `(bool, error)` result invited
     refusing a text that declares no version, replaced by `CheckVersion`;
     and `IsValidSemver`, now internal.
-- **`ConcludeConformance` treats a missing document rule as inconclusive
-  (breaking, pre-1.0).** OBI-T-09 permits a conformant conclusion only when
-  every applicable document rule has been established, so an empty map now
-  concludes conformance undetermined, and the returned report records each
-  missing rule as inconclusive. Its doc states the invariants of amending a
-  report with evidence the SDK cannot produce. The corpus at the applied
+- **`ConcludeConformance` concludes from the document rules alone, and
+  treats a missing one as inconclusive (breaking, pre-1.0).** OBI-T-09
+  permits a conformant conclusion only when every applicable document rule
+  has been established, so an empty map now concludes conformance
+  undetermined. §10.4 defines each conclusion by the document rules, so
+  evidence under any other identifier is dropped and decides nothing, where
+  it used to decide the conclusion like a document rule; a mistyped rule
+  identifier leaves its rule missing, so inconclusive. The returned
+  `Evidence` holds exactly the document rules, each missing one recorded as
+  inconclusive. Its doc states the invariants of amending a report with
+  evidence the SDK cannot produce. The corpus at the applied
   revision expects T09-S-01, whose evidence omits OBI-D-12 and OBI-D-13, to
   conclude conformant; the harness pins it as a corpus defect, an entry that
   fails once the corpus is corrected.
