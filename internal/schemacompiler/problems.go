@@ -25,6 +25,9 @@ type Problem struct {
 	// it without copying it, so a later sibling can overwrite it), so a
 	// caller that knows where such names live locates the problem itself.
 	Name string
+	// Members are the member names a failed additionalProperties refuses,
+	// sorted, or nil; the problem lies at the object holding them.
+	Members []string
 }
 
 // kindPrinter renders backend error kinds, which implement
@@ -111,7 +114,7 @@ func collect(ve *jsonschema.ValidationError, standsFor map[string]string) []Prob
 		// The backend lists the members in map order; sorted, the same value
 		// gives the same message every time.
 		sorted := &kind.AdditionalProperties{Properties: slices.Sorted(slices.Values(k.Properties))}
-		return []Problem{{Location: ve.InstanceLocation, Message: sorted.LocalizedString(kindPrinter)}}
+		return []Problem{{Location: ve.InstanceLocation, Message: sorted.LocalizedString(kindPrinter), Members: sorted.Properties}}
 	}
 	if got, want, compared := comparison(ve.ErrorKind); compared {
 		if number, standIn := standsFor[got.RatString()]; standIn {

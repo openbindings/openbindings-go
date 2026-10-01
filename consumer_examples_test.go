@@ -188,8 +188,7 @@ func Example_cliRead() {
 		[]byte(`{"openbindings":"0.2.0","operations":{},"x-note":"\udc00"}`),
 		[]byte(`{"openbindings":"0.2.0","operations":{},"x-deep":` + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + `}`),
 	}
-	// C1 item F5 (member location): the unknown member's finding is located
-	// at the object that holds it (the document, 1:1), not at the member.
+	// The unknown member's finding is located at the member itself (1:41).
 	for _, data := range inputs {
 		_, exit, what := cliRead(data)
 		fmt.Println(exit, what)
@@ -197,7 +196,7 @@ func Example_cliRead() {
 	// Output:
 	// 0 read
 	// 3 refused (OBI-T-04): declares 0.2.0-rc.1
-	// 1 non-conformant at 1:1: OBI-D-02
+	// 1 non-conformant at 1:41: OBI-D-02
 	// 4 no verdict: openbindings: inconclusive: a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry
 	// 4 no verdict: openbindings: inconclusive: the input is nested deeper than the decoder reads (10000 levels), so it is not decoded
 }

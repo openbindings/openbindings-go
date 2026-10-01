@@ -46,3 +46,26 @@ func TestNew_NoFormatIsAsserted(t *testing.T) {
 		}
 	}
 }
+
+// A failed additionalProperties names the members it refuses, sorted, beside
+// the one problem at the object holding them.
+func TestOutcome_AdditionalPropertiesNamesItsMembers(t *testing.T) {
+	c := New()
+	if err := c.AddResource("urn:test:closed", map[string]any{"properties": map[string]any{"inner": map[string]any{"additionalProperties": false}}, "additionalProperties": false}); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := c.Compile("urn:test:closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems, mismatch := Outcome(schema.Validate(map[string]any{"zz": 1, "a/b": 2, "inner": map[string]any{"x": 3}}))
+	if !mismatch || len(problems) != 2 {
+		t.Fatalf("%v %+v", mismatch, problems)
+	}
+	if got := problems[0]; len(got.Location) != 0 || strings.Join(got.Members, ",") != "a/b,zz" {
+		t.Errorf("the document's problem: %+v", got)
+	}
+	if got := problems[1]; strings.Join(got.Location, "/") != "inner" || strings.Join(got.Members, ",") != "x" {
+		t.Errorf("the inner problem: %+v", got)
+	}
+}

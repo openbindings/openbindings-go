@@ -109,12 +109,33 @@ func TestValidateDocument_BindingsNeedNoKindificationKnowledge(t *testing.T) {
 }
 
 // A member the core no longer defines, such as a 0.1 source's location, is an
-// unprefixed name the specification reserves (§12): an OBI-D-02 violation,
-// with no separate advisory diagnostic.
+// unprefixed name the specification reserves (§12): an OBI-D-02 violation
+// located at the member, with no separate advisory diagnostic.
 func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":"x@1","location":"./openapi.json"}}}`)
-	if violations := report.Violations(); len(violations) != 1 || violations[0].Rule != "OBI-D-02" || violations[0].Path != "/sources/s" || !strings.Contains(violations[0].Message, "location") {
-		t.Fatalf("want one OBI-D-02 violation at the source naming location, got %+v", violations)
+	want := []Finding{{Rule: "OBI-D-02", Status: EvidenceViolated, Path: "/sources/s/location", Message: `does not validate against the document schema: additional property "location" not allowed`, Position: Position{Offset: 69, Line: 1, Column: 70}}}
+	if violations := report.Violations(); !reflect.DeepEqual(violations, want) {
+		t.Fatalf("want one OBI-D-02 violation at the source's location member, got %+v", violations)
+	}
+}
+
+// Each member the document schema does not allow is its own finding, at the
+// member, its name escaped as RFC 6901 escapes it.
+func TestValidateDocument_EachUnknownMemberIsLocated(t *testing.T) {
+	data := "{\"openbindings\":\"0.2.0\",\n\"operations\":{\"op\":{\"bogus\":1,\"also\":2}},\n\"zz\":0,\"a/b\":1}"
+	report := mustValidateDocument(t, data)
+	var got []string
+	for _, finding := range report.Violations() {
+		got = append(got, fmt.Sprintf("%s %s %s %s", finding.Rule, finding.Path, finding.Position, finding.Message))
+	}
+	want := []string{
+		`OBI-D-02 /a~1b 3:8 does not validate against the document schema: additional property "a/b" not allowed`,
+		`OBI-D-02 /zz 3:1 does not validate against the document schema: additional property "zz" not allowed`,
+		`OBI-D-02 /operations/op/also 2:31 does not validate against the document schema: additional property "also" not allowed`,
+		`OBI-D-02 /operations/op/bogus 2:21 does not validate against the document schema: additional property "bogus" not allowed`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

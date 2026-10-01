@@ -95,11 +95,11 @@ func ExampleDocument_Validate_unknownFields() {
 	report, err := doc.Validate()
 	fmt.Println("violation established:", err != nil)
 	for _, finding := range report.Violations() {
-		fmt.Println(finding.Rule, finding.Message)
+		fmt.Println(finding.Rule, finding.Path, finding.Message)
 	}
 	// Output:
 	// violation established: true
-	// OBI-D-02 does not validate against the document schema: additional properties 'unknownFeild' not allowed
+	// OBI-D-02 /unknownFeild does not validate against the document schema: additional property "unknownFeild" not allowed
 }
 
 func ExampleDocument_exact() {

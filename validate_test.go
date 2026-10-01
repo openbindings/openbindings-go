@@ -812,7 +812,7 @@ func TestInterfaceValidate_UnknownTopLevelFieldsViolateD02(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, "", "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/unknownField`, "unknownField")
 }
 
 func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testing.T) {
@@ -843,8 +843,8 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testin
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/sources/src`, "unknownField")
-	requireUnknownFieldViolation(t, byPath, `/bindings/op.src`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/sources/src/unknownField`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/bindings/op.src/unknownField`, "unknownField")
 }
 
 func TestInterfaceValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T) {
@@ -865,7 +865,7 @@ func TestInterfaceValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T)
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/operations/op/examples/ex1`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/operations/op/examples/ex1/unknownField`, "unknownField")
 }
 
 func TestInterfaceValidate_BindingEntryUnknownFieldsViolateD02(t *testing.T) {
@@ -889,7 +889,7 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsViolateD02(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/bindings/op.api`, "unknownBindingField")
+	requireUnknownFieldViolation(t, byPath, `/bindings/op.api/unknownBindingField`, "unknownBindingField")
 }
 
 func TestInterfaceValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
@@ -905,7 +905,7 @@ func TestInterfaceValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/dependencies/delivery`, "futurePolicy")
+	requireUnknownFieldViolation(t, byPath, `/dependencies/delivery/futurePolicy`, "futurePolicy")
 }
 
 func TestInterfaceValidate_ExtensionFieldsDoNotViolateD02(t *testing.T) {

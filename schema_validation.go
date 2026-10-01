@@ -198,6 +198,14 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 		}
 		located := map[string]bool{}
 		for _, problem := range problems {
+			if len(problem.Members) > 0 {
+				// A member the document schema does not allow is located
+				// at the member, each one a finding of its own.
+				for _, name := range problem.Members {
+					c.violated("OBI-D-02", jsonpointer.Format(append(slices.Clone(problem.Location), name)...), fmt.Sprintf("does not validate against the document schema: additional property %q not allowed", name))
+				}
+				continue
+			}
 			if problem.Name == "" {
 				c.violated("OBI-D-02", jsonpointer.Format(problem.Location...), "does not validate against the document schema: "+problem.Message)
 				continue
