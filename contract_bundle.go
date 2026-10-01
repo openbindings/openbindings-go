@@ -126,8 +126,10 @@ func checkUnit(unit unitKey) []unitProblem {
 		// Dialects go by resource (§5.2, JSON Schema Core §9.3.2): only the
 		// $schema at a resource's root declares one, and a resource without
 		// one takes its enclosing resource's, which lies in the same unit
-		// unless it is the document resource, whose dialect is 2020-12. So
-		// a root naming another dialect is the only way a unit holds one.
+		// unless it is the document resource, whose dialect is 2020-12. A
+		// supplied document's root without one is read as 2020-12, the
+		// choice JSON Schema leaves to the implementation (§5.2). So a root
+		// naming another dialect is the only way a unit holds one.
 		root, _ := mustResolve(d.value, r.location).(map[string]any)
 		if dialect, present := root["$schema"]; present && dialect != draft202012URI && dialect != draft202012URI+"#" {
 			out = append(out, problem(missingCapability, r.location, r.location, fmt.Sprintf("it declares the dialect %s, which this SDK does not evaluate, for its resource and every resource inheriting it (§5.2)", describeJSON(dialect)), true))
