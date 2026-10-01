@@ -17,10 +17,8 @@ import (
 // surrogate, nesting past the decoder) returns a *NoVerdictError.
 func readJSONText(data []byte) (any, error) {
 	if err := verifyExactJSON(data); err != nil {
-		var repeated *duplicateNameError
-		var lone *loneSurrogateError
-		if errors.As(err, &repeated) || errors.As(err, &lone) || errors.Is(err, errNestingLimit) {
-			return nil, &NoVerdictError{Cause: fmt.Errorf("the value cannot be read exactly: %w", err)}
+		if refusal := cannotReadExactly(err); refusal != nil {
+			return nil, refusal
 		}
 		return nil, fmt.Errorf("the input is not JSON: %w", err)
 	}
@@ -31,17 +29,45 @@ func readJSONText(data []byte) (any, error) {
 	return value, nil
 }
 
+// cannotReadExactly returns core's refusal of JSON text verifyExactJSON
+// refused with err, when the text is JSON this SDK cannot read exactly (a
+// repeated member name, an escaped lone UTF-16 surrogate, nesting past the
+// decoder), and nil when it is not JSON at all.
+func cannotReadExactly(err error) *NoVerdictError {
+	var repeated *duplicateNameError
+	var lone *loneSurrogateError
+	if errors.As(err, &repeated) || errors.As(err, &lone) || errors.Is(err, errNestingLimit) {
+		return &NoVerdictError{Cause: fmt.Errorf("the value cannot be read exactly: %w", err)}
+	}
+	return nil
+}
+
 // readGoValue reads a Go value as encoding/json encodes it, exactly: floats
 // as their shortest round-trip decimal, typed nil slices and maps as null,
-// structs by exported fields, and a json.RawMessage as written. It refuses,
-// with an error saying the value is not a JSON value, which its caller
-// frames, what encoding/json
-// cannot encode (a NaN, a channel, a cycle) and invalid UTF-8, which
-// encoding/json would replace; and a top-level byte slice of any named type
-// that encoding/json writes as base64 (one that marshals itself, such as
-// json.RawMessage, is read as it marshals), which is more likely JSON text
-// meant for ValidateJSON.
+// structs by exported fields, and a json.RawMessage as written. A
+// json.RawMessage, whether it is the value or one the value holds, is read as
+// readJSONText reads JSON text, so it gets what ValidateJSON gives the same
+// text: core's refusal to read it exactly (a repeated member name, an escaped
+// lone UTF-16 surrogate, nesting past the decoder), as a *NoVerdictError.
+// It refuses, with an error saying the value is not a JSON value, which its
+// caller frames, what encoding/json cannot encode (a NaN, a channel, a cycle,
+// a marshaler's error) and invalid UTF-8, which encoding/json would replace;
+// and a top-level byte slice of any named type that encoding/json writes as
+// base64 (one that marshals itself, such as json.RawMessage, is read as it
+// marshals), which is more likely JSON text meant for ValidateJSON.
 func readGoValue(value any) (any, error) {
+	switch raw := value.(type) {
+	case json.RawMessage:
+		if raw == nil {
+			return readJSONText([]byte("null")) // as encoding/json writes it
+		}
+		return readJSONText(raw)
+	case *json.RawMessage:
+		if raw == nil || *raw == nil {
+			return readJSONText([]byte("null"))
+		}
+		return readJSONText(*raw)
+	}
 	if base64Bytes(value) {
 		return nil, fmt.Errorf("a %T is not validated as a value; use ValidateJSON for JSON text", value)
 	}
@@ -52,6 +78,20 @@ func readGoValue(value any) (any, error) {
 			where = strings.Join(below, "/")
 		}
 		return nil, fmt.Errorf("not a JSON value: %s: %s", where, problem)
+	}
+	// Raw JSON the value holds is read exactly as JSON text is, before
+	// encoding/json compacts it and refuses, as a syntax error of its own,
+	// what is only too deep for this SDK to read.
+	err := rawLeaves(reflect.ValueOf(value), true, nil, map[heldValue]bool{}, func(_ []string, raw json.RawMessage) error {
+		if err := verifyExactJSON(raw); err != nil {
+			if refusal := cannotReadExactly(err); refusal != nil {
+				return refusal
+			}
+		}
+		return nil // text that is not JSON is encoding/json's to refuse
+	})
+	if err != nil {
+		return nil, err
 	}
 	data, err := json.Marshal(value)
 	if err != nil {

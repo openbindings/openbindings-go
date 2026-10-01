@@ -40,6 +40,7 @@ func decidedRules(report ValidationReport) []string {
 func TestModelLimits_InMemory(t *testing.T) {
 	deepSchema := nestedSchema(10001)
 	deepRaw := json.RawMessage(strings.Repeat("[", 10001) + strings.Repeat("]", 10001))
+	deepRawSchema := json.RawMessage(strings.Repeat(`{"not":`, 10001) + `{}` + strings.Repeat(`}`, 10001))
 	// The escape is built from the backslash's code point so that no cleanup
 	// of the source can turn it into a character.
 	lone := `"` + string(rune(92)) + `ud800"`
@@ -50,6 +51,15 @@ func TestModelLimits_InMemory(t *testing.T) {
 	for name, build := range map[string]func(version string) *Document{
 		"a schema": func(version string) *Document {
 			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: deepSchema}}}
+		},
+		"a schema held as raw JSON": func(version string) *Document {
+			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: deepRawSchema}}}
+		},
+		"raw JSON within a schema": func(version string) *Document {
+			return &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Output: map[string]any{"properties": map[string]any{"a": deepRawSchema}}}}}
+		},
+		"a schemas entry held as raw JSON": func(version string) *Document {
+			return &Document{OpenBindings: version, Operations: map[string]Operation{}, Schemas: map[string]JSONSchema{"Deep": &deepRawSchema}}
 		},
 		"source content": func(version string) *Document {
 			return &Document{OpenBindings: version, Operations: map[string]Operation{}, Sources: map[string]Source{"s": {Kind: "k", Content: deepRaw}}}
@@ -86,7 +96,9 @@ func TestModelLimits_InMemory(t *testing.T) {
 
 	// The same limits as bytes.
 	for name, text := range map[string]string{
-		"a schema":         `{"openbindings":"0.2.0","operations":{"op":{"input":` + strings.Repeat(`{"not":`, 10001) + `{}` + strings.Repeat(`}`, 10001) + `}}}`,
+		"a schema":         `{"openbindings":"0.2.0","operations":{"op":{"input":` + string(deepRawSchema) + `}}}`,
+		"a schemas entry":  `{"openbindings":"0.2.0","operations":{},"schemas":{"Deep":` + string(deepRawSchema) + `}}`,
+		"a nested schema":  `{"openbindings":"0.2.0","operations":{"op":{"input":` + strings.Repeat(`{"not":`, 9999) + `{}` + strings.Repeat(`}`, 9999) + `}}}`,
 		"a lone surrogate": `{"openbindings":"0.2.0","operations":{"op":{"examples":{"e":{"input":` + lone + `}}}}}`,
 	} {
 		if _, err := ParseDocument([]byte(text)); !errors.Is(err, ErrInconclusive) {

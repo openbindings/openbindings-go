@@ -2,8 +2,10 @@ package openbindings
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -142,3 +144,55 @@ func TestCategories_MarshalerErrorsAreNotVerdicts(t *testing.T) {
 type repeatingMarshaler struct{}
 
 func (repeatingMarshaler) MarshalJSON() ([]byte, error) { return []byte(`{"a":1,"a":2}`), nil }
+
+// Raw JSON in a Go value is read as JSON text is: Validate on a
+// json.RawMessage gives exactly what ValidateJSON gives on the same bytes,
+// and raw JSON a value holds gets the category the same text gets, so depth
+// and a lone surrogate are core's refusal to read the value exactly, never
+// "not a JSON value".
+func TestCategories_RawJSONReadsAsText(t *testing.T) {
+	var validated atomic.Int32
+	contract := answering(t, func(context.Context, any) error {
+		validated.Add(1)
+		return nil
+	})
+	ctx := context.Background()
+	backslash := string(rune(92)) // built, so that no cleanup turns the escape into a character
+	texts := map[string]string{
+		"nested past the decoder": strings.Repeat("[", 10001) + strings.Repeat("]", 10001),
+		"a lone surrogate":        `"` + backslash + `ud800"`,
+		"a repeated name":         `{"a":1,"a":2}`,
+		"an object":               `{"a":1}`,
+		"surrounded by space":     ` {"a":1} `,
+		"not JSON":                `{`,
+		"two values":              `1 2`,
+		"empty":                   ``,
+	}
+	for name, text := range texts {
+		want := contract.ValidateJSON(ctx, []byte(text))
+		raw := json.RawMessage(text)
+		for form, value := range map[string]any{"a json.RawMessage": raw, "a *json.RawMessage": &raw} {
+			got := contract.Validate(ctx, value)
+			if fmt.Sprint(got) != fmt.Sprint(want) || fmt.Sprint(categories(got)) != fmt.Sprint(categories(want)) {
+				t.Errorf("%s, as %s: %v, want what ValidateJSON gives: %v", name, form, got, want)
+			}
+		}
+		// Held in a value, the same text gets the same category as the
+		// value's text.
+		held := contract.Validate(ctx, map[string]any{"x": raw})
+		whole := contract.ValidateJSON(ctx, []byte(`{"x":`+text+`}`))
+		if fmt.Sprint(categories(held)) != fmt.Sprint(categories(whole)) {
+			t.Errorf("%s, held in a value: %v (%v), want the category of %v (%v)", name, held, categories(held), whole, categories(whole))
+		}
+	}
+	if got := contract.Validate(ctx, json.RawMessage(nil)); got != nil {
+		t.Errorf("a nil json.RawMessage is null, as encoding/json writes it: %v", got)
+	}
+	if got, want := contract.Validate(ctx, json.RawMessage(nil)), contract.ValidateJSON(ctx, []byte(`null`)); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("a nil json.RawMessage: %v, want %v", got, want)
+	}
+	requireCategory(t, "nested past the decoder, held", contract.Validate(ctx, map[string]any{"x": json.RawMessage(texts["nested past the decoder"])}), "ErrNoVerdict")
+	if validated.Load() == 0 {
+		t.Fatal("the evaluator was never called on a readable value")
+	}
+}

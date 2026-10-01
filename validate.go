@@ -48,12 +48,19 @@ import (
 // a string escaping a lone UTF-16 surrogate, which a Go string cannot carry.
 // The model has no text for such a document, so OBI-D-01 stays
 // inconclusive; the report decides OBI-D-09, on the declared version, and
-// leaves every other rule inconclusive. A host object that cannot be encoded
-// for a reason of its own (a NaN, a channel, invalid UTF-8 in a Go string, a
-// marshaler's error) returns an error matching no category, and no report, as
-// does one holding, in a member the model carries as raw JSON, other bytes
-// decoding would refuse: the model encodes only what it would decode back
-// unchanged.
+// leaves every other rule inconclusive. Only a limit core establishes while
+// checking the document's own representation counts: a schema value's own
+// marshaler that fails is the marshaler's failure, whatever its error carries
+// (a limit ParseDocument reported for other bytes included), and text it
+// writes past the decoder's depth is a marshaler error too, which
+// encoding/json refuses; text within that depth that makes the whole
+// document nest too deep is this SDK's limit.
+//
+// A host object that cannot be encoded for a reason of its own (a NaN, a
+// channel, invalid UTF-8 in a Go string, a marshaler's error) returns an error
+// matching no category, and no report, as does one holding, in a member the
+// model carries as raw JSON, other bytes decoding would refuse: the model
+// encodes only what it would decode back unchanged.
 func (d Document) Validate() (ValidationReport, error) {
 	if refusal := versionRefusalOf(d.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
@@ -164,6 +171,34 @@ func d01Violation(data []byte, err error) Finding {
 	return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err), Position: d01Position(data, err)}
 }
 
+// ownLimit says what limit of this SDK an encoding failure records, or "",
+// reading the failure as encoding/json returned it. It follows the chain only
+// through errors this package wrote: into a *json.MarshalerError only when the
+// marshaler is one of this package's types, whose failure is its own check's,
+// and through single wrappings. It never reads what a caller's marshaler
+// returned, which may carry any error, a limit this SDK reported elsewhere
+// (from ParseDocument, say) included; nor raw JSON encoding/json itself
+// refused, which verifyRawSchemas and verifyRawMembers check first.
+func ownLimit(err error) string {
+	for err != nil {
+		if failure, isMarshaler := err.(*json.MarshalerError); isMarshaler {
+			if !ownType(failure.Type) {
+				return ""
+			}
+			err = failure.Err
+			continue
+		}
+		if err == errNestingLimit {
+			return "is " + errNestingLimit.Error()
+		}
+		if _, isLone := err.(*loneSurrogateError); isLone {
+			return "holds an escape of a lone UTF-16 surrogate, which this SDK does not carry"
+		}
+		err = errors.Unwrap(err)
+	}
+	return ""
+}
+
 // modelLimitError reports a document the model does not write because it
 // holds what this SDK cannot read or carry, which is no defect of the value
 // (§10.4): it nests deeper than encoding/json reads, or holds, in a member
@@ -182,17 +217,15 @@ func (e *modelLimitError) Is(target error) bool { return target == ErrInconclusi
 
 // documentView encodes a host document and decodes the generic JSON view the
 // document rules judge. A document beyond this SDK's own limits, which the
-// model does not write, returns a *modelLimitError. Any other encoding
-// failure is the value's, and is kept as text: it can be a marshaler's own
-// error held in a schema, which may say anything, and it must match no
-// category.
+// model does not write, returns a *modelLimitError, but only when core itself
+// established the limit while checking this document's representation (see
+// ownLimit). Any other encoding failure is the value's, and is kept as text:
+// it can be a marshaler's own error held in a schema, which may say anything,
+// and it must match no category.
 func documentView(d Document) (any, error) {
 	data, err := json.Marshal(d)
-	if errors.Is(err, errNestingLimit) {
-		return nil, &modelLimitError{what: "is " + errNestingLimit.Error()}
-	}
-	if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
-		return nil, &modelLimitError{what: "holds an escape of a lone UTF-16 surrogate, which this SDK does not carry"}
+	if what := ownLimit(err); what != "" {
+		return nil, &modelLimitError{what: what}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("openbindings: encode document: %v", err)

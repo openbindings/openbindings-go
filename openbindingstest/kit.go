@@ -355,9 +355,8 @@ func (k *kit) checkPaths(g group, c testCase, spellings [2][]string, counts *tal
 // checkAnswer checks an error the evaluator returned against its contract:
 // it never holds a *NoVerdictError or matches ErrNoVerdict, ErrUndefined,
 // ErrNoValueContract, ErrOperationNotFound, or ErrInconclusive; it matches
-// ErrMismatch only by
-// holding a *MismatchError, which Compile's errors never hold; and it matches
-// a context error only when ctx is done.
+// ErrMismatch only by holding a *MismatchError, which Compile's errors never
+// hold; and it matches a context error only when ctx is done.
 func (k *kit) checkAnswer(id string, err error, fromCompile bool, ctx context.Context) {
 	if err == nil {
 		return

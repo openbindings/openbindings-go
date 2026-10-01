@@ -25,10 +25,12 @@
   `References`' errors for a document declaring no valid version, an
   incomplete reference index, and value validation's errors for input that
   is not JSON. It is neither a conformance conclusion nor a value verdict.
-- **`CheckVersion(v)`** returns the `*VersionRefusalError` every entry point
-  returns for a well-formed version outside the supported set, and nil
-  otherwise. Nil means only that there is no refusal, so a text declaring no
-  version is never refused (OBI-T-04).
+- **`CheckVersion(v)`** returns the `*VersionRefusalError` that
+  `ParseDocument`, `ValidateDocument`, `Document.Validate`,
+  `Document.References`, and `ValueContractCompiler.Resolve` return for a
+  well-formed version outside the supported set, and nil otherwise. Nil
+  means only that there is no refusal, so a text declaring no version is
+  never refused (OBI-T-04).
 - **Findings carry their position in the input.** `Finding.Position` is
   where a finding from `ValidateDocument` or `ParseDocument` lies in the
   input bytes (byte offset, line, and column, as `go/token` counts them): a
@@ -82,13 +84,28 @@
   deeper than encoding/json reads (10000 levels), or holding a string
   escaping a lone UTF-16 surrogate, as the SDK's own limits (a lone
   surrogate is valid JSON text a Go string cannot carry, a declared
-  capability limit). A `Document` holding either, in JSON text the model
-  carries as given for a lone surrogate, which the model does not write, now
-  gets the same: `Document.Validate` reports conformance undetermined, with
+  capability limit). A `Document` the model does not write for either
+  reason, nesting so deep or holding a lone surrogate in JSON text it carries
+  as given (a raw member, or a schema held as a `json.RawMessage`), now gets
+  the same: `Document.Validate` reports conformance undetermined, with
   OBI-D-01 inconclusive since the model has no text and OBI-D-09 decided on
   the declared version alone, and `Document.References` and
   `ValueContractCompiler.Resolve` return an error matching
   `ErrInconclusive`, where all three returned an untyped encoding error.
+  Only a limit core establishes while checking the document's own
+  representation counts: core checks a schema held as a `json.RawMessage`
+  before encoding/json compacts it, as it checks raw members. A caller's
+  marshaler that fails is the marshaler's failure, whatever its error
+  carries, a limit `ParseDocument` reported elsewhere included, and so is
+  text a marshaler writes past the decoder's depth, which encoding/json
+  refuses; text within that depth that makes the whole document too deep is
+  the SDK's limit.
+- **Raw JSON in a value reads as JSON text.** `ValueContract.Validate` reads
+  a `json.RawMessage`, as the value or held in it, as `ValidateJSON` reads
+  text: on the same bytes, nesting past the decoder, a lone surrogate, or a
+  repeated name is core's refusal to read the value exactly (`ErrNoVerdict`),
+  where raw JSON nesting past encoding/json's depth was "not a JSON value"
+  (`ErrInconclusive`).
 - **Encoding failures from caller values match no category.** A value that
   cannot be encoded for a reason of its own (a NaN, a channel, invalid UTF-8
   in a Go string, a marshaler's error) still returns an error and no report
@@ -102,10 +119,11 @@
   evaluator contract reserves for core: an evaluator's error matching it is
   read as no verdict and kept in `Cause` alone, as one matching
   `ErrUndefined` is, and openbindingstest now fails an evaluator whose
-  errors match `ErrInconclusive`. A Go value whose own encoding fails is not a JSON value whatever its
-  marshaler says: the marshaler's error is kept as text, so the result
-  matches `ErrInconclusive` alone, where a marshaler returning a sentinel or
-  a `*NoVerdictError` used to make it match that category too.
+  errors match `ErrInconclusive`. A Go value whose own encoding fails is not
+  a JSON value whatever its marshaler says: the marshaler's error is kept as
+  text, so the result matches `ErrInconclusive` alone, where a marshaler
+  returning a sentinel or a `*NoVerdictError` used to make it match that
+  category too.
 - **Messages name the package once.** `ValidationError` and the model's
   decode errors begin `openbindings:`, as the package's other errors do, and
   a no-verdict's own cause (no value contract, an undefined result) no

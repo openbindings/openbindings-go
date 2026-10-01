@@ -71,14 +71,17 @@ behavior and recognizable names, not identical signatures:
   its key alone, sorted for presentation, where an alias or a key no
   operation has finds nothing. Neither finds anything in a missing document.
 - **The version decision as a refusal.** A check that returns the same
-  refusal every entry point returns, or none; no refusal for a text that
-  declares no version (OBI-T-04). No exported SemVer validity predicate.
+  refusal the refusing entry points return (parsing, validating bytes or a
+  document in memory, listing references, and resolving value contracts),
+  or none; no refusal for a text that declares no version (OBI-T-04). The
+  operation lookups refuse nothing. No exported SemVer validity predicate.
 - **Inconclusive, distinctly.** One category for a call that decided
   nothing: a parse that cannot read a document in full, a document declaring
   no valid version, a document nesting past the decoder or holding an
   escaped lone UTF-16 surrogate, given as bytes or in memory, an incomplete
-  reference index, and value input that is not JSON; never a conformance conclusion or a value verdict, and disjoint
-  from them whatever an evaluator or a value's own encoding says.
+  reference index, and value input that is not JSON; never a conformance
+  conclusion or a value verdict, and disjoint from them whatever an
+  evaluator or a value's own encoding says.
 - **Schema references.** Every `$ref` and `$dynamicRef` in the schemas a
   document contains, with location, keyword, value, base, initial target or
   why there is none, by the same lookup as OBI-D-12 and value validation;

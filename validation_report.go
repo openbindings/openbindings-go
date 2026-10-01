@@ -36,8 +36,10 @@ var documentRules = []string{
 // DocumentRules returns the identifiers of every document rule the core
 // specification defines, in identifier order. Every ValidationReport
 // Document.Validate or ValidateDocument returns carries evidence for each of
-// them; a version refusal, or a host object that cannot be encoded, returns
-// no report.
+// them. A version refusal returns no report, nor does a host object the
+// caller made unencodable (a NaN, invalid UTF-8 in a Go string, a
+// marshaler's error); a host object beyond this SDK's own limits gets a
+// report, deciding OBI-D-09 alone.
 func DocumentRules() []string {
 	return append([]string(nil), documentRules...)
 }
@@ -89,7 +91,9 @@ type ValidationReport struct {
 	// Document.Validate, ValidateDocument, and ConcludeConformance carry
 	// exactly the document rules; a rule with nothing to govern in the
 	// document is vacuously satisfied. A version refusal, or a host object
-	// that cannot be encoded, returns no report, whose Evidence is nil.
+	// the caller made unencodable, returns no report, whose Evidence is nil;
+	// a host object beyond this SDK's own limits gets a report whose
+	// Evidence decides OBI-D-09 alone.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
 	// Version, in identifier order. These lists are SDK report fields.

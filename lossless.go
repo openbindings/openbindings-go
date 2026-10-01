@@ -310,6 +310,9 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyStrings(typed, lossless); err != nil {
 		return nil, err
 	}
+	if err := verifyRawSchemas(typed); err != nil {
+		return nil, err
+	}
 	data, err := marshalUnescaped(typed)
 	if err != nil {
 		return nil, err
