@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
@@ -23,12 +24,12 @@ import (
 // about its serialization as UTF-8 JSON text with no byte-order mark, each
 // number written at its exact value (§10). That text is the encoding Validate
 // judges, which the model writes only when it decodes back unchanged, so
-// OBI-D-01 holds whenever there is a report. The report is about the value,
+// OBI-D-01 holds whenever the model writes it. The report is about the value,
 // not about any bytes it was decoded from: to judge a file, pass its bytes to
 // ValidateDocument.
 //
 // The error is a *ValidationError listing every established violation, so
-// `if _, err := iface.Validate(); err != nil`
+// `if _, err := doc.Validate(); err != nil`
 // gates on violations. A nil error
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
@@ -39,15 +40,65 @@ import (
 // meta-schema check meets a resource limit (§10.4).
 //
 // A document declaring a version outside the supported set is not interpreted:
-// Validate returns a *VersionRefusalError and no report (OBI-T-04). A host
-// object that cannot be encoded returns that error and no report, as does
-// one holding, in a member the model carries as raw JSON, bytes decoding
-// would refuse: the model encodes only what it would decode back unchanged.
-func (i Interface) Validate() (ValidationReport, error) {
-	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
+// Validate returns a *VersionRefusalError and no report (OBI-T-04).
+//
+// Encoding a host document either fails or writes text, and this is the
+// boundary between this SDK's own limits and an encoding failure, for
+// Validate, Document.References, and ValueContractCompiler.Resolve alike:
+//   - This SDK's limit is only what its own checks find: core's scan of the
+//     text the document encodes to, and the refusals this package's model
+//     types make of their own members carried as raw JSON (example values,
+//     source and binding content, kept members). Either finds nesting deeper
+//     than encoding/json reads (10000 levels), or a string escaping a lone
+//     UTF-16 surrogate, which a Go string cannot carry, as ValidateDocument
+//     meets them in bytes. The model has no text for such a document, so
+//     Validate's report leaves OBI-D-01 inconclusive, decides OBI-D-09 on
+//     the declared version when that is valid UTF-8, and leaves every other
+//     rule inconclusive; References and Resolve return an error matching
+//     ErrInconclusive.
+//   - A failure to encode at all is an encoding failure: an error matching
+//     no category, and no report, whatever the error carries. It can come
+//     from a value encoding/json does not write as held (a NaN, a channel, a
+//     cycle, invalid UTF-8 in a Go string, which it would replace, raw JSON
+//     in a schema it will not compact, which includes raw JSON nesting past
+//     its own depth), or from any marshaler outside the model's own members:
+//     a caller's, or one of this package's types placed inside a schema. A
+//     model type's refusal of other bytes in a raw member, and text core's
+//     scan refuses for another reason (a member name repeated in raw JSON),
+//     are encoding failures too: the model writes only what it would decode
+//     back unchanged.
+//
+// So raw JSON a schema holds is this SDK's limit when it holds an escaped
+// lone surrogate, or stays within encoding/json's depth but makes the whole
+// document nest too deep, and an encoding failure when it nests past
+// encoding/json's depth on its own; in a member the model carries as raw
+// JSON, nesting past that depth is this SDK's limit, as the first bullet
+// says. A document holding both kinds of defect is decided by the first that
+// encoding meets. Each object the model encodes checks, in order, the
+// members it carries as raw JSON; the Go strings it holds, at any depth, and
+// any value that holds itself, so a document's string check covers every
+// object in it before any nested raw-member check; its schemas, each encoded
+// once; its other members, each object among them checked in this same
+// order; and the text it wrote, with core's scan.
+func (d Document) Validate() (ValidationReport, error) {
+	if refusal := versionRefusalOf(d.OpenBindings); refusal != nil {
 		return ValidationReport{}, refusal
 	}
-	view, err := documentView(i)
+	view, err := documentView(d)
+	if limit := (*modelLimitError)(nil); errors.As(err, &limit) {
+		// Only the declared version is read, as ValidateDocument reads it
+		// from such bytes; a version that is not UTF-8 would not be written
+		// as held, so it is not read either.
+		c := ruleChecks{version: appliedRelease, revision: appliedRevision}
+		reason := fmt.Sprintf("the document %s, so the model does not write it and this rule was not checked", limit.what)
+		if !utf8.ValidString(d.OpenBindings) {
+			c.inconclusiveExcept(reason)
+			return c.conclude()
+		}
+		c.inconclusiveExcept(reason, "OBI-D-09")
+		checkDeclaredVersion(&c, map[string]any{"openbindings": d.OpenBindings})
+		return c.conclude()
+	}
 	if err != nil {
 		return ValidationReport{}, err
 	}
@@ -60,22 +111,34 @@ func (i Interface) Validate() (ValidationReport, error) {
 // the bytes themselves, then every other document rule this SDK can decide on
 // the JSON they hold. It returns the decoded document when the document model
 // can carry it exactly (see LosslessFields), the report, and the same
-// violation error Interface.Validate returns. The rules never depend on that
+// violation error Document.Validate returns. The rules never depend on that
 // decoding: a document the model cannot carry is still judged in full, except
-// where the SDK cannot read it in full. Input that OBI-D-01 refuses (not JSON,
-// not UTF-8, beginning with a byte-order mark, or repeating a member name) is
-// reported as that rule's
-// violation, with every other rule inconclusive, since which of its values
-// the document holds is not established. A document holding a string that
-// escapes a lone UTF-16 surrogate, or nesting deeper than encoding/json reads
-// (10000 levels), has OBI-D-01 and OBI-D-09 decided, OBI-D-09 on the version
-// it declares, and every other rule inconclusive.
+// where the SDK cannot read it in full. The version is read first, from any
+// input that is one JSON value, however deeply it nests.
 //
-// A document declaring a well-formed version outside the supported set is not
-// interpreted: ValidateDocument returns a *VersionRefusalError and no report
-// (OBI-T-04). The version is read first, from any input that is one JSON
-// value, however deeply it nests.
-func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
+// Its results take five shapes:
+//   - The document declares a well-formed version outside the supported set:
+//     no document, the zero report, and a *VersionRefusalError. The document
+//     is not interpreted (OBI-T-04).
+//   - OBI-D-01 refuses the input (not JSON, not UTF-8, beginning with a
+//     byte-order mark, or repeating a member name): no document, a report
+//     with OBI-D-01 violated and every other rule inconclusive, since which
+//     values the document holds is not established, and a *ValidationError.
+//   - The input holds a string escaping a lone UTF-16 surrogate, or nests
+//     deeper than encoding/json reads (10000 levels): no document, a report
+//     with OBI-D-01 decided, OBI-D-09 decided on the version the input
+//     declares, and every other rule inconclusive, and a *ValidationError
+//     when OBI-D-09 is violated, nil otherwise.
+//   - The model cannot carry the document for another reason (a null where it
+//     types a value, say): no document, the full report, and a
+//     *ValidationError when the report establishes a violation, nil
+//     otherwise.
+//   - Otherwise: the document, the full report, and a *ValidationError when
+//     the report establishes a violation, nil otherwise.
+//
+// So a nil document beside a report says the model does not carry the input;
+// the report says what was decided about it.
+func ValidateDocument(data []byte) (*Document, ValidationReport, error) {
 	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
@@ -111,11 +174,11 @@ func ValidateDocument(data []byte) (*Interface, ValidationReport, error) {
 	checkDocument(&c, view)
 	positionFindings(data, c.findings)
 	report, verr := c.conclude()
-	var iface Interface
-	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
+	var doc Document
+	if err := doc.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
 		return nil, report, verr
 	}
-	return &iface, report, verr
+	return &doc, report, verr
 }
 
 // d01Violation is the OBI-D-01 finding for input verifyExactJSON refuses,
@@ -127,16 +190,68 @@ func d01Violation(data []byte, err error) Finding {
 	return Finding{Rule: "OBI-D-01", Status: EvidenceViolated, Message: fmt.Sprintf("not a JSON document this specification accepts: %v", err), Position: d01Position(data, err)}
 }
 
+// ownLimit says what limit of this SDK an encoding failure records, or "",
+// reading the failure as encoding/json returned it. It follows the chain only
+// through errors this package wrote: into a *json.MarshalerError only when the
+// marshaler is one of this package's types, whose failure is its own check's,
+// and through single wrappings. It never reads what a caller's marshaler
+// returned, which may carry any error, a limit this SDK reported elsewhere
+// (from ParseDocument, say) included; nor a schema's failure, which
+// encodeObject keeps as text, so one of this package's types placed in a
+// schema is the caller's marshaler too (encodeSchemas).
+func ownLimit(err error) string {
+	for err != nil {
+		if failure, isMarshaler := err.(*json.MarshalerError); isMarshaler {
+			if !ownType(failure.Type) {
+				return ""
+			}
+			err = failure.Err
+			continue
+		}
+		if err == errNestingLimit {
+			return "is " + errNestingLimit.Error()
+		}
+		if _, isLone := err.(*loneSurrogateError); isLone {
+			return "holds an escape of a lone UTF-16 surrogate, which this SDK does not carry"
+		}
+		err = errors.Unwrap(err)
+	}
+	return ""
+}
+
+// modelLimitError reports a document the model does not write because it
+// holds what this SDK cannot read or carry, which is no defect of the value
+// (§10.4): it nests deeper than encoding/json reads, or holds a string
+// escaping a lone UTF-16 surrogate. It matches ErrInconclusive.
+type modelLimitError struct {
+	// what says what the document holds, as "the document <what>".
+	what string
+}
+
+func (e *modelLimitError) Error() string {
+	return ErrInconclusive.Error() + ": the document " + e.what + ", so it is not read"
+}
+
+func (e *modelLimitError) Is(target error) bool { return target == ErrInconclusive }
+
 // documentView encodes a host document and decodes the generic JSON view the
-// document rules judge.
-func documentView(i Interface) (any, error) {
-	data, err := json.Marshal(i)
+// document rules judge. A document beyond this SDK's own limits, which the
+// model does not write, returns a *modelLimitError, but only when core itself
+// established the limit while checking this document's representation (see
+// ownLimit). Any other encoding failure is the value's, and is kept as text:
+// it can be a marshaler's own error held in a schema, which may say anything,
+// and it must match no category.
+func documentView(d Document) (any, error) {
+	data, err := json.Marshal(d)
+	if what := ownLimit(err); what != "" {
+		return nil, &modelLimitError{what: what}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("openbindings: encode interface: %w", err)
+		return nil, fmt.Errorf("openbindings: encode document: %v", err)
 	}
 	var view any
 	if err := unmarshalJSON(data, &view); err != nil {
-		return nil, fmt.Errorf("openbindings: decode encoded interface: %w", err)
+		return nil, fmt.Errorf("openbindings: decode encoded document: %w", err)
 	}
 	return view, nil
 }
@@ -178,7 +293,7 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 		c.violated("OBI-D-09", "", "missing the required openbindings member")
 	case !isString:
 		c.violated("OBI-D-09", "/openbindings", fmt.Sprintf("must be a SemVer 2.0.0 string; got %s", jsonTypeName(value)))
-	case !IsValidSemver(version):
+	case !isValidSemver(version):
 		c.violated("OBI-D-09", "/openbindings", fmt.Sprintf("%q is not a valid SemVer 2.0.0 string", version))
 	}
 }
@@ -209,11 +324,26 @@ func declaredVersionRefusal(view any) *VersionRefusalError {
 	return versionRefusalOf(version)
 }
 
+// interpretable applies the version decision an entry point that interprets
+// a Document in memory makes first: a *VersionRefusalError for a well-formed
+// version outside the supported set (OBI-T-04), and an error matching
+// ErrInconclusive for no valid version (OBI-D-09), neither of which it
+// interprets; nil otherwise.
+func interpretable(version string) error {
+	if refusal := versionRefusalOf(version); refusal != nil {
+		return refusal
+	}
+	if !isValidSemver(version) {
+		return fmt.Errorf("%w: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", ErrInconclusive, version)
+	}
+	return nil
+}
+
 // versionRefusalOf applies OBI-T-04 to a declared version. It returns nil for
 // an accepted version and for a malformed one, which is OBI-D-09's concern
 // rather than a refusal.
 func versionRefusalOf(version string) *VersionRefusalError {
-	if !IsValidSemver(version) {
+	if !isValidSemver(version) {
 		return nil
 	}
 	msg, refused, err := versionRefusal(version)

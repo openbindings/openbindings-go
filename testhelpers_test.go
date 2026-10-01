@@ -66,12 +66,12 @@ func exampleValue(v any) json.RawMessage {
 // or "no verdict".
 func inputVerdict(t *testing.T, document, operation string, value any) string {
 	t.Helper()
-	return verdictOf(t, validateWithTestEvaluator(t, mustDecodeInterface(t, document), operation, "input", value))
+	return verdictOf(t, validateWithTestEvaluator(t, mustDecodeDocument(t, document), operation, "input", value))
 }
 
-func mustDecodeInterface(t *testing.T, document string) *Interface {
+func mustDecodeDocument(t *testing.T, document string) *Document {
 	t.Helper()
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(document), &iface); err != nil {
 		t.Fatal(err)
 	}

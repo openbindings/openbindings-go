@@ -125,7 +125,7 @@ func suiteGroups() ([]group, error) {
 	if err != nil {
 		return nil, err
 	}
-	for id := range suitePinned {
+	for _, id := range sortedNames(suitePinned) {
 		if !slices.ContainsFunc(groups, func(g group) bool { return g.id == id }) {
 			return nil, fmt.Errorf("suitePinned names %q, which is no group", id)
 		}

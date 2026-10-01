@@ -9,14 +9,14 @@ import (
 )
 
 // SupportedVersions states the specification versions this SDK supports
-// (§8.1): every release of the 0.2 line, and no prerelease. IsSupportedVersion
-// decides membership.
+// (§8.1): every release of the 0.2 line, and no prerelease. CheckVersion
+// refuses every well-formed version outside it.
 const SupportedVersions = "0.2.x"
 
 // AuthoringVersion is the specification version to declare in a document
 // written with this SDK: the lowest version sufficient for everything the
 // document model carries, as §8.1 asks of documents. No function here writes
-// it; a producer sets Interface.OpenBindings to it.
+// it; a producer sets Document.OpenBindings to it.
 const AuthoringVersion = "0.2.0"
 
 // appliedRelease is the release of the specification whose text this SDK
@@ -55,32 +55,34 @@ func init() {
 			panic(fmt.Sprintf("openbindings: supported prerelease %q is not a SemVer prerelease", prerelease))
 		}
 	}
-	if supported, err := IsSupportedVersion(AuthoringVersion); !supported {
-		panic(fmt.Sprintf("openbindings: AuthoringVersion %q is not a supported version: %v", AuthoringVersion, err))
+	if !isValidSemver(AuthoringVersion) || CheckVersion(AuthoringVersion) != nil {
+		panic(fmt.Sprintf("openbindings: AuthoringVersion %q is not a supported version", AuthoringVersion))
 	}
 }
 
-// IsSupportedVersion reports whether this SDK interprets a document declaring
-// version v rather than refusing it (OBI-T-04): whether v belongs to
-// SupportedVersions. A release of the supported line is supported whatever
-// its patch version, a prerelease only when it is named explicitly, and
-// build metadata is ignored (§8.1). Of well-formed versions, ParseDocument,
-// ValidateDocument, Interface.Validate, and ValueContractCompiler.Resolve
-// refuse exactly those it reports false for.
+// CheckVersion applies OBI-T-04's version decision to a declared version v,
+// the one ParseDocument, ValidateDocument, Document.Validate,
+// Document.References, and ValueContractCompiler.Resolve make before
+// interpreting a document: it returns the *VersionRefusalError they return
+// when v is a well-formed version outside SupportedVersions, and nil
+// otherwise. A release of the supported line is supported whatever its patch
+// version, a prerelease only when it is named explicitly, and build metadata
+// is ignored (§8.1).
 //
-// A malformed (non-SemVer) v is no version at all: IsSupportedVersion
-// returns false and a parse error, while validation reports such a document
-// under OBI-D-09 rather than refusing it.
-func IsSupportedVersion(v string) (bool, error) {
-	_, refused, err := versionRefusal(v)
-	if err != nil {
-		return false, err
+// A nil error means only that there is no version refusal. It does not mean
+// that v is a valid version: a v that is not SemVer 2.0.0 ("0.2", or "" for
+// a document that declares none) declares no version, and OBI-T-04 forbids
+// refusing a text that declares no version. Such a document is OBI-D-09's
+// violation, which validation reports with the other rules.
+func CheckVersion(v string) error {
+	if refusal := versionRefusalOf(v); refusal != nil {
+		return refusal
 	}
-	return !refused, nil
+	return nil
 }
 
-// versionRefusal is the single OBI-T-04 decision that IsSupportedVersion and
-// every refusing entry point share. When this SDK refuses a document
+// versionRefusal is the single OBI-T-04 decision that CheckVersion and every
+// refusing entry point share. When this SDK refuses a document
 // declaring version v it returns (msg, true, nil), where msg is the
 // diagnostic core to which callers add the "openbindings:" prefix and
 // "(OBI-T-04)" suffix; when it supports v it returns ("", false, nil). An
@@ -131,10 +133,10 @@ type semver struct {
 // semverPattern is the official SemVer 2.0.0 regex from semver.org.
 var semverPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
 
-// IsValidSemver reports whether v is exactly a Semantic Versioning 2.0.0
+// isValidSemver reports whether v is exactly a Semantic Versioning 2.0.0
 // string. Surrounding whitespace is not part of the grammar, so " 0.2.0" is
 // not valid.
-func IsValidSemver(v string) bool {
+func isValidSemver(v string) bool {
 	return semverPattern.MatchString(v)
 }
 

@@ -184,7 +184,7 @@ func (s *schemaSpace) bundle(entry string, spelling bundleSpelling) (json.RawMes
 		})
 		cause := errors.New(first.reason)
 		if first.kind == undefinedResult {
-			cause = fmt.Errorf("%w: %s", ErrUndefined, first.reason)
+			cause = &coreReason{sentinel: ErrUndefined, detail: first.reason}
 		}
 		return nil, &NoVerdictError{Location: first.location, Cause: cause}
 	}
@@ -312,7 +312,7 @@ func (w *bundleWriter) namespace() string {
 
 func (w *bundleWriter) chooseNamespace() string {
 	var words []string
-	for _, d := range append([]*schemaDoc{w.space.obi}, w.space.supplied.docs...) {
+	for _, d := range append([]*schemaDoc{w.space.obi}, w.space.supplied.documents()...) {
 		words = append(words, d.words...)
 		words = append(words, spelledForNamespace(d.uri))
 	}

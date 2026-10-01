@@ -32,6 +32,10 @@ The core conformance corpus lives in the spec repository. Check it out
 alongside this one (at `../spec`), or point `OB_SPEC_CORPUS` at its
 `conformance` directory; without it the corpus tests skip. Set
 `OB_CORPUS_REQUIRED=1` to make a missing corpus fail instead, as CI does.
+The corpus's value cases run in the `schemaeval` module's tests, under its
+ECMA-262 evaluator, so run `go test ./...` in `schemaeval` as well; each
+module checks that it executed or omitted, with a reason, every case the
+corpus manifest counts for it.
 
 ## Releasing
 
@@ -43,7 +47,8 @@ pre-1.0 version policy.
 This SDK declares which spec versions it supports (§8.1) via:
 
 - `openbindings.SupportedVersions`, the supported set, and
-  `openbindings.IsSupportedVersion(v)`, which decides membership
+  `openbindings.CheckVersion(v)`, which refuses a well-formed version outside
+  it as every refusing entry point does
 - `openbindings.AuthoringVersion`, the version a document written with the
   SDK declares
 

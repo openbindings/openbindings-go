@@ -27,11 +27,11 @@ func (k *kit) bundleOf(positions string, spelling int) json.RawMessage {
 	if err != nil {
 		panic(err)
 	}
-	var iface openbindings.Interface
-	if err := json.Unmarshal([]byte(documentAt(positions)), &iface); err != nil {
+	var doc openbindings.Document
+	if err := json.Unmarshal([]byte(documentAt(positions)), &doc); err != nil {
 		panic(err)
 	}
-	contracts, err := compiler.Resolve(context.Background(), &iface)
+	contracts, err := compiler.Resolve(context.Background(), &doc)
 	if err != nil {
 		panic(err)
 	}
@@ -152,9 +152,9 @@ func (k *kit) cancellation() {
 		k.checkAnswer("invariant, cancellation (Validate)", err, false, ctx)
 	}
 	compiler, _ := openbindings.NewValueContractCompiler(k.e)
-	var iface openbindings.Interface
-	_ = json.Unmarshal([]byte(documentAt(`{"/operations/op/input":{"type":"string"}}`)), &iface)
-	contracts, _ := compiler.Resolve(context.Background(), &iface)
+	var doc openbindings.Document
+	_ = json.Unmarshal([]byte(documentAt(`{"/operations/op/input":{"type":"string"}}`)), &doc)
+	contracts, _ := compiler.Resolve(context.Background(), &doc)
 	contract, _ := contracts.CompileInput(context.Background(), "op")
 	if err := contract.Validate(ctx, "s"); !errors.Is(err, openbindings.ErrNoVerdict) || !errors.Is(err, context.Canceled) {
 		t := k.t
@@ -167,12 +167,17 @@ func (k *kit) cancellation() {
 // to compile or evaluates, no value whose evaluation reaches the reference
 // may get a verdict, valid or mismatch, under not too (OBI-T-08).
 func (k *kit) unresolvable() {
-	// Each schema with values whose evaluation reaches the reference.
-	for root, values := range map[string][]string{
-		`{"$ref":"https://kit.invalid/missing"}`:                         {`{"a":1}`, `"s"`, `null`},
-		`{"not":{"$ref":"https://kit.invalid/missing"}}`:                 {`{"a":1}`, `"s"`, `null`},
-		`{"properties":{"a":{"$ref":"https://kit.invalid/missing#/x"}}}`: {`{"a":1}`, `{"a":"s"}`},
+	// Each schema with values whose evaluation reaches the reference, in a
+	// fixed order, so the kit reports in the same order every run.
+	for _, c := range []struct {
+		root   string
+		values []string
+	}{
+		{`{"$ref":"https://kit.invalid/missing"}`, []string{`{"a":1}`, `"s"`, `null`}},
+		{`{"not":{"$ref":"https://kit.invalid/missing"}}`, []string{`{"a":1}`, `"s"`, `null`}},
+		{`{"properties":{"a":{"$ref":"https://kit.invalid/missing#/x"}}}`, []string{`{"a":1}`, `{"a":"s"}`}},
 	} {
+		root, values := c.root, c.values
 		var schema map[string]any
 		_ = json.Unmarshal([]byte(root), &schema)
 		schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"

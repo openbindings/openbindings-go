@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-func TestInterfaceValidate_RequiresOpenBindingsAndOperations(t *testing.T) {
-	i := Interface{}
+func TestDocumentValidate_RequiresOpenBindingsAndOperations(t *testing.T) {
+	i := Document{}
 	_, err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
@@ -46,9 +46,9 @@ func TestParseDocumentRejectsDuplicateObjectKeys(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
+func TestDocumentValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 	// OBI-T-04: refuse to load when document's major version exceeds MaxTested.
-	i := Interface{
+	i := Document{
 		OpenBindings: "1.0.0",
 		Operations:   map[string]Operation{},
 	}
@@ -62,9 +62,9 @@ func TestInterfaceValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
+func TestDocumentValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
 	// OBI-T-04: while MaxTested is pre-1.0, refuse strictly higher minor too.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.99.0",
 		Operations:   map[string]Operation{},
 	}
@@ -78,8 +78,8 @@ func TestInterfaceValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_12(t *testing.T) {
-	i := Interface{
+func TestDocumentValidate_RefusesInvalidSemver_OBI_D_12(t *testing.T) {
+	i := Document{
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
@@ -92,8 +92,8 @@ func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_12(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
-	i := Interface{
+func TestDocumentValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"a": {Aliases: []string{"shared"}},
@@ -105,10 +105,10 @@ func TestInterfaceValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_AliasAsContractNameIsValid(t *testing.T) {
+func TestDocumentValidate_AliasAsContractNameIsValid(t *testing.T) {
 	// Cross-document correspondence is now expressed by adopting the shared
 	// contract's operation name as an alias; no roles/satisfies machinery.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"createTask": {
@@ -121,8 +121,8 @@ func TestInterfaceValidate_AliasAsContractNameIsValid(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T) {
-	i := Interface{
+func TestDocumentValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T) {
+	i := Document{
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
@@ -166,8 +166,8 @@ func containsProblem(err error, want string) bool {
 // value its source's binding specification defines (§5.3): a source without
 // content, source and binding content of every JSON type, and anything within
 // them, relative addresses and $ref members included, break no core rule.
-func TestInterfaceValidate_SourceAndBindingContentAreTheKindifications(t *testing.T) {
-	i := Interface{
+func TestDocumentValidate_SourceAndBindingContentAreTheKindifications(t *testing.T) {
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"a": {}},
 		Sources: map[string]Source{
@@ -176,7 +176,7 @@ func TestInterfaceValidate_SourceAndBindingContentAreTheKindifications(t *testin
 			"relative": {Kind: "x@1", Content: json.RawMessage(`{"location":"./openapi.json","$ref":"#anchor"}`)},
 			"text":     {Kind: "x@1", Content: json.RawMessage(`"openapi: 3.1.0"`)},
 		},
-		Bindings: map[string]BindingEntry{
+		Bindings: map[string]Binding{
 			"a.bare":     {Operation: "a", Source: "bare"},
 			"a.null":     {Operation: "a", Source: "null", Content: json.RawMessage(`null`)},
 			"a.relative": {Operation: "a", Source: "relative", Content: json.RawMessage(`{"$ref":"other.json"}`)},
@@ -192,10 +192,10 @@ func TestInterfaceValidate_SourceAndBindingContentAreTheKindifications(t *testin
 	}
 }
 
-func TestInterfaceValidate_PlainNameFragments(t *testing.T) {
+func TestDocumentValidate_PlainNameFragments(t *testing.T) {
 	// OBI-D-12: a plain-name fragment in the document resource identifies the
 	// schema there that declares the name, and fails when none does.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#task"}},
@@ -214,11 +214,11 @@ func TestInterfaceValidate_PlainNameFragments(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
+func TestDocumentValidate_DanglingSchemaRefRejected(t *testing.T) {
 	// OBI-D-12: a same-document schema $ref resolves from the document root;
 	// a dangling pointer invalidates the document (internal referential
 	// integrity, matching OBI-D-07/09).
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/Missing"}},
@@ -234,9 +234,9 @@ func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
+func TestDocumentValidate_PercentEncodedFragmentResolves(t *testing.T) {
 	// URI-fragment JSON Pointers are percent-decoded before pointer evaluation.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/T%61sk"}},
@@ -248,9 +248,9 @@ func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
+func TestDocumentValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
 	// Decoding identifies Missing, so the reference violates OBI-D-12.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/M%69ssing"}},
@@ -266,10 +266,10 @@ func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) 
 	}
 }
 
-func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
+func TestDocumentValidate_NestedIDScopeSkipsD16(t *testing.T) {
 	// A $ref inside a schema declaring its own $id resolves against that
 	// resource's base per §10 and is out of OBI-D-12's scope.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
@@ -288,11 +288,11 @@ func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
+func TestDocumentValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 	// OBI-D-05's pointer-form rule carves out $id-declaring schemas: their
 	// internal fragments (including plain-name anchors) are that
 	// resource's business, per the same scope rule as OBI-D-12.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
@@ -311,12 +311,12 @@ func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) {
+func TestDocumentValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) {
 	// §10 clause 2 / OBI-D-05: a nested $id inside a schema that already
 	// declares its own $id resolves against that resource's base per JSON
 	// Schema 2020-12 and MAY be relative — that resource's internal
 	// business, the same scope carve-out as $ref/$anchor/dynamic-pair.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
@@ -334,10 +334,10 @@ func TestInterfaceValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) 
 	}
 }
 
-func TestInterfaceValidate_TopLevelRelativeIDRejected(t *testing.T) {
+func TestDocumentValidate_TopLevelRelativeIDRejected(t *testing.T) {
 	// A schema $id at an OBI position (not nested inside another
 	// $id-declaring schema) MUST still be absolute (OBI-D-05).
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
@@ -355,10 +355,10 @@ func TestInterfaceValidate_TopLevelRelativeIDRejected(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_DynamicReferencesInTheDocumentResource(t *testing.T) {
+func TestDocumentValidate_DynamicReferencesInTheDocumentResource(t *testing.T) {
 	// The dynamic pair may appear at OBI positions: OBI-D-05 judges a
 	// $dynamicRef's form, and OBI-D-12 its initial resolution, like a $ref's.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$dynamicRef": "#node"}},
@@ -377,12 +377,12 @@ func TestInterfaceValidate_DynamicReferencesInTheDocumentResource(t *testing.T) 
 	}
 }
 
-func TestInterfaceValidate_DynamicPairInsideIDScopePermitted(t *testing.T) {
+func TestDocumentValidate_DynamicPairInsideIDScopePermitted(t *testing.T) {
 	// A schema resource declaring its own $id may use the dynamic pair
 	// internally, per the same scope rule as $ref/$anchor — including full
 	// 2020-12 recursive-extension semantics (a sibling $dynamicAnchor plus a
 	// nested $dynamicRef referencing it).
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{"$ref": "#/schemas/Tree"}},
@@ -406,11 +406,11 @@ func TestInterfaceValidate_DynamicPairInsideIDScopePermitted(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
+func TestDocumentValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
 	// A property NAMED $dynamicRef under `properties` is data, not a
 	// keyword: the walker is keyword-shape-aware, mirroring the same guard
 	// already in place for $ref.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"getTask": {Output: map[string]any{
@@ -427,8 +427,8 @@ func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
-	i := Interface{
+func TestDocumentValidate_OperationRefMustExist(t *testing.T) {
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
@@ -436,7 +436,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 		Sources: map[string]Source{
 			"api": {Kind: "openapi@3.1"},
 		},
-		Bindings: map[string]BindingEntry{
+		Bindings: map[string]Binding{
 			"nonexistent.api": {
 				Operation: "nonexistent",
 				Source:    "api",
@@ -452,13 +452,13 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
-	i := Interface{
+func TestDocumentValidate_SourceRefMustExist(t *testing.T) {
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
 		},
-		Bindings: map[string]BindingEntry{
+		Bindings: map[string]Binding{
 			"op.nonexistent": {
 				Operation: "op",
 				Source:    "nonexistent",
@@ -474,10 +474,10 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	}
 }
 
-// newInterfaceWithExamples builds a minimal valid Interface with one operation
+// newDocumentWithExamples builds a minimal valid Document with one operation
 // that has the given input/output schemas and the given examples map.
-func newInterfaceWithExamples(inputSchema, outputSchema JSONSchema, examples map[string]OperationExample) Interface {
-	return Interface{
+func newDocumentWithExamples(inputSchema, outputSchema JSONSchema, examples map[string]OperationExample) Document {
+	return Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"greet": {
@@ -492,8 +492,8 @@ func newInterfaceWithExamples(inputSchema, outputSchema JSONSchema, examples map
 // Examples are author claims (§5.1): an example that does not validate
 // against its operation's schema is a false claim, which no document rule
 // checks (OBI-T-10, OBI-T-11).
-func TestInterfaceValidate_ExamplesAreAuthorClaims(t *testing.T) {
-	i := newInterfaceWithExamples(
+func TestDocumentValidate_ExamplesAreAuthorClaims(t *testing.T) {
+	i := newDocumentWithExamples(
 		map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
 		map[string]any{"type": "object", "properties": map[string]any{"count": map[string]any{"type": "integer"}}, "additionalProperties": false},
 		map[string]OperationExample{
@@ -514,7 +514,7 @@ func TestInterfaceValidate_ExamplesAreAuthorClaims(t *testing.T) {
 // Value validation reads same-document references from the OBI document
 // root (OBI-T-08, §7.2), however the operation reaches its schemas.
 func TestInputContract_ResolvesFromTheDocumentRoot(t *testing.T) {
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
 			"Person": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
@@ -585,7 +585,7 @@ func TestParseDocument_RejectsInvalidUTF8_OBI_D_01(t *testing.T) {
 // A null value is a value like any other (§5.1), and a graph reaching a
 // resource the document does not embed reaches no verdict (OBI-T-08).
 func TestInputContract_NullAndExternalReferences(t *testing.T) {
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
 			"User": map[string]any{"$ref": "https://schemas.example.com/user.json"},
@@ -610,8 +610,8 @@ func TestInputContract_NullAndExternalReferences(t *testing.T) {
 // refused rather than processed under the wrong rules (pre-1.0 minors may
 // change field semantics in either direction — the priority→preference
 // inversion being the live example).
-func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
-	iface := Interface{
+func TestDocumentValidate_RefusesBelowMinSupported(t *testing.T) {
+	iface := Document{
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
 	}
@@ -625,11 +625,11 @@ func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
+func TestDocumentValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
 	// OBI-D-10 / §5.2: boolean schemas are valid at every schema position —
 	// operation input/output, schemas-map entries, and nested subschema
 	// positions.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
 			"Anything": true,
@@ -656,7 +656,7 @@ func TestInterfaceValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.T) {
+func TestDocumentValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.T) {
 	// OBI-D-10: object-form schemas must validate against the 2020-12
 	// meta-schemas, recursively through subschemas.
 	cases := []struct {
@@ -687,7 +687,7 @@ func TestInterfaceValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			i := Interface{
+			i := Document{
 				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{"op": tc.op},
 			}
@@ -702,10 +702,10 @@ func TestInterfaceValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.
 	}
 }
 
-func TestInterfaceValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
+func TestDocumentValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
 	// OBI-D-10: a value at a schema position that is neither object nor
 	// boolean form is a document defect with a deterministic diagnostic.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
 			"Task": 42.0,
@@ -727,11 +727,11 @@ func TestInterfaceValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T) {
+func TestDocumentValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T) {
 	// OBI-D-10 is narrow: unknown keywords, unparseable `pattern` regexes,
 	// and unresolvable external $refs all pass — they surface when the
 	// schema is used, not at document validation.
-	i := Interface{
+	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {
@@ -752,11 +752,11 @@ func TestInterfaceValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T)
 	}
 }
 
-func TestInterfaceValidate_DependencyContracts(t *testing.T) {
-	valid := Interface{
+func TestDocumentValidate_DependencyContracts(t *testing.T) {
+	valid := Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"deliver": {}},
-		Dependencies: map[string]DependencyEntry{
+		Dependencies: map[string]Dependency{
 			"customer.delivery": {Operation: "deliver"},
 		},
 	}
@@ -765,7 +765,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 	}
 
 	emptyConstraint := valid
-	emptyConstraint.Dependencies = map[string]DependencyEntry{
+	emptyConstraint.Dependencies = map[string]Dependency{
 		"customer.delivery": {Operation: "deliver", Kinds: []string{}},
 	}
 	if _, err := emptyConstraint.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
@@ -773,7 +773,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 	}
 
 	missingOperation := valid
-	missingOperation.Dependencies = map[string]DependencyEntry{
+	missingOperation.Dependencies = map[string]Dependency{
 		"customer.delivery": {Operation: "missing"},
 	}
 	if _, err := missingOperation.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-11") {
@@ -783,7 +783,7 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 
 // unknownFieldViolations validates iface and returns OBI-D-02 violations by
 // path. An unknown field without the x- prefix violates OBI-D-02 (§12).
-func unknownFieldViolations(t *testing.T, iface Interface) map[string]string {
+func unknownFieldViolations(t *testing.T, iface Document) map[string]string {
 	t.Helper()
 	report, _ := iface.Validate()
 	byPath := map[string]string{}
@@ -802,8 +802,8 @@ func requireUnknownFieldViolation(t *testing.T, byPath map[string]string, path, 
 	}
 }
 
-func TestInterfaceValidate_UnknownTopLevelFieldsViolateD02(t *testing.T) {
-	byPath := unknownFieldViolations(t, Interface{
+func TestDocumentValidate_UnknownTopLevelFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		LosslessFields: LosslessFields{
@@ -812,11 +812,11 @@ func TestInterfaceValidate_UnknownTopLevelFieldsViolateD02(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, "", "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/unknownField`, "unknownField")
 }
 
-func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testing.T) {
-	byPath := unknownFieldViolations(t, Interface{
+func TestDocumentValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
@@ -831,7 +831,7 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testin
 				},
 			},
 		},
-		Bindings: map[string]BindingEntry{
+		Bindings: map[string]Binding{
 			"op.src": {
 				Operation: "op",
 				Source:    "src",
@@ -843,12 +843,12 @@ func TestInterfaceValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testin
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/sources/src`, "unknownField")
-	requireUnknownFieldViolation(t, byPath, `/bindings/op.src`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/sources/src/unknownField`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/bindings/op.src/unknownField`, "unknownField")
 }
 
-func TestInterfaceValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T) {
-	byPath := unknownFieldViolations(t, Interface{
+func TestDocumentValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {
@@ -865,11 +865,11 @@ func TestInterfaceValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T)
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/operations/op/examples/ex1`, "unknownField")
+	requireUnknownFieldViolation(t, byPath, `/operations/op/examples/ex1/unknownField`, "unknownField")
 }
 
-func TestInterfaceValidate_BindingEntryUnknownFieldsViolateD02(t *testing.T) {
-	byPath := unknownFieldViolations(t, Interface{
+func TestDocumentValidate_BindingUnknownFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
@@ -877,7 +877,7 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsViolateD02(t *testing.T) {
 		Sources: map[string]Source{
 			"api": {Kind: "openapi@3.1"},
 		},
-		Bindings: map[string]BindingEntry{
+		Bindings: map[string]Binding{
 			"op.api": {
 				Operation: "op",
 				Source:    "api",
@@ -889,14 +889,14 @@ func TestInterfaceValidate_BindingEntryUnknownFieldsViolateD02(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/bindings/op.api`, "unknownBindingField")
+	requireUnknownFieldViolation(t, byPath, `/bindings/op.api/unknownBindingField`, "unknownBindingField")
 }
 
-func TestInterfaceValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
-	byPath := unknownFieldViolations(t, Interface{
+func TestDocumentValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"deliver": {}},
-		Dependencies: map[string]DependencyEntry{
+		Dependencies: map[string]Dependency{
 			"delivery": {
 				Operation: "deliver",
 				LosslessFields: LosslessFields{
@@ -905,11 +905,11 @@ func TestInterfaceValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
 			},
 		},
 	})
-	requireUnknownFieldViolation(t, byPath, `/dependencies/delivery`, "futurePolicy")
+	requireUnknownFieldViolation(t, byPath, `/dependencies/delivery/futurePolicy`, "futurePolicy")
 }
 
-func TestInterfaceValidate_ExtensionFieldsDoNotViolateD02(t *testing.T) {
-	byPath := unknownFieldViolations(t, Interface{
+func TestDocumentValidate_ExtensionFieldsDoNotViolateD02(t *testing.T) {
+	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		LosslessFields: LosslessFields{

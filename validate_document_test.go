@@ -42,15 +42,15 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 
 // A report names the release whose text it applies and, while that release
 // is a working draft, the source-control revision of the text (OBI-T-09),
-// from Interface.Validate and ValidateDocument alike.
+// from Document.Validate and ValidateDocument alike.
 func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{}}`
 	fromDocument := mustValidateDocument(t, document)
-	fromInterface, err := mustDecodeInterface(t, document).Validate()
+	fromHostObject, err := mustDecodeDocument(t, document).Validate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, report := range []ValidationReport{fromDocument, fromInterface} {
+	for _, report := range []ValidationReport{fromDocument, fromHostObject} {
 		if report.Version != "0.2.0" || len(report.Revision) != 40 || strings.Trim(report.Revision, "0123456789abcdef") != "" {
 			t.Errorf("version %q, revision %q: want 0.2.0 and a full commit hash while 0.2.0 is a working draft", report.Version, report.Revision)
 		}
@@ -64,13 +64,13 @@ func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 // which the model writes only when it decodes back unchanged, so a host
 // object decides OBI-D-01 and a well-formed one concludes conformant, whether
 // decoded or built in code.
-func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
+func TestDocumentValidate_DecidesD01OnTheSerialization(t *testing.T) {
 	decoded, err := ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"tasks.create":{}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	built := Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"tasks.create": {}}}
-	for name, iface := range map[string]Interface{"decoded": *decoded, "built": built} {
+	built := Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"tasks.create": {}}}
+	for name, iface := range map[string]Document{"decoded": *decoded, "built": built} {
 		report, err := iface.Validate()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -80,7 +80,7 @@ func TestInterfaceValidate_DecidesD01OnTheSerialization(t *testing.T) {
 		}
 	}
 	// A value with no JSON serialization gets no report.
-	broken := Interface{OpenBindings: "0.2.0", Name: Present("\xff"), Operations: map[string]Operation{}}
+	broken := Document{OpenBindings: "0.2.0", Name: Present("\xff"), Operations: map[string]Operation{}}
 	if report, err := broken.Validate(); err == nil || report.Evidence != nil {
 		t.Fatalf("a string that is not UTF-8: report %+v, err %v", report, err)
 	}
@@ -109,12 +109,33 @@ func TestValidateDocument_BindingsNeedNoKindificationKnowledge(t *testing.T) {
 }
 
 // A member the core no longer defines, such as a 0.1 source's location, is an
-// unprefixed name the specification reserves (§12): an OBI-D-02 violation,
-// with no separate advisory diagnostic.
+// unprefixed name the specification reserves (§12): an OBI-D-02 violation
+// located at the member, with no separate advisory diagnostic.
 func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
 	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{},"sources":{"s":{"kind":"x@1","location":"./openapi.json"}}}`)
-	if violations := report.Violations(); len(violations) != 1 || violations[0].Rule != "OBI-D-02" || violations[0].Path != "/sources/s" || !strings.Contains(violations[0].Message, "location") {
-		t.Fatalf("want one OBI-D-02 violation at the source naming location, got %+v", violations)
+	want := []Finding{{Rule: "OBI-D-02", Status: EvidenceViolated, Path: "/sources/s/location", Message: `does not validate against the document schema: additional property "location" not allowed`, Position: Position{Offset: 69, Line: 1, Column: 70}}}
+	if violations := report.Violations(); !reflect.DeepEqual(violations, want) {
+		t.Fatalf("want one OBI-D-02 violation at the source's location member, got %+v", violations)
+	}
+}
+
+// Each member the document schema does not allow is its own finding, at the
+// member, its name escaped as RFC 6901 escapes it.
+func TestValidateDocument_EachUnknownMemberIsLocated(t *testing.T) {
+	data := "{\"openbindings\":\"0.2.0\",\n\"operations\":{\"op\":{\"bogus\":1,\"also\":2}},\n\"zz\":0,\"a/b\":1}"
+	report := mustValidateDocument(t, data)
+	var got []string
+	for _, finding := range report.Violations() {
+		got = append(got, fmt.Sprintf("%s %s %s %s", finding.Rule, finding.Path, finding.Position, finding.Message))
+	}
+	want := []string{
+		`OBI-D-02 /a~1b 3:8 does not validate against the document schema: additional property "a/b" not allowed`,
+		`OBI-D-02 /zz 3:1 does not validate against the document schema: additional property "zz" not allowed`,
+		`OBI-D-02 /operations/op/also 2:31 does not validate against the document schema: additional property "also" not allowed`,
+		`OBI-D-02 /operations/op/bogus 2:21 does not validate against the document schema: additional property "bogus" not allowed`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -122,7 +143,7 @@ func TestValidateDocument_ASourceLocationViolatesD02(t *testing.T) {
 // serialization.
 func hostReport(t *testing.T, document string) (ValidationReport, error) {
 	t.Helper()
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(document), &iface); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +183,7 @@ func TestValidate_VersionRefusalIsNotAConclusion(t *testing.T) {
 		t.Fatalf("a refused document has no interpretation and no conclusion: %v %+v", iface, report)
 	}
 
-	host := Interface{OpenBindings: "9.0.0", Operations: map[string]Operation{}}
+	host := Document{OpenBindings: "9.0.0", Operations: map[string]Operation{}}
 	hostReport, err := host.Validate()
 	if !errors.As(err, &refusal) || hostReport.Evidence != nil {
 		t.Fatalf("Validate = %+v, %v; want a version refusal and no report", hostReport, err)
@@ -312,7 +333,7 @@ func TestParseDocument_RefusesBeforeApplyingTheSchema(t *testing.T) {
 func TestValidate_GatesOnTheDocumentSchema(t *testing.T) {
 	// A present empty version violates only the document schema; the model
 	// carries it, so Validate sees it.
-	iface := &Interface{
+	iface := &Document{
 		OpenBindings: "0.2.0",
 		Version:      Present(""),
 		Operations:   map[string]Operation{"op": {}},
@@ -331,7 +352,7 @@ func TestValidateDocument_JudgesDocumentsTheModelCannotCarry(t *testing.T) {
 		"bindings":{"b":{"operation":"missing","source":"s"}}}`))
 
 	if iface != nil {
-		t.Fatal("the model cannot carry a null input; no Interface is returned")
+		t.Fatal("the model cannot carry a null input; no Document is returned")
 	}
 	for rule, want := range map[string]RuleEvidenceStatus{
 		"OBI-D-02": EvidenceViolated,
@@ -385,25 +406,113 @@ func TestInputContract_ThroughAFragmentIntoAnEmbeddedResource(t *testing.T) {
 	}
 }
 
-// A document schema failure on a map key is located at the key. Only the
-// key's own token is asserted: santhosh-tekuri/jsonschema v6.0.3 records a
+// A document schema failure on a map key is located at the key, the empty
+// key included, every time: santhosh-tekuri/jsonschema v6.0.3 records a
 // propertyNames failure's location without copying it, so a later sibling can
-// overwrite the tokens above the key.
+// overwrite the tokens above the key, and core locates the key itself.
 func TestValidateDocument_KeyFindingsAreLocatedAtTheKey(t *testing.T) {
-	report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{"a/b~c":{}}}`)
-	found := false
-	for _, finding := range report.Findings {
-		if finding.Rule != "OBI-D-02" {
-			continue
-		}
-		found = true
-		if !strings.HasSuffix(finding.Path, "/a~1b~0c") {
-			t.Fatalf("OBI-D-02 finding at %q, want it located at the key", finding.Path)
+	for key, want := range map[string]string{"a/b~c": "/operations/a~1b~0c", "": "/operations/"} {
+		encoded, _ := json.Marshal(key)
+		for range 50 {
+			report := mustValidateDocument(t, `{"openbindings":"0.2.0","operations":{`+string(encoded)+`:{}}}`)
+			var at []string
+			for _, finding := range report.Findings {
+				if finding.Rule == "OBI-D-02" {
+					at = append(at, finding.Path)
+				}
+			}
+			if !slices.Equal(at, []string{want}) {
+				t.Fatalf("key %q: OBI-D-02 findings at %q, want one at %q", key, at, want)
+			}
 		}
 	}
-	if !found {
-		t.Fatal("want an OBI-D-02 finding for the key")
+}
+
+// Validation records the same findings in the same order every time, for a
+// document with many sibling problems across its maps, given as bytes,
+// decoded (json.Unmarshal carries its unknown members), or built in memory,
+// whose encoding is checked as bytes too. A document the model does not
+// carry (type errors, preferences that are not in-range integers) is checked
+// as bytes alone. The document schema check, whose
+// library walks a document's objects in no fixed order, orders its findings
+// by where the failing keyword applies, then by message.
+func TestValidate_FindingsAreDeterministic(t *testing.T) {
+	documents := map[string]string{
+		"names and unknown members":            `{"openbindings":"0.2.0","operations":{"op":{"zz":1,"aa":2,"examples":{"e<1>":{}}}}}`,
+		"an empty name beside unknown members": `{"openbindings":"0.2.0","zz":1,"aa":2,"operations":{"":{},"op":{"zz":1,"aa":2}}}`,
+		"problems in every map": `{"openbindings":"0.2.0","zz":1,"aa":2,
+			"schemas":{"s<1>":{"type":"nope","$ref":"#/nowhere"},"ok":{"properties":{"a":{"type":3}}},"":{}},
+			"operations":{"o<1>":{"bad":1,"examples":{"e<1>":{},"e 2":{"x":1}},"aliases":["a","a","b<"]},
+				"o2":{"zz":1,"aa":[],"input":{"$ref":"#/schemas/missing"},"examples":{"f<":{}}},
+				"o3":{"aliases":["b<"],"tags":["t","t"]}},
+			"dependencies":{"d<":{"operation":"none","kinds":[]},"d2":{"operation":"o2","kinds":["k","k"]}},
+			"sources":{"s<":{"kind":""},"s2":{"kind":"k","zz":1}},
+			"bindings":{"b<":{"operation":"o9","source":"s9"},"b2":{"operation":"o2","source":"s2","aa":1,"zz":2},
+				"":{"operation":"o2","source":"s2"}}}`,
 	}
+	bytesOnly := map[string]string{
+		"problems in every map, with type errors": `{"openbindings":"0.2.0","zz":1,"aa":2,
+			"schemas":{"s<1>":{"type":"nope","$ref":"#/nowhere"},"ok":{"properties":{"a":{"type":3}}}},
+			"operations":{"o<1>":{"bad":1,"examples":{"e<1>":{},"e 2":{"x":1}},"aliases":["a","a","b<"]},
+				"o2":{"zz":1,"aa":[],"input":{"$ref":"#/schemas/missing"},"examples":{"f<":{}}},
+				"o3":{"aliases":["b<"],"tags":[1]}},
+			"dependencies":{"d<":{"operation":"none","kinds":[]},"d2":{"operation":3}},
+			"sources":{"s<":{"kind":""},"s2":{"kind":"k","zz":1}},
+			"bindings":{"b<":{"operation":"o9","source":"s9","preference":1.5},"b2":{"operation":"o2","source":"s2","aa":1,"zz":2},
+				"b3":{"operation":"o2","source":"s2","preference":1e400}}}`,
+	}
+	outcome := func(report ValidationReport, err error) string {
+		return fmt.Sprintf("%v\n%v", report.Findings, err)
+	}
+	stable := func(name string, validate func() (ValidationReport, error)) {
+		t.Helper()
+		first := outcome(validate())
+		for i := range 200 {
+			if got := outcome(validate()); got != first {
+				t.Fatalf("%s, run %d:\n%s\nwant\n%s", name, i, got, first)
+			}
+		}
+	}
+	for name, text := range documents {
+		stable(name+", as bytes", func() (ValidationReport, error) {
+			_, report, err := ValidateDocument([]byte(text))
+			return report, err
+		})
+		var doc Document
+		if err := json.Unmarshal([]byte(text), &doc); err != nil {
+			t.Fatalf("%s: the model does not carry it, so its decoded route is not exercised: %v", name, err)
+		}
+		stable(name+", decoded", doc.Validate)
+	}
+	for name, text := range bytesOnly {
+		if err := json.Unmarshal([]byte(text), new(Document)); err == nil {
+			t.Fatalf("%s: the model carries it, so it belongs among the decoded fixtures", name)
+		}
+		stable(name+", as bytes", func() (ValidationReport, error) {
+			_, report, err := ValidateDocument([]byte(text))
+			return report, err
+		})
+	}
+	built := Document{OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{"s<1>": map[string]any{"type": "nope"}, "s 2": map[string]any{"$ref": "#/nowhere"}},
+		Operations: map[string]Operation{
+			"o<1>": {Aliases: []string{"a", "a"}, Examples: map[string]OperationExample{"e<1>": {}, "e 2": {}}},
+			"o 2":  {Input: map[string]any{"$ref": "#/schemas/missing"}, LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"zz": json.RawMessage(`1`), "aa": json.RawMessage(`2`)}}},
+		},
+		Bindings: map[string]Binding{
+			"b<":  {Operation: "o9", Source: "s9", Preference: Present(int64(maxPreference + 1))},
+			"b 2": {Operation: "o 2", Source: "s 2", Preference: Present(int64(-maxPreference - 1))},
+		},
+	}
+	stable("built in memory", built.Validate)
+	encoded, err := json.Marshal(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable("built in memory, as bytes", func() (ValidationReport, error) {
+		_, report, err := ValidateDocument(encoded)
+		return report, err
+	})
 }
 
 // OBI-D-06 governs every schema in the document, inside schema resources too:
@@ -754,8 +863,8 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 			t.Errorf("%s: OBI-D-01 %q, err %v", name, report.Evidence["OBI-D-01"], err)
 		}
 	}
-	if _, err := ParseDocument([]byte(deep)); err == nil || errors.As(err, new(*ValidationError)) {
-		t.Fatalf("want a refusal that is not a violation, got %v", err)
+	if _, err := ParseDocument([]byte(deep)); !errors.Is(err, ErrInconclusive) || errors.As(err, new(*ValidationError)) {
+		t.Fatalf("want an inconclusive parse that is not a violation, got %v", err)
 	}
 	unsupported := `{"x-deep":` + nested + `,"operations":{},"openbindings":"0.9.0"}`
 	if _, _, err := ValidateDocument([]byte(unsupported)); !errors.As(err, new(*VersionRefusalError)) {
@@ -1026,7 +1135,7 @@ func TestValidateDocument_DepthCountsSubschemasOnly(t *testing.T) {
 		}
 	}
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"type":"array","const":` + deep + `,"$defs":{"u":{"default":` + deep + `}}}}}}`
-	contract, err := contractsFor(t, mustDecodeInterface(t, document)).CompileInput(context.Background(), "op")
+	contract, err := contractsFor(t, mustDecodeDocument(t, document)).CompileInput(context.Background(), "op")
 	if err == nil {
 		err = contract.Err()
 	}
@@ -1146,4 +1255,54 @@ func FuzzDeepInput(f *testing.F) {
 			t.Fatalf("%s: valid JSON refused: %v", input, shallow)
 		}
 	})
+}
+
+// ValidateDocument's results take the five shapes its doc lists.
+func TestValidateDocument_ResultShapes(t *testing.T) {
+	deep := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
+	for _, tc := range []struct {
+		name, input string
+		document    bool
+		report      ConformanceConclusion // "" for the zero report
+		err         string                // "refusal", "violation", or ""
+		decided     []string              // the rules decided, when not all are
+	}{
+		{"refused", `{"openbindings":"0.3.0","operations":{}}`, false, "", "refusal", nil},
+		{"OBI-D-01 refuses it", `{"openbindings":"0.2.0","operations":{},"operations":{}}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01"}},
+		{"a lone surrogate", `{"openbindings":"0.2.0","operations":{},"x-note":"\ud800"}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}},
+		{"a lone surrogate, no valid version", `{"openbindings":"0.2","operations":{},"x-note":"\ud800"}`, false, ConclusionNonConformant, "violation", []string{"OBI-D-01", "OBI-D-09"}},
+		{"nested past the decoder", `{"openbindings":"0.2.0","operations":{},"x-deep":` + deep + `}`, false, ConclusionConformanceUndetermined, "", []string{"OBI-D-01", "OBI-D-09"}},
+		{"a null the model does not carry", `{"openbindings":"0.2.0","operations":{"a":{"tags":null}}}`, false, ConclusionNonConformant, "violation", nil},
+		{"carried, conformant", `{"openbindings":"0.2.0","operations":{}}`, true, ConclusionConformant, "", nil},
+		{"carried, violated", `{"openbindings":"0.2.0","operations":{},"bindings":{"b":{"operation":"x","source":"y"}}}`, true, ConclusionNonConformant, "violation", nil},
+	} {
+		doc, report, err := ValidateDocument([]byte(tc.input))
+		got := ""
+		switch {
+		case errors.As(err, new(*VersionRefusalError)):
+			got = "refusal"
+		case errors.As(err, new(*ValidationError)):
+			got = "violation"
+		case err != nil:
+			got = err.Error()
+		}
+		if (doc != nil) != tc.document || report.Conclusion != tc.report || got != tc.err {
+			t.Errorf("%s: document %v, conclusion %q, error %q; want %v, %q, %q", tc.name, doc != nil, report.Conclusion, got, tc.document, tc.report, tc.err)
+		}
+		if tc.report == "" {
+			if !reflect.DeepEqual(report, ValidationReport{}) {
+				t.Errorf("%s: want the zero report, got %+v", tc.name, report)
+			}
+			continue
+		}
+		var decided []string
+		for _, rule := range DocumentRules() {
+			if report.Evidence[rule] != EvidenceInconclusive {
+				decided = append(decided, rule)
+			}
+		}
+		if want := tc.decided; want == nil && len(decided) != len(documentRules) || want != nil && !slices.Equal(decided, want) {
+			t.Errorf("%s: decided %v, want %v", tc.name, decided, want)
+		}
+	}
 }

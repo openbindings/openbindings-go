@@ -6,11 +6,36 @@
 
 ### Added
 
+- **An operation's bindings by key.** `Document.OperationBindings(key)`
+  returns the keys of the bindings whose `operation` is that key, sorted for
+  presentation. An alias, a key no operation has, and a nil `Document` find
+  nothing: a name is resolved first (OBI-T-07).
+- **A document's schema references.** `Document.References()` lists every
+  `$ref` and `$dynamicRef` keyword in the schemas a document contains, as a
+  `Reference`: its location, keyword, and value, the base it resolves
+  against, and the schema its initial lookup identifies or why there is
+  none, looked up by the resolution OBI-D-12 and value validation use. It
+  refuses an unsupported version, does not interpret a document declaring no
+  valid version, and returns what it found with `ErrInconclusive` where a
+  schema nests past the index's 256 levels. Its doc states what a caller may
+  and may not conclude, `$dynamicRef` included.
+- **`ErrInconclusive`** marks a call that decided nothing because the SDK
+  could not read or interpret its input in full: `ParseDocument`'s errors
+  other than a version refusal and a violation, `Resolve`'s and
+  `References`' errors for a document declaring no valid version, an
+  incomplete reference index, and value validation's errors for input that
+  is not JSON. It is neither a conformance conclusion nor a value verdict.
+- **`CheckVersion(v)`** returns the `*VersionRefusalError` that
+  `ParseDocument`, `ValidateDocument`, `Document.Validate`,
+  `Document.References`, and `ValueContractCompiler.Resolve` return for a
+  well-formed version outside the supported set, and nil otherwise. Nil
+  means only that there is no refusal, so a text declaring no version is
+  never refused (OBI-T-04).
 - **Findings carry their position in the input.** `Finding.Position` is
   where a finding from `ValidateDocument` or `ParseDocument` lies in the
   input bytes (byte offset, line, and column, as `go/token` counts them): a
   member at its name, any other value at its first byte, and a break in
-  OBI-D-01 at the byte that breaks it. `Interface.Validate` reads no bytes,
+  OBI-D-01 at the byte that breaks it. `Document.Validate` reads no bytes,
   so its findings carry the zero `Position`.
 - **A validation report names the specification revision it applied
   (OBI-T-09).** `ValidationReport.Revision` is the commit of
@@ -20,9 +45,118 @@
 
 ### Changed
 
+- **The model's types and lookups take the spec's names (breaking,
+  pre-1.0).** `Interface` is `Document`, `BindingEntry` is `Binding`, and
+  `DependencyEntry` is `Dependency`, the spec's terms (§3);
+  `OperationExample` keeps its name. `Dependency.AllowsKind` is
+  `AcceptsKind`, with the same exact-kind semantics (§5.5).
+  `ResolveOperation(doc, name)` is the method
+  `Document.ResolveOperation(name)`, with the same semantics, a nil
+  receiver included. `Document`'s doc says it models a document's meaning,
+  not the text it was decoded from. Messages the package writes say
+  "document" where they said "interface".
+  - Removed: `IsSupportedVersion`, whose `(bool, error)` result invited
+    refusing a text that declares no version, replaced by `CheckVersion`;
+    and `IsValidSemver`, now internal.
+- **`ConcludeConformance` concludes from the document rules alone, and
+  treats a missing one as inconclusive (breaking, pre-1.0).** OBI-T-09
+  permits a conformant conclusion only when every applicable document rule
+  has been established, so an empty map now concludes conformance
+  undetermined. §10.4 defines each conclusion by the document rules, so
+  evidence under any other identifier is dropped and decides nothing, where
+  it used to decide the conclusion like a document rule; a mistyped rule
+  identifier leaves its rule missing, so inconclusive. The returned
+  `Evidence` holds exactly the document rules, each missing one recorded as
+  inconclusive. Its doc states the invariants of amending a report with
+  evidence the SDK cannot produce. The corpus at the applied revision
+  expects T09-S-01, whose evidence omits OBI-D-12 and OBI-D-13, to conclude
+  conformant. The harness keys it as a corpus defect on that condition: it
+  checks the scenario against the corrected conclusion (undetermined) and
+  reports it as a keyed expected failure, never a pass, and the entry fails,
+  telling the reader to remove it, once the condition no longer holds.
+- **Undecided failures match `ErrInconclusive` (breaking, pre-1.0).**
+  `ParseDocument`'s failures to read a document in full, which read
+  `parse document: ...`, read `openbindings: inconclusive: ...`; value
+  validation's errors for input that is not JSON read
+  `openbindings: inconclusive: ...`.
+- **A document beyond the SDK's own limits is classified so in memory too.**
+  `ParseDocument` and `ValidateDocument` already classified input nesting
+  deeper than encoding/json reads (10000 levels), or holding a string
+  escaping a lone UTF-16 surrogate, as the SDK's own limits (a lone
+  surrogate is valid JSON text a Go string cannot carry, a declared
+  capability limit). A `Document` in which the SDK's own checks (core's scan
+  of the text the document encodes to, and the model types' refusals of
+  their own members carried as raw JSON) find either now gets the same:
+  `Document.Validate` reports conformance undetermined, with OBI-D-01
+  inconclusive since the model has no text and at most OBI-D-09 decided, on
+  the declared version, and `Document.References` and
+  `ValueContractCompiler.Resolve` return an error matching
+  `ErrInconclusive`, where all three returned an untyped encoding error. A
+  document that fails to encode at all still gets an error matching no
+  category and no report, whatever the failure carries: a failure from
+  encoding/json, which includes raw JSON a schema holds nesting past its own
+  depth, or from any marshaler outside the model's own members, a caller's
+  or one of the SDK's types placed inside a schema. So raw JSON a schema
+  holds within encoding/json's depth that makes the whole document too
+  deep, or that holds a lone surrogate, is the SDK's limit. A document
+  holding both kinds of defect is decided by the first that encoding meets,
+  and each schema is encoded once, so a caller's marshaler runs once per
+  encoding. `Document.Validate` states this boundary and the order.
+- **A raw JSON value reads as JSON text.** `ValueContract.Validate` reads a
+  `json.RawMessage` or `*json.RawMessage` that is the value exactly as
+  `ValidateJSON` reads the same bytes, so text nesting past the decoder is
+  core's refusal to read the value exactly (`ErrNoVerdict`), where it was
+  "not a JSON value" (`ErrInconclusive`); a nil one is still null. Raw JSON
+  nested in a value is still encoded by encoding/json like any Go value:
+  what encoding/json refuses is not a JSON value, and the text it writes is
+  read like any value's text (see `ValueContract.Validate`).
+- **Encoding failures from caller values match no category.** A value that
+  cannot be encoded for a reason of its own (a NaN, a channel, invalid UTF-8
+  in a Go string, a marshaler's error) still returns an error and no report
+  from `Document.Validate`, `Document.References`, and `Resolve`, and is not
+  a JSON value to `ValueContract.Validate`. The encoding failure is kept as
+  text, so these errors no longer expose encoding/json's error types (such as
+  `*json.UnsupportedValueError`) or a marshaler's own error to `errors.Is`
+  and `errors.As`.
+- **Value validation's outcome categories stay disjoint (breaking for
+  evaluator authors, pre-1.0).** `ErrInconclusive` joins the sentinels the
+  evaluator contract reserves for core: an evaluator's error matching it is
+  read as no verdict and kept in `Cause` alone, as one matching
+  `ErrUndefined` is, and openbindingstest now fails an evaluator whose
+  errors match `ErrInconclusive`. A Go value whose own encoding fails is not
+  a JSON value whatever its marshaler says: the marshaler's error is kept as
+  text, so the result matches `ErrInconclusive` alone, where a marshaler
+  returning a sentinel or a `*NoVerdictError` used to make it match that
+  category too.
+- **Messages name the package once.** `ValidationError` and the model's
+  decode errors begin `openbindings:`, as the package's other errors do, and
+  a no-verdict's own cause (no value contract, an undefined result) no
+  longer repeats the prefix its `NoVerdictError` writes, while still matching
+  its sentinel. Errors wrapped from an evaluator, a context, or
+  encoding/json's framing of an encoding error are unchanged.
+- **Encoding writes kept members after the typed ones.** An object holding
+  an `x-` or unknown member was written with every member sorted by name; its
+  typed members now come first, in field order, then the kept members in
+  name order.
+- **HTML escaping follows the caller's encoder.** The model escaped `<`,
+  `>`, and `&` itself, even through an encoder set not to. `json.Marshal`
+  still escapes them; an encoder with `SetEscapeHTML(false)`, or a direct
+  `MarshalJSON` call, now writes them as held.
+- **OBI-D-02 locates each member the document schema does not allow at the
+  member.** One finding at the object holding such members, naming them all,
+  becomes one finding per member, at the member and its position, reading
+  `additional property "<name>" not allowed`.
+- **Documentation:** `JSONSchema`'s write forms, the typed-nil rule, and
+  `UseNumber`; `ValidateDocument`'s five result shapes;
+  `VersionRefusalError.Reason`; where an evaluator's costs come from
+  (OBI-T-08, its library, or the SDK's diagnostic contract); and the
+  declared capability limits of value validation: a value contract decided
+  as a whole, lone surrogates, and Unicode property escapes in `schemaeval`.
+  The README no longer shows the removed validation options.
+
 - **Validation takes no options (breaking, pre-1.0).** `ValidateOptions`
   is gone: no document rule takes anything an application supplies, so
-  `Interface.Validate()` and `ValidateDocument(data)` take no options
+  `Document.Validate()` and `ValidateDocument(data)` take no options
   parameter.
 
 - **Value validation takes an evaluator the application supplies (breaking,
@@ -93,7 +227,7 @@
     decided on the declared version.
   - `ValidationReport.Version` names the release whose text the SDK applies
     (0.2.0), not the patch release a document declares (OBI-T-09).
-  - `Interface.Validate` decides OBI-D-01 on the host object's
+  - `Document.Validate` decides OBI-D-01 on the host object's
     serialization, which is what a claim about a value in memory is about
     (§10), so a well-formed host object can conclude conformant. It judges
     the value, not the bytes it may have been decoded from.
@@ -171,6 +305,44 @@
   `ccfe0b6` spec draft, including the distinct-string kind cases, the
   OBI-D-10 unreferenced `$defs` case, and version-scoped rule identifiers.
   Documentation uses the current §10.4 conformance conclusion section.
+- **The corpus adapter executes every action of scenario format @2, and
+  still reads @1.** It runs the specification corpus's validity fixtures and
+  every scenario action: `check-dependency-kind`, `resolve-operation`,
+  `validate-document`, `validate-operation-values`, `conclude-conformance`,
+  and `check-examples`; `derive-form` is omitted, as this SDK derives no
+  forms. Value cases run in the `schemaeval` module's tests, under the
+  project's ECMA-262 evaluator, where the core's tests ran them with a test
+  evaluator using Go's regexp; CI gives `schemaeval`'s tests the corpus too.
+  Version gates are judged against `SupportedVersions`' declaration, never
+  the version decision under test. A fixture's `notViolated` rules must not
+  be reported violated. A version refusal must come with nothing else at
+  every entry point that refuses, and a violating fixture expects a
+  conclusion, not a refusal. A conclusion must name the applied text
+  (`appliedRelease` and `appliedRevision`); the text it names is then
+  verified by reading that revision's `openbindings.md` from the spec
+  repository's history and comparing its hash with the one the adapter pins
+  for that revision, never against the text checked out beside the corpus.
+  The revision must be a full 40-hex commit of that history (`git rev-parse
+  --verify REV^{commit}` gives it back); a release named alone is reported
+  unverified, as no verification against a release snapshot exists.
+  A SHORTFALL against the capability profile the adapter declares fails, and
+  so does an omission because no document came back for a non-conformant
+  document the model carries: the adapter declares that the core continues
+  with every such document, and keys any case it cannot carry. The cases the
+  core is expected to fail are keyed with their signatures, so the module is
+  green at the baseline, a regression fails it, and a keyed case that passes
+  fails as stale: two fixtures of the revised corpus, which need an anchor
+  to declare a plain name only when it matches JSON Schema's grammar (the
+  spec CHANGELOG's "Only a grammatical anchor declares a plain name", §7.3),
+  until the core applies the revised text.
+  Kind retrieval is observed through a local TCP listener whose address the
+  kind names, so a connection from any client counts; a case whose
+  sentinels cannot start fails rather than being skipped. Each module records
+  every case executed or omitted with a reason and checks the counts
+  against the corpus manifest. Format @1, the corpus at the applied
+  revision, reads as before, its keyed corpus defect included; format @2's
+  `conformant` conclusion admits `conformance-undetermined`. CI checks out
+  the spec repository's full history for the applied-text check.
 
 ### Fixed
 
@@ -179,6 +351,30 @@
   so a later sibling could overwrite it and the finding pointed somewhere
   else on most runs. Core now locates the finding where the document holds
   the name, in every map whose names the document schema constrains.
+- **The same document gives the same findings in the same order.** OBI-D-02's
+  findings were still ordered by the library's overwritten location, so a
+  document with a refused member name beside other document-schema problems
+  gave its findings in different orders across runs, and a refused empty
+  name was not recognized as a name and kept the overwritten location
+  (`/openbindings/` for `/operations/`). OBI-D-02's findings are now
+  ordered by where the failing keyword applies, by reference token, then by
+  message, and a refused name, the empty one included, is located at each
+  member that holds it. A binding preference out of §5.3's range, which
+  validation decides exactly, now takes its place in that order instead of
+  coming first. The openbindingstest kit and the corpus harness report in a
+  fixed order too.
+- **`schemaeval` locates a failed `propertyNames` at the root of the value,
+  every time.** Its library records the location of a failed
+  `propertyNames` without copying it, so for an object below the value's top
+  level the problem was located wherever a later sibling had overwritten it,
+  which varied across runs (`/a` or `/c` for `/b/x`), and several invalid
+  names' messages came in varying order. Each failed `propertyNames` keyword
+  is now one problem, located at the root of the value whatever objects it
+  applies to, naming each invalid name once, in sorted order, outside an
+  `anyOf` or `oneOf` alternative, where the applicator's one problem states
+  it.
+  openbindingstest adds a case with a nested `propertyNames`, which
+  `schemaeval` names in `Options.Unlocated`.
 - **A cycle every evaluation enters is an undefined result.** A value
   contract whose evaluation must apply a cycle of schemas in place without
   advancing (a schema that is only a `$ref` to itself, for one) now refuses

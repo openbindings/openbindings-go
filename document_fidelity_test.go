@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,7 +58,7 @@ func TestDocumentModel_RoundTripsEveryMember(t *testing.T) {
 	}
 	for name, document := range documents {
 		t.Run(name, func(t *testing.T) {
-			var iface Interface
+			var iface Document
 			if err := json.Unmarshal([]byte(document), &iface); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -95,7 +96,7 @@ func TestDocumentModel_RefusesWhatItCannotCarry(t *testing.T) {
 	}
 	for name, document := range documents {
 		t.Run(name, func(t *testing.T) {
-			var iface Interface
+			var iface Document
 			if err := json.Unmarshal([]byte(document), &iface); err == nil {
 				encoded, _ := json.Marshal(iface)
 				t.Fatalf("decoded a document the model cannot carry; it would re-encode as %s", encoded)
@@ -106,7 +107,7 @@ func TestDocumentModel_RefusesWhatItCannotCarry(t *testing.T) {
 
 func TestDocumentModel_PreferenceIsAnExactInteger(t *testing.T) {
 	for spelling, want := range map[string]int64{"1": 1, "1.0": 1, "1e3": 1000, "-0": 0, "9007199254740991": 9007199254740991} {
-		var binding BindingEntry
+		var binding Binding
 		if err := json.Unmarshal([]byte(`{"operation":"a","source":"s","preference":`+spelling+`}`), &binding); err != nil {
 			t.Fatalf("%s: %v", spelling, err)
 		}
@@ -167,7 +168,7 @@ func FuzzPreferenceValue(f *testing.F) {
 // Programs state presence through the typed fields alone: set a member with
 // Present, remove it with nil.
 func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
-	binding := BindingEntry{Operation: "a", Source: "s", Content: json.RawMessage(`null`)}
+	binding := Binding{Operation: "a", Source: "s", Content: json.RawMessage(`null`)}
 	encoded, err := json.Marshal(binding)
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +188,7 @@ func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
 		}
 	}
 
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","version":"","operations":{"a":{"tags":[]}}}`), &iface); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestDocumentModel_ConstructAndRemovePresence(t *testing.T) {
 	}
 }
 
-// Interface.Validate and ValidateDocument agree about every document the
+// Document.Validate and ValidateDocument agree about every document the
 // model decodes: the host object carries what the bytes carried.
 func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 	documents := []string{
@@ -214,7 +215,7 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 	}
 	for _, document := range documents {
 		_, fromBytes, _ := ValidateDocument([]byte(document))
-		var iface Interface
+		var iface Document
 		if err := json.Unmarshal([]byte(document), &iface); err != nil {
 			t.Fatalf("%s: decode: %v", document, err)
 		}
@@ -230,7 +231,7 @@ func TestDocumentModel_HostAndByteValidationAgree(t *testing.T) {
 }
 
 func TestDocumentModel_BindingContentPresenceIsKept(t *testing.T) {
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","operations":{"a":{}},
 		"sources":{"s":{"kind":"x@1"}},
 		"bindings":{"absent":{"operation":"a","source":"s"},"empty":{"operation":"a","source":"s","content":""},
@@ -248,7 +249,7 @@ func TestDocumentModel_BindingContentPresenceIsKept(t *testing.T) {
 // Members are matched by exact name. A case variant of a typed member is an
 // unknown member and never changes the typed one.
 func TestDocumentModel_MemberNamesAreExact(t *testing.T) {
-	var binding BindingEntry
+	var binding Binding
 	if err := json.Unmarshal([]byte(`{"operation":"a","source":"s","OPERATION":"b","Content":"x","Preference":1.5}`), &binding); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestDocumentModel_MemberNamesAreExact(t *testing.T) {
 	if len(binding.Unknown) != 3 {
 		t.Fatalf("case variants must be carried as unknown members, got %v", binding.Unknown)
 	}
-	var iface Interface
+	var iface Document
 	document := `{"openbindings":"0.2.0","OpenBindings":"9.9.9","operations":{}}`
 	if err := json.Unmarshal([]byte(document), &iface); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -282,7 +283,7 @@ func TestDocumentModel_RefusesDuplicatesAndQuotedPreferences(t *testing.T) {
 		"quoted preference":        `{"openbindings":"0.2.0","operations":{"a":{}},"bindings":{"b":{"operation":"a","source":"s","preference":"7"}}}`,
 		"invalid UTF-8 in a value": "{\"openbindings\":\"0.2.0\",\"name\":\"\xff\",\"operations\":{}}",
 	} {
-		var iface Interface
+		var iface Document
 		if err := json.Unmarshal([]byte(document), &iface); err == nil {
 			t.Errorf("%s: decoded a document the model cannot carry", name)
 		}
@@ -311,7 +312,7 @@ func TestDocumentModel_DecodeErrorsAreDeterministic(t *testing.T) {
 // A typed field alone states its member: a nil field is absent even when the
 // lossless maps carry an entry of the same name.
 func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
-	binding := BindingEntry{Operation: "a", Source: "s", LosslessFields: LosslessFields{
+	binding := Binding{Operation: "a", Source: "s", LosslessFields: LosslessFields{
 		Unknown:    map[string]json.RawMessage{"content": json.RawMessage(`"x"`), "later": json.RawMessage(`1`)},
 		Extensions: map[string]json.RawMessage{"operation": json.RawMessage(`"b"`)},
 	}}
@@ -327,7 +328,7 @@ func TestDocumentModel_TypedFieldsAloneStateTheirMembers(t *testing.T) {
 // A host object whose encoding violates the document rules is refused with a
 // *ValidationError.
 func TestValidate_RefusesAHostObjectWhoseEncodingViolatesTheRules(t *testing.T) {
-	iface := &Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
+	iface := &Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"a": {Input: map[string]any(nil)}}}
 	var violation *ValidationError
 	if _, err := iface.Validate(); !errors.As(err, &violation) {
 		t.Fatalf("want a *ValidationError, got %T %v", err, err)
@@ -377,7 +378,7 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 			"example input":     OperationExample{Input: raw},
 			"source content":    Source{Kind: "x@1", Content: raw},
 			"an extension":      Operation{LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": raw}}},
-			"an unknown member": BindingEntry{Operation: "a", Source: "s", LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"extra": raw}}},
+			"an unknown member": Binding{Operation: "a", Source: "s", LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"extra": raw}}},
 		} {
 			if encoded, err := json.Marshal(value); err == nil {
 				t.Errorf("%s in %s encoded as %s", name, position, encoded)
@@ -393,18 +394,21 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 // Validation of a host object judges the document it encodes, so an object
 // the model cannot encode exactly is not validated: an escaped lone surrogate
 // the encoding would have replaced with U+FFFD no longer passes a const of
-// U+FFFD.
+// U+FFFD. A lone surrogate is valid JSON text a Go string cannot carry, a
+// capability limit of this SDK (§10.4), so the report is undetermined,
+// deciding OBI-D-09 alone, as ValidateDocument decides such bytes, and
+// Resolve's error matches ErrInconclusive.
 func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
-	iface := Interface{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
+	iface := Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
 		Input:    map[string]any{"const": "\ufffd"},
 		Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"\ud800"`)}},
 	}}}
-	if report, err := iface.Validate(); err == nil || errors.As(err, new(*ValidationError)) || report.Evidence != nil {
-		t.Fatalf("want an encoding error and no report, got %v, %+v", err, report)
+	if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
+		t.Fatalf("want an undetermined report deciding OBI-D-09 alone, got %v, %+v", err, report)
 	}
 	compiler, _ := NewValueContractCompiler(testEvaluator{})
-	if _, err := compiler.Resolve(context.Background(), &iface); err == nil || errors.Is(err, ErrNoVerdict) {
-		t.Fatalf("want an encoding error, got %v", err)
+	if _, err := compiler.Resolve(context.Background(), &iface); !errors.Is(err, ErrInconclusive) || errors.Is(err, ErrNoVerdict) {
+		t.Fatalf("want an error matching ErrInconclusive, got %v", err)
 	}
 }
 
@@ -413,8 +417,10 @@ func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 // keys could even become one name), in a struct a schema holds too; a value
 // that holds itself, through the model's own types as well; a member name
 // both Extensions and Unknown hold; and raw JSON in a schema that decoding
-// would refuse. Validate returns
-// the encoding error, never a report on another document.
+// would refuse. Validate returns the encoding error, never a report on
+// another document, except for raw JSON escaping a lone surrogate, which is
+// this SDK's own limit: there Validate reports undetermined, deciding only
+// OBI-D-09.
 func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 	text := func(s string) *string { return &s }
 	selfHolding := Operation{}
@@ -423,7 +429,7 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 		Type  string `json:"type"`
 		Title string `json:"title"`
 	}
-	for name, iface := range map[string]Interface{
+	for name, iface := range map[string]Document{
 		"an operation holding itself": {OpenBindings: "0.2.0", Operations: map[string]Operation{"op": selfHolding}},
 		"invalid UTF-8 in a schema held as a struct": {OpenBindings: "0.2.0", Operations: map[string]Operation{
 			"op": {Input: schemaStruct{Type: "string", Title: "caf\xff"}}}},
@@ -440,8 +446,6 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 			Extensions: map[string]json.RawMessage{"x-a": json.RawMessage(`1`)}, Unknown: map[string]json.RawMessage{"x-a": json.RawMessage(`2`)}}},
 		"raw JSON in a schema repeating a name": {OpenBindings: "0.2.0", Operations: map[string]Operation{
 			"op": {Input: json.RawMessage(`{"type":"string","type":"integer"}`)}}},
-		"raw JSON in a schema escaping a lone surrogate": {OpenBindings: "0.2.0", Operations: map[string]Operation{
-			"op": {Input: json.RawMessage(`{"const":"\ud800"}`)}}},
 	} {
 		if data, err := json.Marshal(iface); err == nil {
 			t.Errorf("%s: encoded %s", name, data)
@@ -451,14 +455,26 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 		}
 	}
 
-	held := Interface{OpenBindings: "0.2.0", Description: text("café �"), Operations: map[string]Operation{
+	for name, iface := range map[string]Document{
+		"raw JSON in a schema escaping a lone surrogate": {OpenBindings: "0.2.0", Operations: map[string]Operation{
+			"op": {Input: json.RawMessage(`{"const":"\ud800"}`)}}},
+	} {
+		if data, err := json.Marshal(iface); err == nil {
+			t.Errorf("%s: encoded %s", name, data)
+		}
+		if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
+			t.Errorf("%s: want an undetermined report deciding OBI-D-09 alone, got %v, %+v", name, err, report)
+		}
+	}
+
+	held := Document{OpenBindings: "0.2.0", Description: text("café �"), Operations: map[string]Operation{
 		"op": {Input: json.RawMessage(`{"type":"string","const":"�"}`)}},
 		LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-a": json.RawMessage(`1`)}, Unknown: map[string]json.RawMessage{"other": json.RawMessage(`2`)}}}
 	data, err := json.Marshal(held)
 	if err != nil {
 		t.Fatalf("a model holding valid UTF-8 encodes: %v", err)
 	}
-	var back Interface
+	var back Document
 	if err := json.Unmarshal(data, &back); err != nil {
 		t.Fatalf("and decodes back: %v", err)
 	}
@@ -468,5 +484,85 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 	_ = json.Unmarshal(again, &after)
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("round trip changed\n%s\ninto\n%s", data, again)
+	}
+}
+
+// Encoding writes an object's typed members in field order, then the members
+// LosslessFields keeps in name order, whichever map holds them and whatever
+// order the input used.
+func TestDocumentModel_MemberOrder(t *testing.T) {
+	var doc Document
+	if err := json.Unmarshal([]byte(`{"x-b":true,"operations":{"op":{"x-a":1,"zz":2,"aliases":["z"],"description":"d"}},"unknown":0,"name":"N","openbindings":"0.2.0"}`), &doc); err != nil {
+		t.Fatal(err)
+	}
+	written, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"openbindings":"0.2.0","name":"N","operations":{"op":{"description":"d","aliases":["z"],"x-a":1,"zz":2}},"unknown":0,"x-b":true}`; string(written) != want {
+		t.Fatalf("got  %s\nwant %s", written, want)
+	}
+	// An object with no typed member present writes its kept members alone.
+	written, err = json.Marshal(Operation{LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-b": json.RawMessage(`2`), "x-a": nil}}})
+	if err != nil || string(written) != `{"x-a":null,"x-b":2}` {
+		t.Fatalf("%s %v", written, err)
+	}
+}
+
+// HTML escaping is the calling encoder's: json.Marshal escapes <, >, and &
+// everywhere, as it does in any value, and an encoder set not to escape them
+// writes them as held, in typed members, schemas, raw members, and kept
+// members alike. Text a member holds already escaped stays as written.
+func TestDocumentModel_HTMLEscapingFollowsTheEncoder(t *testing.T) {
+	// The escape is built from the backslash's code point so that no
+	// cleanup of the source can turn it into the character it escapes,
+	// which would leave this check comparing "<x>" with itself.
+	backslash := string(rune(92))
+	alreadyEscaped := `"` + backslash + `u003cx` + backslash + `u003e"`
+	doc := Document{
+		OpenBindings: "0.2.0",
+		Description:  Present("a<b&c>"),
+		Operations: map[string]Operation{"op": {
+			Input:    map[string]any{"title": "<op>"},
+			Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"<p>"`)}},
+		}},
+		Sources:        map[string]Source{"s": {Kind: "k", Content: json.RawMessage(`{"held":` + alreadyEscaped + `}`)}},
+		LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-note": json.RawMessage(`"<x>"`)}},
+	}
+	escaped, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unescaped strings.Builder
+	encoder := json.NewEncoder(&unescaped)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(doc); err != nil {
+		t.Fatal(err)
+	}
+	direct, err := doc.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, held := range []string{`"a<b&c>"`, `"<op>"`, `"<p>"`, `"<x>"`} {
+		if strings.Contains(string(escaped), held) {
+			t.Errorf("json.Marshal wrote %s unescaped: %s", held, escaped)
+		}
+		if !strings.Contains(unescaped.String(), held) || !strings.Contains(string(direct), held) {
+			t.Errorf("%s is not written as held:\n%s\n%s", held, unescaped.String(), direct)
+		}
+	}
+	if !strings.Contains(unescaped.String(), alreadyEscaped) || !strings.Contains(string(direct), alreadyEscaped) {
+		t.Errorf("an escape held in content was not kept: %s", unescaped.String())
+	}
+	// Both spellings decode to the same document.
+	var a, b Document
+	if err := json.Unmarshal(escaped, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(unescaped.String()), &b); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decodedJSON(t, escaped), decodedJSON(t, []byte(unescaped.String()))) {
+		t.Fatal("the two encodings hold different values")
 	}
 }

@@ -12,8 +12,8 @@ are preserved with their parity record on the `legacy/pre-core-rebuild`
 branch; each rebuilt layer brings its parity entries back with it.
 
 SDK-01 aligns Go with spec draft `ccfe0b6`: `Source.Kind` and
-`DependencyEntry.Kinds` carry the new JSON names exactly, the embedded schema
-is copied from that revision, and `DependencyEntry.AllowsKind` implements the
+`Dependency.Kinds` carry the new JSON names exactly, the embedded schema
+is copied from that revision, and `Dependency.AcceptsKind` implements the
 Core any-of constraint with exact string equality independent of runtime
 support. Go accepts unknown kinds while validating a document and gives
 source and binding content no Core interpretation. The former
@@ -53,10 +53,52 @@ Go first; TypeScript alignment is pending for each of these:
   (`openbindingstest/testdata/json-schema-test-suite/README.md`).
 
 Document validation reports the core's §10.4 conformance conclusion in Go:
-`Interface.Validate()` and `ValidateDocument(data)` return a
+`Document.Validate()` and `ValidateDocument(data)` return a
 `ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-09 to caller evidence through
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
+
+The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
+TypeScript alignment is pending for each of these. Parity is in observable
+behavior and recognizable names, not identical signatures:
+
+- **Names.** The document type is a document (`Document`), and the binding
+  and dependency objects are a binding and a dependency, as the spec's §3
+  names them; a dependency's kind check is "accepts" (`AcceptsKind`).
+- **Lookups on the document.** Resolving a name to an operation against its
+  key and its aliases, with equal standing, where a name several operations
+  carry resolves to none (OBI-T-07); and finding an operation's bindings by
+  its key alone, sorted for presentation, where an alias or a key no
+  operation has finds nothing. Neither finds anything in a missing document.
+- **The version decision as a refusal.** A check that returns the same
+  refusal the refusing entry points return (parsing, validating bytes or a
+  document in memory, listing references, and resolving value contracts),
+  or none; no refusal for a text that declares no version (OBI-T-04). The
+  operation lookups refuse nothing. No exported SemVer validity predicate.
+- **Inconclusive, distinctly.** One category for a call that decided
+  nothing: a parse that cannot read a document in full, a document declaring
+  no valid version, a document nesting past the decoder or holding an
+  escaped lone UTF-16 surrogate, given as bytes or, in memory, where the
+  SDK's own checks find it in the text the document encodes to or in a
+  member the model carries as raw JSON (a document that fails to encode at
+  all matches no category; Go states the boundary in `Document.Validate`),
+  an incomplete reference index, and value input that is not JSON; never a
+  conformance conclusion or a value verdict, and disjoint from them whatever
+  an evaluator or a value's own encoding says.
+- **Schema references.** Every `$ref` and `$dynamicRef` in the schemas a
+  document contains, with location, keyword, value, base, initial target or
+  why there is none, by the same lookup as OBI-D-12 and value validation;
+  the same whole-call refusals; an incomplete index returned with the
+  inconclusive category.
+- **Concluding from evidence.** The conclusion is reached from the document
+  rules alone: evidence under any other identifier is dropped and decides
+  nothing, and a document rule missing from the evidence is inconclusive, so
+  empty evidence concludes undetermined. The concluded evidence holds exactly
+  the document rules.
+- **Locating unknown members.** OBI-D-02 reports each member the document
+  schema does not allow at the member, one finding each.
+- **Writing a document.** Typed members in field order, then kept members in
+  name order.
 
 The Go core's exact document model and the validation that follows it
 (2026-09-23) are established in Go first; TypeScript alignment is pending for
@@ -78,9 +120,13 @@ each of these observable behaviors:
 
 | Concept | Go | TypeScript |
 |---|---|---|
-| validate a document, with its conformance conclusion | `Interface.Validate()` / `ValidateDocument(data)` | `validateInterface(...)` (report pending) |
+| validate a document, with its conformance conclusion | `Document.Validate()` / `ValidateDocument(data)` | `validateInterface(...)` (report pending) |
 | apply OBI-T-09 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
-| compare a dependency's declared kind constraint | `DependencyEntry.AllowsKind(...)` | pending |
+| compare a dependency's declared kind constraint | `Dependency.AcceptsKind(...)` | pending |
+| resolve an operation name, and find its bindings by key | `Document.ResolveOperation(...)`, `Document.OperationBindings(...)` | pending |
+| decide a declared version (OBI-T-04) | `CheckVersion(...)` | pending |
+| list a document's schema references | `Document.References()` | pending |
+| mark what decided nothing | `ErrInconclusive` | pending |
 | validate a value against a value contract, with the application's evaluator | `NewValueContractCompiler(...)`, `Resolve`, `CompileInput` / `CompileOutput`, `ValueContract.Validate` | pending |
 | check an evaluator against the evaluator contract | `openbindingstest.TestSchemaEvaluator(...)` | pending |
 | name the specification text a conclusion applied, with its revision while a working draft (OBI-T-09) | `ValidationReport.Version` and `ValidationReport.Revision` | pending |

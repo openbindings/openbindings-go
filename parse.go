@@ -7,30 +7,33 @@ import (
 
 // ParseDocument decodes a document for use: it checks the exact input bytes
 // (OBI-D-01), refuses an unsupported version (OBI-T-04), checks the embedded
-// document schema (OBI-D-02), and unmarshals into an Interface. It is not a
-// conformance check; ValidateDocument reports every document rule.
+// document schema (OBI-D-02), and decodes the model. It is not a conformance
+// check; ValidateDocument reports every document rule.
 //
 // The version decision comes first because the embedded schema is this
 // version's: a document declaring an unsupported version is refused, not
-// judged against rules it does not claim (§10.1). A refusal is a
-// *VersionRefusalError, and violations of OBI-D-01 or the document schema are
-// a *ValidationError, as from Interface.Validate and ValidateDocument. A
-// document the model does not carry is not parsed, and returns another error:
-// input nested deeper than the decoder reads, or holding an escape of a lone
-// UTF-16 surrogate. So is one on which the schema library reaches no verdict
-// against the document schema, should it ever. OBI-D-01 and the declared version are read
-// however deep the input nests.
-func ParseDocument(data []byte) (*Interface, error) {
+// judged against rules it does not claim (§10.1). OBI-D-01 and the declared
+// version are read however deep the input nests. An error is one of three:
+//   - a *VersionRefusalError, the refusal;
+//   - a *ValidationError listing violations of OBI-D-01 or of the document
+//     schema, as Document.Validate and ValidateDocument report them;
+//   - an error matching ErrInconclusive, when this SDK cannot read the
+//     document in full: input nested deeper than the decoder reads, a string
+//     escaping a lone UTF-16 surrogate, a document the model does not carry,
+//     or, should it ever happen, the schema library reaching no verdict
+//     against the document schema. It concludes nothing about the document;
+//     ValidateDocument reports the rules it can decide.
+func ParseDocument(data []byte) (*Document, error) {
 	raw, err := decodeDocumentBytes(data)
 	if err != nil {
 		if refusal := inputVersionRefusal(data); refusal != nil {
 			return nil, refusal
 		}
 		if errors.Is(err, errNestingLimit) {
-			return nil, fmt.Errorf("parse document: the input is %w, so it is not decoded", err)
+			return nil, fmt.Errorf("%w: the input is %w, so it is not decoded", ErrInconclusive, err)
 		}
 		if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
-			return nil, fmt.Errorf("parse document: %w", err)
+			return nil, fmt.Errorf("%w: %w", ErrInconclusive, err)
 		}
 		return nil, &ValidationError{Findings: []Finding{d01Violation(data, err)}}
 	}
@@ -45,14 +48,14 @@ func ParseDocument(data []byte) (*Interface, error) {
 	}
 	for _, finding := range c.findings {
 		if finding.Status == EvidenceInconclusive {
-			return nil, fmt.Errorf("parse document: the document schema could not be applied at %q: %s (OBI-D-02)", finding.Path, finding.Message)
+			return nil, fmt.Errorf("%w: the document schema could not be applied at %q: %s (OBI-D-02)", ErrInconclusive, finding.Path, finding.Message)
 		}
 	}
-	var iface Interface
-	if err := iface.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
-		return nil, fmt.Errorf("parse document: the document model cannot carry it: %w", err)
+	var doc Document
+	if err := doc.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
+		return nil, fmt.Errorf("%w: the document model cannot carry it: %w", ErrInconclusive, err)
 	}
-	return &iface, nil
+	return &doc, nil
 }
 
 // decodeDocumentBytes applies OBI-D-01 to the exact input bytes: valid UTF-8,

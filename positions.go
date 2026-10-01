@@ -16,7 +16,7 @@ import (
 // member is positioned at the member's name; any other, at the first byte of
 // its value, or, for a syntax error, of the byte that breaks the syntax (the
 // end of the input, when it ends too early). The zero Position is unknown:
-// Interface.Validate reads no bytes, so its findings carry none.
+// Document.Validate reads no bytes, so its findings carry none.
 type Position struct {
 	Offset, Line, Column int
 }

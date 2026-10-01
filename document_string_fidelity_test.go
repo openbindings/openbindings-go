@@ -22,11 +22,11 @@ import (
 func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 	raw := []byte(`{"openbindings":"0.2.0","operations":{"echo":{"input":{"type":"string","maxLength":1},"examples":{"unit":{"input":"\ud800"}}}}}`)
 
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal(raw, &iface); err == nil || !strings.Contains(err.Error(), "lone UTF-16 surrogate") {
 		t.Fatalf("decoding must refuse, got %v", err)
 	}
-	if _, err := ParseDocument(raw); err == nil || errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "/operations/echo/examples/unit/input") {
+	if _, err := ParseDocument(raw); !errors.Is(err, ErrInconclusive) || errors.As(err, new(*ValidationError)) || !strings.Contains(err.Error(), "/operations/echo/examples/unit/input") {
 		t.Fatalf("parsing must refuse, locating the string, without a violation: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestDocumentStrings_NamesCompareExactly(t *testing.T) {
 
 // A surrogate pair escapes one character, which the model carries.
 func TestDocumentStrings_SurrogatePairsAreCarried(t *testing.T) {
-	var iface Interface
+	var iface Document
 	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","name":"😀","operations":{}}`), &iface); err != nil {
 		t.Fatal(err)
 	}

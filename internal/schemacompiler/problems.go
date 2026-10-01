@@ -20,11 +20,15 @@ import (
 type Problem struct {
 	Location []string
 	Message  string
-	// Name is the member name a failed propertyNames is about, or "". The
-	// library's location for such a failure is not reliable (v6.0.3 records
-	// it without copying it, so a later sibling can overwrite it), so a
-	// caller that knows where such names live locates the problem itself.
-	Name string
+	// Name is the member name a failed propertyNames is about, or nil; the
+	// name can be empty. The library's location for such a failure is not
+	// reliable (v6.0.3 records it without copying it, so a later sibling can
+	// overwrite it), so a caller that knows where such names live locates the
+	// problem itself.
+	Name *string
+	// Members are the member names a failed additionalProperties refuses,
+	// sorted, or nil; the problem lies at the object holding them.
+	Members []string
 }
 
 // kindPrinter renders backend error kinds, which implement
@@ -106,12 +110,13 @@ func collect(ve *jsonschema.ValidationError, standsFor map[string]string) []Prob
 		}
 		slices.Sort(messages)
 		location := append(slices.Clone(ve.InstanceLocation), k.Property)
-		return []Problem{{Location: location, Message: "invalid member name: " + strings.Join(messages, "; "), Name: k.Property}}
+		name := k.Property
+		return []Problem{{Location: location, Message: "invalid member name: " + strings.Join(messages, "; "), Name: &name}}
 	case *kind.AdditionalProperties:
 		// The backend lists the members in map order; sorted, the same value
 		// gives the same message every time.
 		sorted := &kind.AdditionalProperties{Properties: slices.Sorted(slices.Values(k.Properties))}
-		return []Problem{{Location: ve.InstanceLocation, Message: sorted.LocalizedString(kindPrinter)}}
+		return []Problem{{Location: ve.InstanceLocation, Message: sorted.LocalizedString(kindPrinter), Members: sorted.Properties}}
 	}
 	if got, want, compared := comparison(ve.ErrorKind); compared {
 		if number, standIn := standsFor[got.RatString()]; standIn {

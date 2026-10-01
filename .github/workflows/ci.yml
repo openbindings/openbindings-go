@@ -33,6 +33,8 @@ jobs:
           repository: openbindings/spec
           ref: ${{ steps.applied.outputs.ref }}
           path: spec
+          # Its full history: the corpus adapter also reads appliedRevision's
+          # openbindings.md and schema from it to verify the text it names.
           fetch-depth: 0
       # A revision is also required to lie on a branch of the spec repository:
       # checking out by SHA also reaches a commit only a pull request holds,
@@ -73,4 +75,10 @@ jobs:
         run: go vet ./...
       - name: test schemaeval
         working-directory: schemaeval
+        # schemaeval's tests also execute the corpus's value cases under this
+        # evaluator (the core's tests cannot import it), so they need the
+        # corpus too.
         run: go test -race -short ./...
+        env:
+          OB_SPEC_CORPUS: ${{ github.workspace }}/spec/conformance
+          OB_CORPUS_REQUIRED: "1"

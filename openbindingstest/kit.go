@@ -193,12 +193,12 @@ func (k *kit) runGroup(g group) {
 		t.Errorf("%s: the kit's resources: %v", g.id, err)
 		return
 	}
-	var iface openbindings.Interface
-	if err := json.Unmarshal([]byte(g.document), &iface); err != nil {
+	var doc openbindings.Document
+	if err := json.Unmarshal([]byte(g.document), &doc); err != nil {
 		t.Errorf("%s: the kit's document: %v", g.id, err)
 		return
 	}
-	contracts, err := compiler.Resolve(context.Background(), &iface)
+	contracts, err := compiler.Resolve(context.Background(), &doc)
 	if err != nil {
 		t.Errorf("%s: resolving the kit's document: %v", g.id, err)
 		return
@@ -354,9 +354,9 @@ func (k *kit) checkPaths(g group, c testCase, spellings [2][]string, counts *tal
 
 // checkAnswer checks an error the evaluator returned against its contract:
 // it never holds a *NoVerdictError or matches ErrNoVerdict, ErrUndefined,
-// ErrNoValueContract, or ErrOperationNotFound; it matches ErrMismatch only by
-// holding a *MismatchError, which Compile's errors never hold; and it matches
-// a context error only when ctx is done.
+// ErrNoValueContract, ErrOperationNotFound, or ErrInconclusive; it matches
+// ErrMismatch only by holding a *MismatchError, which Compile's errors never
+// hold; and it matches a context error only when ctx is done.
 func (k *kit) checkAnswer(id string, err error, fromCompile bool, ctx context.Context) {
 	if err == nil {
 		return
@@ -367,7 +367,7 @@ func (k *kit) checkAnswer(id string, err error, fromCompile bool, ctx context.Co
 	switch {
 	case errors.As(err, &refusal):
 		k.t.Errorf("%s: the evaluator returned a *NoVerdictError, core's own type: %v", id, err)
-	case errors.Is(err, openbindings.ErrNoVerdict), errors.Is(err, openbindings.ErrUndefined), errors.Is(err, openbindings.ErrNoValueContract), errors.Is(err, openbindings.ErrOperationNotFound):
+	case errors.Is(err, openbindings.ErrNoVerdict), errors.Is(err, openbindings.ErrUndefined), errors.Is(err, openbindings.ErrNoValueContract), errors.Is(err, openbindings.ErrOperationNotFound), errors.Is(err, openbindings.ErrInconclusive):
 		k.t.Errorf("%s: the evaluator's error matches one of core's refusal sentinels: %v", id, err)
 	case errors.Is(err, openbindings.ErrMismatch) && !holdsMismatch:
 		k.t.Errorf("%s: the evaluator's error matches ErrMismatch without holding a *MismatchError: %v", id, err)
@@ -469,7 +469,7 @@ func (k *kit) checkOptions() {
 		given map[string]string
 		used  []string
 	}{{"Undecided", k.o.Undecided, k.usedUndecided}, {"Unlocated", k.o.Unlocated, k.usedUnlocated}} {
-		for id := range entries.given {
+		for _, id := range sortedNames(entries.given) {
 			switch {
 			case !k.seen[id] && k.filtered:
 			case !k.seen[id]:

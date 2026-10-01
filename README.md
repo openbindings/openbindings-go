@@ -12,17 +12,21 @@ through bindings and named dependencies whose implementations are supplied by
 its environment, independently of protocol. See the
 [spec](https://github.com/openbindings/spec) for details.
 
-**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.IsSupportedVersion(version)` decides membership: for a well-formed SemVer version it returns true exactly when `Validate` / `ParseDocument` would interpret (not refuse) a document declaring it (a malformed version is an OBI-D-09 violation, not a refusal). `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
+**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.CheckVersion(version)` makes the version decision (OBI-T-04) for a caller holding a document it decoded itself: it returns the `*VersionRefusalError` that `ParseDocument`, `ValidateDocument`, `Document.Validate`, `Document.References`, and `ValueContractCompiler.Resolve` return for a well-formed version outside the supported set, and nil otherwise. Nil means only that there is no refusal: a malformed version declares no version, which is an OBI-D-09 violation, never a refusal. `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
 
 > **Draft status:** this branch implements the unreleased 0.2 working draft.
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
 This implementation targets the Core 0.2 working draft on the spec's
-`release/0.2` branch, whose conformance corpus it passes; a validation report
-names the revision of that text it applied (`ValidationReport.Revision`).
+`release/0.2` branch, whose conformance corpus it passes but for one keyed
+corpus defect: scenario T09-S-01 expects conformant from evidence that omits
+OBI-D-12 and OBI-D-13, which OBI-T-09 rules out, so the harness holds this
+SDK to the corrected conclusion, undetermined, and reports the case as a
+keyed expected failure until the corpus is corrected. A validation report
+names the revision of the text it applied (`ValidationReport.Revision`).
 
-**Conformance:** `ValidateDocument(data, options)` validates a document's exact bytes
+**Conformance:** `ValidateDocument(data)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
 [§10.4](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#104-conformance-conclusions):
 evidence for every document rule, findings located by JSON Pointer and by
@@ -32,7 +36,7 @@ specification version its rule identifiers belong to, with its revision while
 that version is a working draft.
 No document rule requires an implementation or publication for a source's
 kind. Core carries source and binding `content` without interpreting it.
-`Interface.Validate(options)` does the same for a document already in
+`Document.Validate()` does the same for a document already in
 memory, judging its serialization, which is what a claim about a value in
 memory is about (§10); to judge a file, pass its bytes to `ValidateDocument`.
 The rules judge the JSON a document is, never
@@ -44,6 +48,9 @@ is OBI-D-09, from the declared version. The other rules are inconclusive. Both r
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
 A version outside the supported set is refused, not concluded (OBI-T-04).
+`ParseDocument` returns a `*VersionRefusalError`, a `*ValidationError`, or,
+when it cannot read the document in full, an error matching
+`ErrInconclusive`, which is no conformance conclusion either way.
 OBI-D-02 and OBI-D-10 evaluate fixed schemas (the derived schema and the
 JSON Schema 2020-12 meta-schemas, embedded at build time) with a private use
 of [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema).
@@ -54,7 +61,8 @@ application supplies; see [Validate a value against a value
 contract](#validate-a-value-against-a-value-contract). To exercise the core
 conformance corpus, check out the
 spec repo alongside this one (at `../spec`, or `./spec` inside the repo), or
-point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`.
+point `OB_SPEC_CORPUS` at its `conformance` directory, and run `go test ./...`
+here and in `schemaeval`, whose tests run the corpus's value cases.
 
 **Implementation limits:** A lone escaped UTF-16 surrogate or input deeper
 than the JSON decoder's 10,000-level limit prevents full document inspection.
@@ -68,8 +76,21 @@ resources sharing an identifier in normal form); each refusal says which
 numbers it can decide, and the time and memory evaluation takes, which grow
 with the value and the schemas as in any JSON Schema validator, so an
 application validating large or untrusted values bounds them itself.
-`schemaeval` documents its own limits. An inconclusive rule or a value
+`schemaeval` documents its own limits; among them, it locates a failed
+`propertyNames` at the root of the value, since its library
+(santhosh-tekuri/jsonschema v6.0.3) reports an unreliable instance location
+for one below the value's top level. An inconclusive rule or a value
 without a verdict is never reported as success or unqualified conformance.
+
+**Declared capability limits:** OBI-T-08 lets a tool give no verdict where it
+lacks a capability, and these are this SDK's. Each is a no-verdict, never a
+wrong verdict. A value contract is decided as a whole, so what core or the
+evaluator refuses withholds a verdict from every value, even one whose
+evaluation would never reach it (a reference to a resource nobody supplied,
+on a branch the value does not take). A value holding a string with a lone
+UTF-16 surrogate, which a Go string cannot carry, gets no verdict. And
+`schemaeval` gives no verdict where evaluation reaches a Unicode property
+escape in a pattern, since Go's Unicode tables are not ECMA-262's.
 The Core corpus does not exercise every behavior in OBI-T-01: the exact kind
 comparison has direct Go tests, while Core has no kind-support registry or
 implicit dereferencing path.
@@ -120,14 +141,21 @@ go get github.com/openbindings/openbindings-go
 
 ## What this SDK does
 
-- **Core types** for the OpenBindings interface document: operations,
-  dependencies, bindings, sources, and schemas. `Source.Kind` is an opaque
-  nonempty string; `DependencyEntry.Kinds` is an optional nonempty, unique
-  any-of list. `DependencyEntry.AllowsKind` compares complete strings exactly,
-  without inferring support, compatibility, or version order
+- **Core types** for the OpenBindings interface document (`Document`):
+  operations, dependencies, bindings, sources, and schemas, named as the
+  spec names them (`Operation`, `Dependency`, `Binding`, `Source`,
+  `JSONSchema`). `Source.Kind` is an opaque nonempty string;
+  `Dependency.Kinds` is an optional nonempty, unique any-of list.
+  `Dependency.AcceptsKind` compares complete strings exactly, without
+  inferring support, compatibility, or version order
 - **An exact document model**: re-encoding a decoded document reproduces every member, present empty values, unknown fields, and `x-*` extensions included, and a document the model cannot carry exactly fails decoding rather than being altered
 - **Validation** reporting per-rule evidence and a §10.4 conformance conclusion, an unknown unprefixed field reported as an OBI-D-02 violation (§12 reserves those names), and a violation gate for acting on documents
-- **Operation resolution** by key or alias (`ResolveOperation`)
+- **Operation resolution** by key or alias (`Document.ResolveOperation`),
+  and an operation's bindings found by its key (`Document.OperationBindings`)
+- **Schema references** (`Document.References`): every `$ref` and
+  `$dynamicRef` in the schemas a document contains, with the schema each
+  one's initial lookup identifies, looked up as OBI-D-12 and value
+  validation look them up
 - **Value-contract validation** of values against an operation's input or output contract (§3, OBI-T-08), with a JSON Schema evaluator the application supplies: core resolves the document's schemas (§7), refuses what the specification leaves undefined, and hands the evaluator a closed JSON Schema 2020-12 bundle per value contract; the evaluator evaluates. [`schemaeval`](schemaeval) is the project's evaluator, and [`openbindingstest`](openbindingstest) checks any evaluator against the contract
 
 ## Quick start
@@ -144,19 +172,32 @@ import (
 // exact decoding json.Unmarshal also performs (OBI-D-01's checks included), it
 // refuses an unsupported version (OBI-T-04) and applies the document schema
 // (OBI-D-02).
-iface, err := openbindings.ParseDocument(data)
+doc, err := openbindings.ParseDocument(data)
 if err != nil {
-    log.Fatal(err)
+    log.Fatal(err) // a *VersionRefusalError, a *ValidationError, or ErrInconclusive
 }
-if _, err := iface.Validate(); err != nil {
+if _, err := doc.Validate(); err != nil {
     log.Fatal(err)
 }
 
 // Optional members are pointers, nil when absent; Value reads one where
 // absence and the zero value mean the same.
-fmt.Println(openbindings.Value(iface.Name), openbindings.Value(iface.Version))
-for name, op := range iface.Operations {
+fmt.Println(openbindings.Value(doc.Name), openbindings.Value(doc.Version))
+for name, op := range doc.Operations {
     fmt.Println(name, openbindings.Value(op.Description))
+}
+```
+
+A name resolves to an operation by its key or an alias, and the operation's
+bindings are found by the key it resolves to (OBI-T-07):
+
+```go
+key, _, found := doc.ResolveOperation("tasks.create")
+if !found {
+    log.Fatal("no operation named tasks.create")
+}
+for _, binding := range doc.OperationBindings(key) { // sorted for display
+    fmt.Println(binding, doc.Sources[doc.Bindings[binding].Source].Kind)
 }
 ```
 
@@ -164,11 +205,11 @@ A dependency names the local operation it consumes by exact key (OBI-D-11);
 dependency keys and their operation references do not use alias resolution:
 
 ```go
-dependency, ok := iface.Dependencies["customerDelivery"]
+dependency, ok := doc.Dependencies["customerDelivery"]
 if !ok {
     log.Fatal("no dependency named customerDelivery")
 }
-operation := iface.Operations[dependency.Operation]
+operation := doc.Operations[dependency.Operation]
 fmt.Println(dependency.Operation, dependency.Kinds, openbindings.Value(operation.Description))
 ```
 
@@ -186,7 +227,7 @@ import (
 
 compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
 if err != nil { return err }
-contracts, err := compiler.Resolve(ctx, iface)    // §7 resolution; no evaluator yet
+contracts, err := compiler.Resolve(ctx, doc)      // §7 resolution; no evaluator yet
 if err != nil { return err }
 input, err := contracts.CompileInput(ctx, "tasks.create")
 if err != nil { return err }                      // no such operation, or ctx done
@@ -203,8 +244,8 @@ case errors.Is(err, openbindings.ErrNoVerdict):
     // no verdict (not a rejection): no schema there (ErrNoValueContract), a
     // result the specification leaves undefined (ErrUndefined), a capability
     // core or the evaluator lacks, or a done ctx
-default:
-    // the body is not JSON
+case errors.Is(err, openbindings.ErrInconclusive):
+    // the body is not JSON, so there is nothing to judge
 }
 ```
 
@@ -214,6 +255,25 @@ one compiling on demand shares a compile through `singleflight` under a ctx
 no single request owns (see the examples in `schemaeval`). Schemas the
 document references but does not embed are supplied as `Resource`s to
 `NewValueContractCompiler`; core fetches nothing.
+
+### List a document's schema references
+
+`Document.References` lists every `$ref` and `$dynamicRef` in the schemas a
+document contains, for a tool that renames, removes, or copies schemas:
+
+```go
+refs, err := doc.References()
+if err != nil {
+    return err // refused, no valid version, cannot be encoded, or an index it could not complete
+}
+for _, r := range refs {
+    fmt.Println(r.Location, r.Value, r.Target) // Target "" when it identifies no schema; Unresolved says why
+}
+```
+
+It fetches and evaluates nothing. A schema no reference targets is not
+thereby unused, and a `$dynamicRef` may land elsewhere than its initial
+target; its doc says what a caller may and may not conclude.
 
 ### Write an evaluator
 
@@ -235,6 +295,13 @@ fixtures) and adversarial cases of its own through core and on the evaluator
 directly, checks problem paths, the evaluator's errors, and invariants
 (concurrency, isolation, cancellation, no network), and fails any wrong
 verdict.
+
+What an evaluator must do has three sources (see `SchemaEvaluator`), and
+only the first is the specification's: OBI-T-08's semantics and its
+no-verdict rule; the limits of the library it adapts (regular-expression
+dialect, arithmetic, loader, error shape), each a no-verdict where evaluation
+reaches it; and this SDK's diagnostic contract for problem locations, which
+`Options.Unlocated` can exempt case by case.
 
 ## License
 

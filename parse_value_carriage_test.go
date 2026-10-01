@@ -8,11 +8,11 @@ import (
 
 func TestPublicDocumentReadersRetainNumbers(t *testing.T) {
 	for _, token := range []string{"9007199254740993", "0.10000000000000000001", "1e400", "1e-400"} {
-		validate := func(data []byte) (*Interface, error) {
+		validate := func(data []byte) (*Document, error) {
 			iface, _, err := ValidateDocument(data)
 			return iface, err
 		}
-		for name, read := range map[string]func([]byte) (*Interface, error){"parse": ParseDocument, "validate": validate} {
+		for name, read := range map[string]func([]byte) (*Document, error){"parse": ParseDocument, "validate": validate} {
 			t.Run(name+"/"+token, func(t *testing.T) {
 				raw := []byte(fmt.Sprintf(`{"openbindings":"0.2.0","operations":{"test":{"input":{"type":"number","minimum":%s},"examples":{"exact":{"input":%s}}}},"x-exact":%s}`, token, token, token))
 				iface, err := read(raw)

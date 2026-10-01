@@ -43,8 +43,8 @@ import (
 
 // LosslessFields is embedded in every OBI-defined object type to carry the
 // members its typed fields do not: Extensions holds `x-` members (§12) and
-// Unknown every other one. Decoding fills both; encoding writes
-// them back beside the typed members.
+// Unknown every other one. Decoding fills both; encoding writes them back
+// after the typed members, in name order whichever map holds them.
 //
 // An entry whose name is a typed member's name is never encoded: the typed
 // field alone states that member, so a nil field is absent whatever these maps
@@ -97,6 +97,7 @@ var (
 	rawMessageType      = reflect.TypeFor[json.RawMessage]()
 	int64PointerType    = reflect.TypeFor[*int64]()
 	marshalerType       = reflect.TypeFor[json.Marshaler]()
+	jsonSchemaType      = reflect.TypeFor[JSONSchema]()
 	verifiedDecoderType = reflect.TypeFor[verifiedDecoder]()
 	errNotJSONObject    = errors.New("not a JSON object")
 	errNullJSONObject   = errors.New("null is not an object")
@@ -146,12 +147,16 @@ type verifiedDecoder interface {
 }
 
 // decodeExact is every OBI-defined object's UnmarshalJSON: it verifies its
-// input once, then decodes it and every object nested in it.
+// input once, then decodes it and every object nested in it. Its errors name
+// the package, which encoding/json returns as they are.
 func decodeExact(b []byte, what string, target verifiedDecoder) error {
 	if err := verifyExactJSON(b); err != nil {
-		return fmt.Errorf("%s: %w", what, err)
+		return fmt.Errorf("openbindings: %s: %w", what, err)
 	}
-	return target.decodeVerified(b)
+	if err := target.decodeVerified(b); err != nil {
+		return fmt.Errorf("openbindings: %w", err)
+	}
+	return nil
 }
 
 // decodeObject decodes the OBI-defined object b, which verifyExactJSON has
@@ -294,7 +299,17 @@ func preferenceValue(token string) (int64, bool) {
 }
 
 // encodeObject encodes an OBI-defined object: typed, the method-less
-// counterpart of its type, and the members its lossless fields carry.
+// counterpart of its type, and the members its lossless fields carry. It
+// writes the typed members first, in field order, then the kept members in
+// name order. It escapes no HTML itself: the encoder that calls MarshalJSON
+// decides, so json.Marshal escapes <, >, and & as it does everywhere, and an
+// encoder set not to (SetEscapeHTML(false)) writes them as held.
+//
+// It checks in this order, and the first failure met decides: the members
+// it carries as raw JSON; the Go strings it holds, at any depth, and whether
+// a value holds itself; its schemas, each encoded once; its other typed
+// members, an OBI-defined object among them encoded the same way; and, with
+// core's scan, the text it wrote.
 func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyRawMembers(typed, lossless); err != nil {
 		return nil, err
@@ -302,26 +317,49 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyStrings(typed, lossless); err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(typed)
+	schemas, others, err := encodeSchemas(typed)
 	if err != nil {
 		return nil, err
 	}
-	if len(lossless.Extensions) > 0 || len(lossless.Unknown) > 0 {
-		var members map[string]json.RawMessage
-		if err := json.Unmarshal(data, &members); err != nil {
-			return nil, err
-		}
-		typedNames := membersOf(reflect.TypeOf(typed)).typed
-		for _, carried := range []map[string]json.RawMessage{lossless.Unknown, lossless.Extensions} {
-			for name, raw := range carried {
-				if !typedNames[name] {
-					members[name] = raw
-				}
+	data, err := marshalUnescaped(others)
+	if err != nil {
+		return nil, err
+	}
+	if len(schemas) > 0 {
+		data = withSchemas(data, reflect.TypeOf(typed), schemas)
+	}
+	typedNames := membersOf(reflect.TypeOf(typed)).typed
+	kept := map[string]json.RawMessage{}
+	for _, carried := range []map[string]json.RawMessage{lossless.Unknown, lossless.Extensions} {
+		for name, raw := range carried {
+			if !typedNames[name] {
+				kept[name] = raw
 			}
 		}
-		if data, err = json.Marshal(members); err != nil {
-			return nil, err
+	}
+	if len(kept) > 0 {
+		var b bytes.Buffer
+		b.Write(data[:len(data)-1]) // the typed members, without the closing brace
+		separate := len(data) > 2
+		for _, name := range slices.Sorted(maps.Keys(kept)) {
+			encodedName, err := marshalUnescaped(name)
+			if err != nil {
+				return nil, err
+			}
+			encodedValue, err := marshalUnescaped(kept[name])
+			if err != nil {
+				return nil, fmt.Errorf("member %s: %w", strconv.Quote(name), err)
+			}
+			if separate {
+				b.WriteByte(',')
+			}
+			separate = true
+			b.Write(encodedName)
+			b.WriteByte(':')
+			b.Write(encodedValue)
 		}
+		b.WriteByte('}')
+		data = b.Bytes()
 	}
 	// A value the model holds as any (a schema) can hold what the checks
 	// above do not reach, such as raw JSON or a type with its own encoding:
@@ -330,6 +368,87 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 		return nil, fmt.Errorf("the encoding is not one decoding accepts: %w", err)
 	}
 	return data, nil
+}
+
+// encodeSchemas encodes, once each, the schema members an OBI-defined object
+// holds (an operation's input and output, the document's schemas), by member
+// name, and returns typed without them. A schema member is present exactly
+// when its Go value is not nil. A schema is the caller's value, which
+// encoding/json writes as the caller built it, so a failure to encode one is
+// the caller's whatever its error carries, a refusal by one of this
+// package's types placed in it included: it is kept as text, so it never
+// reads as this SDK's limit (see ownLimit). Encoding each once means a
+// caller's marshaler runs once per encoding, and encoding them before the
+// object's other members means which failure decides never depends on field
+// order.
+func encodeSchemas(typed any) (map[string][]byte, any, error) {
+	value := reflect.ValueOf(typed)
+	var schemas map[string][]byte
+	var others reflect.Value
+	for _, field := range membersOf(value.Type()).fields {
+		held := value.Field(field.index)
+		t := held.Type()
+		if isSchema := t == jsonSchemaType || t.Kind() == reflect.Map && t.Elem() == jsonSchemaType; !isSchema || held.IsNil() {
+			continue
+		}
+		data, err := marshalUnescaped(held.Interface())
+		if err != nil {
+			return nil, nil, errors.New(err.Error())
+		}
+		if schemas == nil {
+			schemas = map[string][]byte{}
+			others = reflect.New(value.Type()).Elem()
+			others.Set(value)
+		}
+		schemas[field.name] = data
+		others.Field(field.index).SetZero()
+	}
+	if schemas == nil {
+		return nil, typed, nil
+	}
+	return schemas, others.Interface(), nil
+}
+
+// withSchemas writes the encoded schemas into data, the encoding of an
+// object's other typed members, each at its member's place in field order.
+// They are written as encoded, not handed back to encoding/json as raw JSON,
+// which would compact them again and refuse a schema deeper than it reads as
+// a syntax error of its own: that depth is core's scan to find.
+func withSchemas(data []byte, t reflect.Type, schemas map[string][]byte) []byte {
+	entries, _ := splitObject(data) // encoding/json wrote it
+	written := make(map[string][]byte, len(entries)+len(schemas))
+	for _, entry := range entries {
+		written[entry.name] = entry.value
+	}
+	maps.Copy(written, schemas)
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for _, field := range membersOf(t).fields {
+		value, present := written[field.name]
+		if !present {
+			continue
+		}
+		if b.Len() > 1 {
+			b.WriteByte(',')
+		}
+		name, _ := marshalUnescaped(field.name)
+		b.Write(name)
+		b.WriteByte(':')
+		b.Write(value)
+	}
+	b.WriteByte('}')
+	return b.Bytes()
+}
+
+// marshalUnescaped encodes v as json.Marshal does, but escaping no HTML.
+func marshalUnescaped(v any) ([]byte, error) {
+	var b bytes.Buffer
+	encoder := json.NewEncoder(&b)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // verifyStrings refuses invalid UTF-8 in a string or a name an OBI-defined
@@ -431,7 +550,7 @@ func invalidUTF8(v reflect.Value, open map[heldValue]bool) ([]string, string) {
 }
 
 // modelPackage is this package's import path.
-var modelPackage = reflect.TypeFor[Interface]().PkgPath()
+var modelPackage = reflect.TypeFor[Document]().PkgPath()
 
 // ownType reports whether a type, or the type it points to, is defined by this
 // package.

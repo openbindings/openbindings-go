@@ -106,6 +106,25 @@ func (e *NoVerdictError) Error() string {
 // Is reports whether target is ErrNoVerdict.
 func (e *NoVerdictError) Is(target error) bool { return target == ErrNoVerdict }
 
+// coreReason is the cause of one of core's own no-verdicts that a sentinel
+// names, such as ErrUndefined. It matches the sentinel, and reads as the
+// sentinel's text without the package prefix, which the NoVerdictError
+// holding it already writes, followed by the detail, if any.
+type coreReason struct {
+	sentinel error
+	detail   string
+}
+
+func (r *coreReason) Error() string {
+	text := strings.TrimPrefix(r.sentinel.Error(), "openbindings: ")
+	if r.detail != "" {
+		text += ": " + r.detail
+	}
+	return text
+}
+
+func (r *coreReason) Unwrap() error { return r.sentinel }
+
 // Unwrap returns Cause, or nil when core keeps Cause out of the chain.
 func (e *NoVerdictError) Unwrap() error {
 	if e == nil || e.hidden {

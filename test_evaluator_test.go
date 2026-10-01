@@ -67,7 +67,7 @@ func (s testSchema) Validate(_ context.Context, value any) error {
 
 // contractsFor resolves a document's value contracts with the test
 // evaluator.
-func contractsFor(t *testing.T, iface *Interface, resources ...Resource) *ValueContracts {
+func contractsFor(t *testing.T, iface *Document, resources ...Resource) *ValueContracts {
 	t.Helper()
 	compiler, err := NewValueContractCompiler(testEvaluator{}, resources...)
 	if err != nil {
@@ -100,7 +100,7 @@ func verdictOf(t *testing.T, err error) string {
 
 // validateWithTestEvaluator validates a value against an operation's input
 // or output contract with the test evaluator.
-func validateWithTestEvaluator(t *testing.T, iface *Interface, operation, direction string, value any) error {
+func validateWithTestEvaluator(t *testing.T, iface *Document, operation, direction string, value any) error {
 	t.Helper()
 	contracts := contractsFor(t, iface)
 	compile := contracts.CompileInput

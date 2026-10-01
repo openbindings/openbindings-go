@@ -5,20 +5,51 @@ import (
 	"fmt"
 )
 
-// JSONSchema holds a JSON Schema 2020-12 value in either of its two forms:
-// an object schema (map[string]any) or a boolean schema (bool) — §5.2 admits
-// boolean schemas at every schema position (`true` accepts every value,
-// `false` accepts none, `{}` is equivalent to `true`). It is intentionally
-// untyped beyond that to avoid coupling to any one JSON Schema library.
-// This preserves arbitrary keys/values structurally, but not raw JSON bytes.
-// A decoded schema holds generic JSON values, with every number a
-// json.Number, so a number keeps its exact text.
+// JSONSchema holds a JSON Schema 2020-12 schema in either of its two forms
+// (§5.2): an object schema or a boolean schema (`true` accepts every value,
+// `false` accepts none, and `{}` is equivalent to `true`). It is untyped so
+// that the model couples to no JSON Schema library, and the model writes it
+// as encoding/json writes the value it holds.
 //
-// As an operation's Input or Output, a nil JSONSchema means the member is
-// absent, which states no value contract in that direction (§5.1). As an entry of Interface.Schemas, where
-// the entry itself says the member is present, nil is a JSON null, which is
-// not a schema: OBI-D-10 reports it. Well-formedness of a present value is a
-// document rule enforced by Validate rather than by this type.
+// Decoding gives a map[string]any or a bool, holding generic JSON values:
+// every number a json.Number, so it keeps its exact text, and every array an
+// []any. A caller setting one writes any of these forms:
+//   - a map[string]any or a bool, whose values encoding/json writes as the
+//     schema means them. A number held as a float64 is written as Go writes
+//     a float64, so one beyond the integers a float64 holds exactly (2^53) is
+//     not the number intended; a json.Number keeps its text.
+//   - a json.RawMessage holding the schema's JSON text, which is written as
+//     given, compacted, with every number exact. It must hold one JSON value
+//     encoding/json compacts, or encoding fails, as it does for text nesting
+//     past encoding/json's depth. Text encoding/json writes from it that
+//     this SDK cannot read in the document (an escaped lone UTF-16
+//     surrogate, nesting the document makes too deep) is this SDK's limit.
+//   - any other value encoding/json writes as a JSON object or boolean, such
+//     as a struct, which encoding/json writes by its own rules (an omitempty
+//     member, a pointer method on an addressable value), raw JSON it holds
+//     included. A defined type is written by its own encoding, so a named
+//     byte slice without JSON methods is written as a base64 string, which is
+//     no schema.
+//
+// Encoding a document encodes each schema it holds once, so a marshaler a
+// schema holds runs once per encoding. A schema that fails to encode is an
+// encoding failure, never this SDK's limit, whatever the failure carries: a
+// marshaler's error, text a marshaler writes past encoding/json's depth, or
+// a refusal by one of this package's types placed in the schema.
+// Document.Validate states the boundary.
+//
+// A caller decoding schema text itself keeps its numbers exact by holding the
+// text as a json.RawMessage, or by decoding with a json.Decoder set to
+// UseNumber: json.Unmarshal into an any reads every number as a float64.
+//
+// Absence is a nil interface. As an operation's Input or Output, a nil
+// JSONSchema means the member is absent, which states no value contract in
+// that direction (§5.1). A typed nil held there, such as a nil
+// json.RawMessage or a nil map[string]any, is not absent: it is written as a
+// present null, which is no schema, and OBI-D-02 and OBI-D-10 report it. As an
+// entry of Document.Schemas, where the entry itself says the member is
+// present, nil is a JSON null, which OBI-D-10 reports. Whether a present value
+// is a well-formed schema is a document rule Validate decides, not this type.
 type JSONSchema any
 
 // jsonTypeName names the JSON type of a decoded value (null, boolean,
@@ -77,10 +108,10 @@ type OperationExample struct {
 
 type operationExampleMembers OperationExample
 
-func (e *OperationExample) UnmarshalJSON(b []byte) error { return decodeExact(b, "example", e) }
+func (e *OperationExample) UnmarshalJSON(data []byte) error { return decodeExact(data, "example", e) }
 
-func (e *OperationExample) decodeVerified(b []byte) error {
-	return decodeObject(b, "example", (*operationExampleMembers)(e))
+func (e *OperationExample) decodeVerified(data []byte) error {
+	return decodeObject(data, "example", (*operationExampleMembers)(e))
 }
 
 func (e OperationExample) MarshalJSON() ([]byte, error) {
@@ -111,10 +142,10 @@ type Operation struct {
 
 type operationMembers Operation
 
-func (o *Operation) UnmarshalJSON(b []byte) error { return decodeExact(b, "operation", o) }
+func (o *Operation) UnmarshalJSON(data []byte) error { return decodeExact(data, "operation", o) }
 
-func (o *Operation) decodeVerified(b []byte) error {
-	return decodeObject(b, "operation", (*operationMembers)(o))
+func (o *Operation) decodeVerified(data []byte) error {
+	return decodeObject(data, "operation", (*operationMembers)(o))
 }
 
 func (o Operation) MarshalJSON() ([]byte, error) {
@@ -140,19 +171,19 @@ type Source struct {
 
 type sourceMembers Source
 
-func (s *Source) UnmarshalJSON(b []byte) error { return decodeExact(b, "source", s) }
+func (s *Source) UnmarshalJSON(data []byte) error { return decodeExact(data, "source", s) }
 
-func (s *Source) decodeVerified(b []byte) error {
-	return decodeObject(b, "source", (*sourceMembers)(s))
+func (s *Source) decodeVerified(data []byte) error {
+	return decodeObject(data, "source", (*sourceMembers)(s))
 }
 
 func (s Source) MarshalJSON() ([]byte, error) {
 	return encodeObject(sourceMembers(s), s.LosslessFields)
 }
 
-// BindingEntry is an author-declared realization of an operation through a
+// Binding is an author-declared realization of an operation through a
 // source (§5.3).
-type BindingEntry struct {
+type Binding struct {
 	Operation string `json:"operation"`
 	Source    string `json:"source"`
 	// Content is what the binding carries under its source's kind: any JSON
@@ -179,28 +210,28 @@ type BindingEntry struct {
 	LosslessFields
 }
 
-type bindingEntryMembers BindingEntry
+type bindingMembers Binding
 
 // maxPreference bounds a binding preference: the exactly representable
 // interoperable integer range of §5.3.
 const maxPreference = 9007199254740991
 
-func (be *BindingEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "binding", be) }
+func (b *Binding) UnmarshalJSON(data []byte) error { return decodeExact(data, "binding", b) }
 
-func (be *BindingEntry) decodeVerified(b []byte) error {
-	return decodeObject(b, "binding", (*bindingEntryMembers)(be))
+func (b *Binding) decodeVerified(data []byte) error {
+	return decodeObject(data, "binding", (*bindingMembers)(b))
 }
 
-func (be BindingEntry) MarshalJSON() ([]byte, error) {
-	return encodeObject(bindingEntryMembers(be), be.LosslessFields)
+func (b Binding) MarshalJSON() ([]byte, error) {
+	return encodeObject(bindingMembers(b), b.LosslessFields)
 }
 
-// DependencyEntry names an operation contract consumed at a local
-// consumption point (§5.5). Kinds, when present, is an unordered any-of list
-// of exact, opaque kind strings accepted at that point. A nil slice leaves
-// the dependency unconstrained by kind. Operation is
-// the canonical key of an operation in the same document.
-type DependencyEntry struct {
+// Dependency names an operation contract consumed at a local consumption
+// point (§5.5). Kinds, when present, is an unordered any-of list of exact,
+// opaque kind strings accepted at that point. A nil slice leaves the
+// dependency unconstrained by kind. Operation is the canonical key of an
+// operation in the same document.
+type Dependency struct {
 	Operation   string   `json:"operation"`
 	Kinds       []string `json:"kinds,omitzero"`
 	Description *string  `json:"description,omitempty"`
@@ -208,24 +239,27 @@ type DependencyEntry struct {
 	LosslessFields
 }
 
-type dependencyEntryMembers DependencyEntry
+type dependencyMembers Dependency
 
-func (d *DependencyEntry) UnmarshalJSON(b []byte) error { return decodeExact(b, "dependency", d) }
+func (d *Dependency) UnmarshalJSON(data []byte) error { return decodeExact(data, "dependency", d) }
 
-func (d *DependencyEntry) decodeVerified(b []byte) error {
-	return decodeObject(b, "dependency", (*dependencyEntryMembers)(d))
+func (d *Dependency) decodeVerified(data []byte) error {
+	return decodeObject(data, "dependency", (*dependencyMembers)(d))
 }
 
-func (d DependencyEntry) MarshalJSON() ([]byte, error) {
-	return encodeObject(dependencyEntryMembers(d), d.LosslessFields)
+func (d Dependency) MarshalJSON() ([]byte, error) {
+	return encodeObject(dependencyMembers(d), d.LosslessFields)
 }
 
-// AllowsKind reports whether a source kind meets this dependency's declared
-// kind constraint (§5.5). An omitted Kinds list imposes no constraint.
-// Comparison is exact and independent of whether a processor supports the
-// kind. This only checks the kind constraint; it says nothing about operation
-// compatibility, provider selection, or whether a binding can be used.
-func (d DependencyEntry) AllowsKind(kind string) bool {
+// AcceptsKind reports whether kind is acceptable at this consumption point:
+// whether a binding whose source has that kind meets the dependency's any-of
+// kind constraint (§5.5). A nil Kinds list declares no constraint and accepts
+// every kind; a present empty list, which OBI-D-02 forbids, accepts none.
+// Comparison is exact string equality, independent of whether a processor
+// supports the kind (OBI-T-01). It checks the kind constraint alone: it says
+// nothing about operation compatibility, provider selection, or whether a
+// binding can be used.
+func (d Dependency) AcceptsKind(kind string) bool {
 	if d.Kinds == nil {
 		return true
 	}
@@ -237,12 +271,23 @@ func (d DependencyEntry) AllowsKind(kind string) bool {
 	return false
 }
 
-// Interface is the OpenBindings document shape (§5). OpenBindings is the
-// declared specification version. Every other member is absent exactly when
-// its Go value is nil. That includes Operations, which §5 requires: the model
-// carries a document that omits it, so Validate can report the omission
-// (OBI-D-02) and re-encoding leaves it omitted.
-type Interface struct {
+// Document is an OBI, an OpenBindings interface document (§3, §5), as the
+// values its members hold: it models the document's meaning, not the text it
+// was decoded from. Re-encoding a decoded Document writes every member it
+// holds, but not the text's whitespace, member order, or string escapes, nor
+// the spelling of a number the model types (a binding's preference, an
+// int64); numbers in schemas, example values, content, and kept members keep
+// their spelling. Encoding writes each object's typed members in field
+// order, then the members LosslessFields keeps in name order, and each map's
+// entries in key order; it escapes HTML only as the calling encoder does. A
+// claim about a text is a claim about its bytes: ValidateDocument judges
+// those.
+//
+// OpenBindings is the declared specification version. Every other member is
+// absent exactly when its Go value is nil. That includes Operations, which §5
+// requires: the model carries a document that omits it, so Validate can report
+// the omission (OBI-D-02) and re-encoding leaves it omitted.
+type Document struct {
 	OpenBindings string  `json:"openbindings"`
 	Name         *string `json:"name,omitempty"`
 	Version      *string `json:"version,omitempty"`
@@ -252,22 +297,22 @@ type Interface struct {
 	Operations map[string]Operation  `json:"operations,omitzero"`
 	// Dependencies contains named consumption points. A dependency declaration
 	// does not assert that a realization is installed, selected, or live.
-	Dependencies map[string]DependencyEntry `json:"dependencies,omitzero"`
+	Dependencies map[string]Dependency `json:"dependencies,omitzero"`
 
-	Sources  map[string]Source       `json:"sources,omitzero"`
-	Bindings map[string]BindingEntry `json:"bindings,omitzero"`
+	Sources  map[string]Source  `json:"sources,omitzero"`
+	Bindings map[string]Binding `json:"bindings,omitzero"`
 
 	LosslessFields
 }
 
-type interfaceMembers Interface
+type documentMembers Document
 
-func (i *Interface) UnmarshalJSON(b []byte) error { return decodeExact(b, "document", i) }
+func (d *Document) UnmarshalJSON(data []byte) error { return decodeExact(data, "document", d) }
 
-func (i *Interface) decodeVerified(b []byte) error {
-	return decodeObject(b, "document", (*interfaceMembers)(i))
+func (d *Document) decodeVerified(data []byte) error {
+	return decodeObject(data, "document", (*documentMembers)(d))
 }
 
-func (i Interface) MarshalJSON() ([]byte, error) {
-	return encodeObject(interfaceMembers(i), i.LosslessFields)
+func (d Document) MarshalJSON() ([]byte, error) {
+	return encodeObject(documentMembers(d), d.LosslessFields)
 }

@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestDependencyAllowsKind_ExactAndSupportIndependent(t *testing.T) {
-	d := DependencyEntry{Kinds: []string{"example.openapi@1", "É", "https://example.test/kind"}}
+func TestDependencyAcceptsKind_ExactAndSupportIndependent(t *testing.T) {
+	d := Dependency{Kinds: []string{"example.openapi@1", "É", "https://example.test/kind"}}
 	for _, tc := range []struct {
 		kind string
 		want bool
@@ -21,14 +21,14 @@ func TestDependencyAllowsKind_ExactAndSupportIndependent(t *testing.T) {
 		{"https://example.test/kind/", false},
 		{"unknown@9", false},
 	} {
-		if got := d.AllowsKind(tc.kind); got != tc.want {
-			t.Errorf("AllowsKind(%q) = %v, want %v", tc.kind, got, tc.want)
+		if got := d.AcceptsKind(tc.kind); got != tc.want {
+			t.Errorf("AcceptsKind(%q) = %v, want %v", tc.kind, got, tc.want)
 		}
 	}
-	if !(DependencyEntry{}).AllowsKind("unknown@9") {
+	if !(Dependency{}).AcceptsKind("unknown@9") {
 		t.Fatal("omitted kinds must impose no constraint")
 	}
-	if (DependencyEntry{Kinds: []string{}}).AllowsKind("unknown@9") {
+	if (Dependency{Kinds: []string{}}).AcceptsKind("unknown@9") {
 		t.Fatal("present empty kinds must not behave as omitted")
 	}
 }
@@ -42,7 +42,7 @@ func TestUnsupportedKindsDoNotPreventCoreValidation(t *testing.T) {
 	if report.Conclusion != ConclusionConformant {
 		t.Fatalf("unknown kind report: %s", report.Conclusion)
 	}
-	if !iface.Dependencies["d"].AllowsKind(iface.Sources["s"].Kind) {
+	if !iface.Dependencies["d"].AcceptsKind(iface.Sources["s"].Kind) {
 		t.Fatal("same unsupported kind must meet an exact constraint")
 	}
 }

@@ -46,27 +46,27 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 	return &ValueContractCompiler{evaluator: e, resources: supplied}, nil
 }
 
-// Resolve resolves an interface's schemas once (§7), calling no evaluator,
-// and returns a snapshot: later changes to the Interface do not affect it.
+// Resolve resolves a document's schemas once (§7), calling no evaluator,
+// and returns a snapshot: later changes to the Document do not affect it.
 //
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (OBI-T-04), and one declaring no valid
-// version an error (OBI-D-09); either way it is not interpreted. An
-// interface that cannot be encoded returns an error, as does a done ctx.
-func (c *ValueContractCompiler) Resolve(ctx context.Context, i *Interface) (*ValueContracts, error) {
+// version (OBI-D-09) an error matching ErrInconclusive; either way it is not
+// interpreted. A document beyond this SDK's own limits returns an error
+// matching ErrInconclusive too, and one that fails to encode an error
+// matching no category, as does a nil document; Document.Validate states
+// which documents are which. A done ctx returns its error.
+func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*ValueContracts, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if i == nil {
-		return nil, errors.New("openbindings: interface is nil")
+	if doc == nil {
+		return nil, errors.New("openbindings: the document is nil")
 	}
-	if refusal := versionRefusalOf(i.OpenBindings); refusal != nil {
-		return nil, refusal
+	if err := interpretable(doc.OpenBindings); err != nil {
+		return nil, err
 	}
-	if !IsValidSemver(i.OpenBindings) {
-		return nil, fmt.Errorf("openbindings: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", i.OpenBindings)
-	}
-	view, err := documentView(*i)
+	view, err := documentView(*doc)
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +76,11 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, i *Interface) (*Val
 		keys:     map[string]string{},
 		states:   map[string][2]bool{},
 	}
-	for key, operation := range i.Operations {
+	for key, operation := range doc.Operations {
 		contracts.states[key] = [2]bool{operation.Input != nil, operation.Output != nil}
 		// A name more than one operation carries resolves to none.
 		for _, name := range append([]string{key}, operation.Aliases...) {
-			if resolved, _, found := ResolveOperation(i, name); found {
+			if resolved, _, found := doc.ResolveOperation(name); found {
 				contracts.keys[name] = resolved
 			}
 		}
@@ -88,7 +88,7 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, i *Interface) (*Val
 	return contracts, nil
 }
 
-// ValueContracts is an interface's value contracts, resolved. It is safe for
+// ValueContracts is a document's value contracts, resolved. It is safe for
 // concurrent use.
 type ValueContracts struct {
 	compiler *ValueContractCompiler
@@ -105,6 +105,14 @@ type ValueContracts struct {
 // (OBI-T-07). Every call compiles anew: keep the *ValueContract for as long
 // as you validate against it. The error matches ErrOperationNotFound, or is
 // the ctx's error; otherwise the *ValueContract is never nil.
+//
+// A value contract is decided as a whole: its standing refusal
+// (ValueContract.Err), core's or the evaluator's, applies to every value,
+// even one whose evaluation would never reach what is refused, such as a
+// reference to a resource nobody supplied on a branch the value does not
+// take. OBI-T-08 prescribes no evaluation strategy, so this is permitted, and
+// it is a declared capability limit of this SDK: a tool preparing only what
+// each value reaches could give such a value a verdict.
 //
 // They run the evaluator's Compile in the calling goroutine and wait for it,
 // past the ctx's end if the evaluator does not stop sooner. They return the
@@ -136,7 +144,7 @@ func (c *ValueContracts) compile(ctx context.Context, operation, direction strin
 		stated = c.states[key][1]
 	}
 	if !stated {
-		return &ValueContract{refusal: &NoVerdictError{Location: locationOf(c.space.obi, entry), Cause: ErrNoValueContract}}, nil
+		return &ValueContract{refusal: &NoVerdictError{Location: locationOf(c.space.obi, entry), Cause: &coreReason{sentinel: ErrNoValueContract}}}, nil
 	}
 	document, refusal := c.space.bundle(entry, bundleSpelling{})
 	if refusal != nil {
@@ -189,16 +197,29 @@ func (c *ValueContract) standingRefusal() *NoVerdictError {
 // ValidateJSON; one nested in a value is a base64 string, as encoding/json
 // writes it.
 //
+// A json.RawMessage, or a *json.RawMessage, that is the value is JSON text,
+// read exactly as ValidateJSON reads it; a nil one is null, as encoding/json
+// writes it. Raw JSON nested in a value is encoded by encoding/json like any
+// Go value, by its rules (an omitempty member, a pointer method on an
+// addressable value): text encoding/json refuses, nesting past its own depth
+// or not one JSON value, makes the value not a JSON value, and the text it
+// writes is read like any value's text, so a lone surrogate, a repeated
+// member name, or nesting the written text makes too deep gets what
+// ValidateJSON gives that text.
+//
 // It returns nil when the value satisfies the value contract, a
 // *MismatchError when it does not, and a *NoVerdictError when no verdict was
 // reached: the operation states no value contract here (ErrNoValueContract),
 // the result is undefined (ErrUndefined), core or the evaluator lacks a
-// capability, the value cannot be read exactly, or the ctx is done. Any other
-// error says the value is not a JSON value. No returned error matches both
-// ErrMismatch and ErrNoVerdict; one matches ErrUndefined only when the
-// specification determines the refusal, ErrNoValueContract only when there is
-// no schema, and a context error only when it is the ctx's own, after the ctx
-// is done.
+// capability, the value cannot be read exactly, or the ctx is done. A value
+// holding a string with a lone UTF-16 surrogate, which a Go string cannot
+// carry, cannot be read exactly: a declared capability limit of this SDK.
+// Any other error matches ErrInconclusive: the value is not a JSON value, so
+// there is nothing to judge. No returned error matches more than one of
+// ErrMismatch, ErrNoVerdict, and ErrInconclusive; one matches ErrUndefined
+// only when the specification determines the refusal, ErrNoValueContract
+// only when there is no schema, and a context error only when it is the
+// ctx's own, after the ctx is done.
 func (c *ValueContract) Validate(ctx context.Context, value any) error {
 	if refusal := c.standingRefusal(); refusal != nil {
 		return refusal
@@ -208,15 +229,16 @@ func (c *ValueContract) Validate(ctx context.Context, value any) error {
 	}
 	read, err := readGoValue(value)
 	if err != nil {
-		return err
+		return notAValue(err)
 	}
 	return validateWith(ctx, c.compiled, read)
 }
 
 // ValidateJSON validates JSON text, read exactly, as Validate validates a Go
 // value. Text that is not one JSON value of valid UTF-8 returns an error
-// saying so; text this SDK cannot read exactly (a repeated member name, an
-// escaped lone UTF-16 surrogate, nesting past the decoder) gets no verdict.
+// matching ErrInconclusive that says so; text this SDK cannot read exactly (a
+// repeated member name, an escaped lone UTF-16 surrogate, nesting past the
+// decoder) gets no verdict.
 func (c *ValueContract) ValidateJSON(ctx context.Context, data []byte) error {
 	if refusal := c.standingRefusal(); refusal != nil {
 		return refusal
@@ -226,7 +248,7 @@ func (c *ValueContract) ValidateJSON(ctx context.Context, data []byte) error {
 	}
 	read, err := readJSONText(data)
 	if err != nil {
-		return err
+		return notAValue(err)
 	}
 	return validateWith(ctx, c.compiled, read)
 }

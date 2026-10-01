@@ -2,7 +2,6 @@ package openbindings
 
 import (
 	"fmt"
-	"sort"
 )
 
 // RuleEvidenceStatus records a validator's evidence for one applicable or
@@ -36,9 +35,11 @@ var documentRules = []string{
 
 // DocumentRules returns the identifiers of every document rule the core
 // specification defines, in identifier order. Every ValidationReport
-// Interface.Validate or ValidateDocument returns carries evidence for each of
-// them; a version refusal, or a host object that cannot be encoded, returns
-// no report.
+// Document.Validate or ValidateDocument returns carries evidence for each of
+// them. A version refusal returns no report, nor does a host object the
+// caller made unencodable (a NaN, invalid UTF-8 in a Go string, a
+// marshaler's error); a host object beyond this SDK's own limits gets a
+// report, deciding at most OBI-D-09.
 func DocumentRules() []string {
 	return append([]string(nil), documentRules...)
 }
@@ -85,21 +86,31 @@ type ValidationReport struct {
 	// builds from evidence alone.
 	Revision   string
 	Conclusion ConformanceConclusion
-	// Evidence holds one status per rule considered. Reports from
-	// Interface.Validate and ValidateDocument carry every document rule; a
-	// rule with nothing to govern in the document is vacuously satisfied. A
-	// version refusal, or a host object that cannot be encoded, returns no
-	// report, whose Evidence is nil.
+	// Evidence holds one status per document rule (DocumentRules), the
+	// evidence the conclusion was reached from. Reports from
+	// Document.Validate, ValidateDocument, and ConcludeConformance carry
+	// exactly the document rules; a rule with nothing to govern in the
+	// document is vacuously satisfied. A version refusal, or a host object
+	// the caller made unencodable, returns no report, whose Evidence is nil;
+	// a host object beyond this SDK's own limits gets a report whose
+	// Evidence decides at most OBI-D-09.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
 	// Version, in identifier order. These lists are SDK report fields.
 	Violated     []string
 	Inconclusive []string
 	// Findings locate every established violation and every undecided check,
-	// in the order the validator encountered them. A report is as large as
-	// what it reports: each finding's Path is as long as its location is
-	// deep, so a deeply nested document with a finding at every level makes a
-	// report that grows with the square of its depth. Findings are not capped.
+	// in the order the validator records them, which is the same every time
+	// for the same document: its checks run in a fixed sequence, and the
+	// document schema's findings (OBI-D-02), which its library reports in no
+	// fixed order, are ordered by where the failing keyword applies (the
+	// object, for a member the schema does not allow; the member, for a
+	// member name it refuses; the value otherwise), comparing reference
+	// tokens one by one as strings, so /a/10 comes before /a/2, then by
+	// message. A report is as large as what it reports: each finding's Path
+	// is as long as its location is deep, so a deeply nested document with a
+	// finding at every level makes a report that grows with the square of
+	// its depth. Findings are not capped.
 	Findings []Finding
 }
 
@@ -123,38 +134,62 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 	return out
 }
 
-// ConcludeConformance applies OBI-T-09's truth conditions to a complete map of
-// rule evidence. The caller supplies every rule applicable to the validation;
-// absence is not itself an evidence status. It concludes from exactly the
-// evidence given, as the core conformance corpus's OBI-T-09 scenarios do, so
-// an empty map concludes conformant: a report from Interface.Validate or
-// ValidateDocument always carries every document rule. A violation is decisive even when
-// other rules remain inconclusive. In the absence of a violation, any
-// inconclusive applicable rule makes the conclusion undetermined; otherwise
-// the conclusion is conformant. An unrecognized runtime status is treated
-// conservatively as inconclusive rather than allowing malformed evidence to
-// produce a conformant conclusion.
+// ConcludeConformance applies OBI-T-09's truth conditions to rule evidence
+// and returns the report they conclude. It concludes from the document rules
+// alone (DocumentRules), since §10.4 defines each conclusion by the document
+// rules: evidence under any other identifier is dropped and decides nothing.
+// Every document rule applies to every document, so one missing from the
+// evidence is inconclusive: absence is no evidence, and an empty map
+// concludes conformance undetermined. A mistyped identifier, such as
+// "OBI-D-1", is therefore dropped and leaves its rule missing, so it never
+// makes a conclusion conformant or non-conformant.
 //
-// A caller holding evidence this SDK cannot produce can amend a report's
-// Evidence and conclude again. The returned report carries
-// the evidence it concluded from and no findings.
+// A violation is decisive even when other rules remain inconclusive. In the
+// absence of a violation, any inconclusive rule makes the conclusion
+// undetermined; otherwise the conclusion is conformant. A status other than
+// the four this package defines is treated as inconclusive, so malformed
+// evidence never concludes conformant.
+//
+// The returned report's Evidence holds exactly the document rules, the
+// evidence it concluded from: each rule's status as given, or inconclusive
+// where the evidence omits the rule. It has the shape of the Evidence
+// Document.Validate and ValidateDocument return. The report carries no
+// findings, and no Version or Revision, since evidence alone names no
+// specification text. The caller's map is not changed.
+//
+// A caller holding evidence this SDK cannot produce, such as its own
+// decision of a rule a report left inconclusive, amends that report under
+// these invariants:
+//   - The decision settles the whole rule: satisfied, violated with the
+//     findings that establish the violation, or not applicable. Another
+//     inconclusive answer amends nothing.
+//   - The rule's earlier findings go, and the decision's findings take their
+//     place; every other rule's evidence and findings stay.
+//   - The Conclusion and the Violated and Inconclusive lists are recomputed
+//     by concluding again from the amended Evidence with ConcludeConformance,
+//     never edited.
+//   - Version and Revision are copied from the report: the amending caller
+//     applied the same specification text (OBI-T-09). A caller that applied
+//     other text does not amend this report.
 func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationReport {
-	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, len(evidence))}
-	for rule, status := range evidence {
+	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, len(documentRules))}
+	// documentRules is in identifier order, so the lists built here are too.
+	for _, rule := range documentRules {
+		status, given := evidence[rule]
+		if !given {
+			status = EvidenceInconclusive
+		}
 		report.Evidence[rule] = status
 		switch status {
 		case EvidenceViolated:
 			report.Violated = append(report.Violated, rule)
-		case EvidenceInconclusive:
-			report.Inconclusive = append(report.Inconclusive, rule)
 		case EvidenceSatisfied, EvidenceNotApplicable:
 			// Neither contributes to the decisive or incomplete sets.
 		default:
+			// Inconclusive, or a status this package does not define.
 			report.Inconclusive = append(report.Inconclusive, rule)
 		}
 	}
-	sort.Strings(report.Violated)
-	sort.Strings(report.Inconclusive)
 	switch {
 	case len(report.Violated) > 0:
 		report.Conclusion = ConclusionNonConformant
@@ -173,7 +208,10 @@ func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationRepor
 type VersionRefusalError struct {
 	// Version is the document's declared openbindings value.
 	Version string
-	Reason  string
+	// Reason says why the version is refused, such as which way it misses
+	// the supported line. It is advisory text for a person; its wording is
+	// not part of the API.
+	Reason string
 }
 
 func (e *VersionRefusalError) Error() string {
