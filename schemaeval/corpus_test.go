@@ -28,8 +28,9 @@ var valueProfile = corpus.Profile{Features: map[string]bool{
 	"recursive-references":            true,
 	"document-resource-dynamic-scope": true,
 	"supplied-resources":              true,
-	// Go's Unicode tables trail the JavaScript engines' (the 2026-09-29
-	// ruling), so a pattern holding a property escape gets no verdict.
+	// Go's Unicode tables trail the JavaScript engines', a capability limit
+	// the core's package doc declares, so a pattern holding a property
+	// escape gets no verdict.
 	"ecma262-unicode-property-escapes": false,
 	"repeated-member-detection":        true,
 	"draft-07-dialect":                 false,

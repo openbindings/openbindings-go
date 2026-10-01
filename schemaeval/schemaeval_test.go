@@ -13,8 +13,9 @@ import (
 )
 
 // propertyEscape is why a pattern holding a Unicode property escape gets no
-// verdict here: Go's Unicode tables trail the JavaScript engines' (the
-// 2026-09-29 ruling), so the engine's matches are not known to be ECMA-262's.
+// verdict here: Go's Unicode tables trail the JavaScript engines', a
+// capability limit the core's package doc declares, so the engine's matches
+// are not known to be ECMA-262's.
 const propertyEscape = "a Unicode property escape, whose tables this evaluator does not match to ECMA-262's"
 
 func TestConformance(t *testing.T) {

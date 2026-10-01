@@ -631,11 +631,11 @@ type keyedFailure struct{ signature, reason string }
 var expectedFailures = map[string]keyedFailure{
 	"document/OBI-D-10.json#/tests/22": {
 		signature: "OBI-D-13 reported violated; the fixture lists it notViolated (violated: [OBI-D-10 OBI-D-13])",
-		reason:    "needs G: S3, only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name (section 7.3)",
+		reason:    "the revised text's section 7.3, which this core does not yet apply: only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name",
 	},
 	"document/OBI-D-12.json#/tests/40": {
 		signature: `expected OBI-D-12 violated; its evidence is "satisfied" (violated: [OBI-D-10])`,
-		reason:    "needs G: S3, only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name (section 7.3)",
+		reason:    "the revised text's section 7.3, which this core does not yet apply: only an $anchor matching JSON Schema Core section 8.2.2's grammar declares a plain name",
 	},
 }
 

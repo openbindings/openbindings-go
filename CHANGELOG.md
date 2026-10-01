@@ -329,9 +329,12 @@
   so does an omission because no document came back for a non-conformant
   document the model carries: the adapter declares that the core continues
   with every such document, and keys any case it cannot carry. The cases the
-  core is expected to fail (the two S3 fixtures, until G) are keyed with
-  their signatures, so the module is green at the baseline, a regression
-  fails it, and a keyed case that passes fails as stale.
+  core is expected to fail are keyed with their signatures, so the module is
+  green at the baseline, a regression fails it, and a keyed case that passes
+  fails as stale: two fixtures of the revised corpus, which need an anchor
+  to declare a plain name only when it matches JSON Schema's grammar (the
+  spec CHANGELOG's "Only a grammatical anchor declares a plain name", §7.3),
+  until the core applies the revised text.
   Kind retrieval is observed through a local TCP listener whose address the
   kind names, so a connection from any client counts; a case whose
   sentinels cannot start fails rather than being skipped. Each module records
