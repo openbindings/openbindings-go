@@ -73,8 +73,9 @@ behavior and recognizable names, not identical signatures:
   declares no version (OBI-T-04). No exported SemVer validity predicate.
 - **Inconclusive, distinctly.** One category for a call that decided
   nothing: a parse that cannot read a document in full, a document declaring
-  no valid version, an incomplete reference index, and value input that is
-  not JSON; never a conformance conclusion or a value verdict, and disjoint
+  no valid version, a document nesting past the decoder, given as bytes or
+  in memory, an incomplete reference index, and value input that is not
+  JSON; never a conformance conclusion or a value verdict, and disjoint
   from them whatever an evaluator or a value's own encoding says.
 - **Schema references.** Every `$ref` and `$dynamicRef` in the schemas a
   document contains, with location, keyword, value, base, initial target or

@@ -52,8 +52,11 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (OBI-T-04), and one declaring no valid
 // version (OBI-D-09) an error matching ErrInconclusive; either way it is not
-// interpreted. A document that cannot be encoded returns an error, as does a
-// done ctx.
+// interpreted. A document nesting deeper than encoding/json reads (10000
+// levels), this SDK's own limit, returns an error matching ErrInconclusive
+// too. One that cannot be encoded otherwise (a NaN, a channel, invalid
+// UTF-8) returns an error matching no category, as does a nil document; a
+// done ctx returns its error.
 func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*ValueContracts, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -72,8 +72,10 @@ type Reference struct {
 //
 // The whole call fails, listing no reference, for a document declaring a
 // well-formed version outside the supported set (a *VersionRefusalError,
-// OBI-T-04), one declaring no valid version (an error matching
-// ErrInconclusive; OBI-D-09), and one that cannot be encoded. Where a schema
+// OBI-T-04); for one declaring no valid version (OBI-D-09), or nesting
+// deeper than encoding/json reads (10000 levels), this SDK's own limit (an
+// error matching ErrInconclusive); and for one that cannot be encoded
+// otherwise, a NaN, say (an error matching no category). Where a schema
 // nests subschemas deeper than 256 levels, which this SDK does not index, it
 // returns the references it found with an error matching ErrInconclusive:
 // what is missing from them is not absent. A nil error means the list is

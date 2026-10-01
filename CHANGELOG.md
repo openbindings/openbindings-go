@@ -77,6 +77,17 @@
   `parse document: ...`, read `openbindings: inconclusive: ...`; value
   validation's errors for input that is not JSON read
   `openbindings: inconclusive: ...`.
+- **A document nesting past the decoder is beyond the SDK in memory too.**
+  `ParseDocument` and `ValidateDocument` already classified input nesting
+  deeper than encoding/json reads (10000 levels) as the SDK's own limit. A
+  `Document` nesting so deep, which the model does not write, now gets the
+  same: `Document.Validate` reports conformance undetermined, deciding
+  OBI-D-09 on the declared version alone, and `Document.References` and
+  `ValueContractCompiler.Resolve` return an error matching
+  `ErrInconclusive`, where all three returned an untyped encoding error. A
+  value that cannot be encoded for a reason of its own (a NaN, a channel,
+  invalid UTF-8, a marshaler's error) still returns an error and no report;
+  that error now matches no category, the encoding failure kept as text.
 - **Value validation's outcome categories stay disjoint.** `ErrInconclusive`
   joins the sentinels the evaluator contract reserves for core: an
   evaluator's error matching it is read as no verdict and kept in `Cause`
