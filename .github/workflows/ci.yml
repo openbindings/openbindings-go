@@ -34,6 +34,10 @@ jobs:
           ref: ${{ steps.applied.outputs.ref }}
           path: spec
           fetch-depth: 0
+      # A revision is also required to lie on a branch of the spec repository:
+      # checking out by SHA also reaches a commit only a pull request holds,
+      # such as a spec change's head before it is squash-merged, which no
+      # published history will keep. (fetch-depth: 0 fetched every branch.)
       - name: Check the spec checkout is the text named
         env:
           REF: ${{ steps.applied.outputs.ref }}
@@ -45,6 +49,10 @@ jobs:
           esac
           [ -n "$named" ] || { echo "the spec history has no $REF"; exit 1; }
           [ "$head" = "$named" ] || { echo "the spec checkout is $head, not $REF ($named)"; exit 1; }
+          case "$REF" in
+            v*) ;;
+            *) [ -n "$(git -C spec branch -r --contains "$named")" ] || { echo "appliedRevision $REF is on no branch of the spec repository: name a commit of a published branch, not one only a pull request holds"; exit 1; } ;;
+          esac
       - name: vet
         run: go vet ./...
       - name: test
