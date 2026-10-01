@@ -75,7 +75,10 @@ resources sharing an identifier in normal form); each refusal says which
 numbers it can decide, and the time and memory evaluation takes, which grow
 with the value and the schemas as in any JSON Schema validator, so an
 application validating large or untrusted values bounds them itself.
-`schemaeval` documents its own limits. An inconclusive rule or a value
+`schemaeval` documents its own limits; among them, it locates a failed
+`propertyNames` at the root of the value, since its library
+(santhosh-tekuri/jsonschema v6.0.3) reports an unreliable instance location
+for one below the value's top level. An inconclusive rule or a value
 without a verdict is never reported as success or unqualified conformance.
 
 **Declared capability limits:** OBI-T-08 lets a tool give no verdict where it

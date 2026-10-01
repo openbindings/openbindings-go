@@ -65,6 +65,11 @@ var adversaries = []adversary{
 	// content, propertyNames, dependentSchemas.
 	{"content-not-asserted", `{"/operations/op/input":{"contentMediaType":"application/json","contentEncoding":"base64","contentSchema":{"type":"object"}}}`, "", "",
 		[]value{{`"not base64 json"`, valid, nil}}},
+	// A failed propertyNames is located at the object it applies to, below
+	// the top level too, among siblings evaluated around it.
+	{"property-names-nested", `{"/operations/op/input":{"type":"object",
+		"properties":{"a":{"type":"integer"},"b":{"additionalProperties":{"propertyNames":{"pattern":"^[a-z]+$"}}},"c":{"type":"integer"}}}}`, "", "",
+		[]value{{`{"a":1,"b":{"x":{"e":1}},"c":2}`, valid, nil}, {`{"a":1,"b":{"x":{"E<1>":1}},"c":2}`, mismatch, at("/b/x")}}},
 	{"dynamic-ref-under-property-names", `{"/operations/op/input":{"$id":"https://ex.invalid/pn","$dynamicAnchor":"n","type":["object","string"],"maxLength":2,
 		"propertyNames":{"$dynamicRef":"https://ex.invalid/pn#n"}}}`, "", "",
 		[]value{{`{"ab":1}`, valid, nil}, {`{"abc":1}`, mismatch, at("")}}},

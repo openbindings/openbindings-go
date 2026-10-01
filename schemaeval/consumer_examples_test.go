@@ -563,7 +563,8 @@ func TestBudgetEvaluatorConformance(t *testing.T) {
 			"adversarial/numbers-in-values/1":                                                                                   "a value's number beyond the inner evaluator's limits, where the schema compares numbers",
 		},
 		Unlocated: map[string]string{
-			"adversarial/type-and-const/0": "the inner library stops at a failing type",
+			"adversarial/type-and-const/0":        "the inner library stops at a failing type",
+			"adversarial/property-names-nested/1": "the inner evaluator locates a failed propertyNames below the top level at the value",
 		},
 	})
 }

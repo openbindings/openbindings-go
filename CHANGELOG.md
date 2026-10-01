@@ -321,8 +321,19 @@
   (`/openbindings/` for `/operations/`). OBI-D-02's findings are now
   ordered by where the failing keyword applies, by reference token, then by
   message, and a refused name, the empty one included, is located at each
-  member that holds it. The openbindingstest kit and the corpus harness
-  report in a fixed order too.
+  member that holds it. A binding preference out of §5.3's range, which
+  validation decides exactly, now takes its place in that order instead of
+  coming first. The openbindingstest kit and the corpus harness report in a
+  fixed order too.
+- **`schemaeval` locates a failed `propertyNames` at the root of the value,
+  every time.** Its library records the location of a failed
+  `propertyNames` without copying it, so for an object below the value's top
+  level the problem was located wherever a later sibling had overwritten it,
+  which varied across runs (`/a` or `/c` for `/b/x`), and several invalid
+  names' messages came in varying order. The problem is now located at the
+  root of the value, with each name's message in sorted order.
+  openbindingstest adds a case with a nested `propertyNames`, which
+  `schemaeval` names in `Options.Unlocated`.
 - **A cycle every evaluation enters is an undefined result.** A value
   contract whose evaluation must apply a cycle of schemas in place without
   advancing (a schema that is only a `$ref` to itself, for one) now refuses

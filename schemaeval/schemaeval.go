@@ -17,8 +17,14 @@
 // verdict when the bundle compares numbers anywhere, reached or not, and is
 // otherwise validated with a stand-in number. Where a
 // schema's type fails, the library reports none of that schema's other
-// failing keywords, so its problems can be fewer than the contract's.
-// openbindingstest checks it against the evaluator contract.
+// failing keywords, so its problems can be fewer than the contract's. The
+// library (v6.0.3) records a failed propertyNames' instance location without
+// copying it, so for an object below the value's top level a later sibling
+// can overwrite it, and which one depends on the order the library walks the
+// object's members, which is not fixed; so a failed propertyNames is located
+// at the root of the value, whatever object it applies to, with each name's
+// message in sorted order. openbindingstest checks it against the evaluator
+// contract.
 //
 // # Adapting another library
 //

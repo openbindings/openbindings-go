@@ -22,8 +22,12 @@ var kindPrinter = message.NewPrinter(language.English)
 // applicators pass their subschemas' problems through; a failing false under
 // additionalProperties is one problem per member; an anyOf, or a oneOf no
 // alternative satisfies, is one problem at its own location, stating what
-// each alternative lacked; propertyNames, contains, and not are located at
-// the value they apply to.
+// each alternative lacked; contains and not are located at the value they
+// apply to. A failed propertyNames is located at the root of the value,
+// whatever object it applies to: v6.0.3 records its instance location
+// without copying it, so below the top level a later sibling can overwrite
+// it, and which sibling depends on the order the library walks an object's
+// members, which is not fixed.
 func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []openbindings.SchemaProblem {
 	at := pointerOf(ve.InstanceLocation...)
 	switch k := ve.ErrorKind.(type) {
@@ -49,7 +53,7 @@ func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []ope
 			messages = []string{ve.ErrorKind.LocalizedString(kindPrinter)}
 		}
 		slices.Sort(messages)
-		return []openbindings.SchemaProblem{{InstanceLocation: at, Message: "the member name " + quote(k.Property) + " is invalid: " + joinMessages(messages)}}
+		return []openbindings.SchemaProblem{{InstanceLocation: "", Message: "the member name " + quote(k.Property) + " is invalid: " + joinMessages(messages)}}
 	case *kind.Format:
 		if strings.HasPrefix(k.Want, "schemaeval-bound-") {
 			return []openbindings.SchemaProblem{{InstanceLocation: at, Message: k.Err.Error()}}
@@ -76,20 +80,26 @@ func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []ope
 		return []openbindings.SchemaProblem{{InstanceLocation: at, Message: ve.ErrorKind.LocalizedString(kindPrinter)}}
 	}
 	var out []openbindings.SchemaProblem
-	// The library reports propertyNames once per invalid name; one keyword,
-	// its schema's, fails once, at the object.
+	// The library reports propertyNames once per invalid name, in the order
+	// it walks the object's members, which is not fixed; one keyword, its
+	// schema's, fails once, with each name's message in sorted order.
 	names := map[string]int{}
+	merged := map[int][]string{}
 	for _, cause := range ve.Causes {
 		found := problems(cause, standsFor)
 		if _, isNames := cause.ErrorKind.(*kind.PropertyNames); isNames && len(found) == 1 {
-			keyword := cause.SchemaURL + "\x00" + found[0].InstanceLocation
-			if i, seen := names[keyword]; seen {
-				out[i].Message += "; " + found[0].Message
+			if i, seen := names[cause.SchemaURL]; seen {
+				merged[i] = append(merged[i], found[0].Message)
 				continue
 			}
-			names[keyword] = len(out)
+			names[cause.SchemaURL] = len(out)
+			merged[len(out)] = []string{found[0].Message}
 		}
 		out = append(out, found...)
+	}
+	for i, messages := range merged {
+		slices.Sort(messages)
+		out[i].Message = joinMessages(messages)
 	}
 	return out
 }

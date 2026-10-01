@@ -1,8 +1,13 @@
 package schemaeval_test
 
 import (
+	"context"
+	"errors"
+	"slices"
+	"strconv"
 	"testing"
 
+	"github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/openbindingstest"
 	"github.com/openbindings/openbindings-go/schemaeval"
 )
@@ -28,7 +33,57 @@ func TestConformance(t *testing.T) {
 			"adversarial/numbers-in-values/1":                                                                                   "a value's number beyond 1e±10000, where the schema compares numbers",
 		},
 		Unlocated: map[string]string{
-			"adversarial/type-and-const/0": "the library stops at a failing type, reporting no other failing keyword of that schema",
+			"adversarial/type-and-const/0":        "the library stops at a failing type, reporting no other failing keyword of that schema",
+			"adversarial/property-names-nested/1": "the library's location for a failed propertyNames below the top level is not reliable, so it is located at the value",
 		},
 	})
+}
+
+// A failed propertyNames is located at the root of the value, every run,
+// whatever object it applies to: the library's location for one below the
+// top level is not reliable. The names' messages are in sorted order, though
+// the library reports them in the order it walks the object.
+func TestPropertyNamesLocatedAtTheValue(t *testing.T) {
+	ctx := context.Background()
+	invalid := func(name string) string {
+		return "the member name " + strconv.Quote(name) + " is invalid: '" + name + "' does not match pattern '^[a-z]+$'"
+	}
+	for name, c := range map[string]struct {
+		schema, value string
+		want          []openbindings.SchemaProblem
+	}{
+		"below the top level, beside siblings": {
+			`{"type":"object","properties":{"a":{"type":"integer"},"b":{"additionalProperties":{"propertyNames":{"pattern":"^[a-z]+$"}}},"c":{"type":"integer"}}}`,
+			`{"a":1,"b":{"x":{"E<1>":1},"y":{"F<":1}},"c":2}`,
+			[]openbindings.SchemaProblem{{InstanceLocation: "", Message: invalid("E<1>") + "; " + invalid("F<")}},
+		},
+		"at the top level, several names": {
+			`{"propertyNames":{"pattern":"^[a-z]+$"}}`,
+			`{"G<":1,"E<1>":2,"a":3,"F<":4}`,
+			[]openbindings.SchemaProblem{{InstanceLocation: "", Message: invalid("E<1>") + "; " + invalid("F<") + "; " + invalid("G<")}},
+		},
+	} {
+		doc, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"op":{"input":` + c.schema + `}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		contracts, err := compiler.Resolve(ctx, doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contract, err := contracts.CompileInput(ctx, "op")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range 300 {
+			var mismatch *openbindings.MismatchError
+			if err := contract.ValidateJSON(ctx, []byte(c.value)); !errors.As(err, &mismatch) || !slices.Equal(mismatch.Problems, c.want) {
+				t.Fatalf("%s, run %d: %v, want the problems %q", name, i, err, c.want)
+			}
+		}
+	}
 }
