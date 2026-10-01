@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -176,7 +177,7 @@ func cliRead(data []byte) (*openbindings.Interface, int, string) {
 	// carry no type or sentinel, so a caller can tell them apart, or from
 	// an internal failure, only by the message. Their prefix, "parse
 	// document:", is also not the "openbindings:" prefix of the sentinels
-	// (C1 item K6, error prefixes).
+	// (see C1 item K6 (error prefixes)).
 	return nil, 2, fmt.Sprintf("unclassified (%T): %v", err, err)
 }
 
@@ -576,7 +577,8 @@ func Example_producer() {
 // OBI-D-10's check meets this SDK's limit and stays inconclusive.
 var deeplyNested = strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300)
 
-// amendRule is the whole amendment workflow on the current API (C1 item K5).
+// amendRule is the whole amendment workflow on the current API.
+// C1 item K5 (amendment).
 // A tool that decides a rule this SDK left inconclusive replaces that rule's
 // evidence and findings with its own decision for the entire rule, and the
 // report stays coherent:
@@ -752,7 +754,7 @@ func Example_cliMediaType() {
 	// Output: application/vnd.openbindings+json, application/json;q=0.5
 }
 
-// ------------------------------------------- equality for merge (C1 item F7)
+// ------------------------- equality for merge: C1 item F7 (merge equality)
 
 // sameJSON reports whether two JSON texts hold the same JSON value: objects
 // as unordered members, strings as they decode, arrays in order, and numbers
@@ -866,7 +868,7 @@ func Example_cliMergeIdentical() {
 	// changed source: same Go value false, same encoding false, same JSON value false <nil>
 }
 
-// ------------------------------------- schemas in the model (C1 item K8)
+// ---------------------------- C1 item K8 (schemas in the model)
 
 // A producer or editor changes a schema it read from a document. The model
 // carries schema numbers as json.Number, so they come back as written; what
@@ -959,7 +961,7 @@ func Example_producerSchemaEdit() {
 // including numbers, are kept exactly as written". The model cannot keep
 // either: maps hold the entries, so encoding writes them in key order, and
 // a preference is an int64, so 1e0 comes back as 1. Typed members come back
-// in field order whatever order the input used. C1 item F1 allocates
+// in field order whatever order the input used. C1 item F1 (member order) allocates
 // source order and token spelling to the CLI's own representation.
 func Example_cliFormatBoundary() {
 	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"zeta":{},"alpha":{}},
@@ -977,14 +979,25 @@ func Example_cliFormatBoundary() {
 	// {"openbindings":"0.2.0","operations":{"alpha":{},"zeta":{}},"sources":{"s":{"kind":"k"}},"bindings":{"alpha.s":{"operation":"alpha","source":"s"},"zeta.s":{"operation":"zeta","source":"s","preference":1}}}
 }
 
-// --------------------------------------------- references (C1 item F4)
+// --------------------------------------------- C1 item F4 (references)
 
 // docRef is one schema reference keyword in the schemas a document contains
 // (§3, §7), with where its initial lookup lands. It has the shape of the
-// bounded lookup C1 item F4 proposes core export: the keyword's location,
-// the initial target or why there is none, and whether evaluation may land
-// elsewhere. Here a caller writes it, re-implementing the §7 index core
-// already keeps.
+// bounded lookup C1 item F4 (references) proposes core export: the
+// keyword's location, the initial target or why there is none, and whether
+// evaluation may land elsewhere. Here a caller writes it, re-implementing the
+// §7 index core already keeps.
+//
+// What a caller may conclude from it: every $ref and $dynamicRef keyword in
+// the schemas the document contains, where each one is; for each, the schema
+// its initial lookup identifies, or why it identifies none; and which ones
+// resolve dynamically. What a caller may not conclude: that a schema no
+// reference targets is unused, or that the schemas a closure of initial
+// targets reaches are all an operation needs. A $dynamicRef can land on any
+// schema in the dynamic scope that declares the matching $dynamicAnchor, and
+// the lookup does not resolve dynamic scope; a caller that removes or copies
+// schemas needs a policy for that (Example_cliSchemaRemove,
+// Example_cliMergeClosure).
 type docRef struct {
 	At         string // RFC 6901 pointer to the keyword member
 	Keyword    string // $ref or $dynamicRef
@@ -998,6 +1011,17 @@ type docRef struct {
 // $dynamicRef's initial target is where dynamic resolution starts (§7.4).
 func (r docRef) Dynamic() bool { return r.Keyword == "$dynamicRef" }
 
+// dynamicName is the plain name a $dynamicRef looks up in the dynamic scope,
+// or "" when its fragment is not a plain name.
+func (r docRef) dynamicName() string {
+	_, fragment, _ := strings.Cut(r.Value, "#")
+	name, err := url.PathUnescape(fragment)
+	if !r.Dynamic() || err != nil || name == "" || strings.HasPrefix(name, "/") {
+		return ""
+	}
+	return name
+}
+
 func (r docRef) String() string {
 	landing := "-> " + r.Target
 	if r.Target == "" {
@@ -1009,11 +1033,15 @@ func (r docRef) String() string {
 	return fmt.Sprintf("%s %q %s", r.At, r.Value, landing)
 }
 
+type anchorDeclaration struct{ name, at string }
+
 type refIndex struct {
 	refs      []docRef
-	schemas   map[string]string // every schema the document contains: pointer -> its resource ("" = the document resource)
-	resources map[string]string // $id resource -> pointer of its root
-	anchors   map[string]string // resource + "#" + plain name -> pointer
+	schemas   map[string]string   // every schema the document contains: pointer -> its resource ("" = the document resource)
+	resources map[string]string   // $id resource -> pointer of its root
+	declared  map[string][]string // resource + "#" + plain name -> where each $anchor and $dynamicAnchor declares it
+	dynamic   []anchorDeclaration // every $dynamicAnchor
+	stopped   []string            // where the walk stopped at its nesting limit
 }
 
 var (
@@ -1021,6 +1049,10 @@ var (
 	refValueKeywords = []string{"additionalProperties", "propertyNames", "items", "contains", "not", "if", "then", "else", "unevaluatedItems", "unevaluatedProperties", "contentSchema"}
 	refArrayKeywords = []string{"prefixItems", "allOf", "anyOf", "oneOf"}
 )
+
+// refNestingLimit is where the walk stops, as core's index does (256
+// levels); a stopped walk makes the result incomplete, not empty.
+const refNestingLimit = 256
 
 func pointerOf(tokens ...string) string {
 	var b strings.Builder
@@ -1041,16 +1073,47 @@ func genericView(doc *openbindings.Interface) (map[string]any, error) {
 	return view, dec.Decode(&view)
 }
 
+// errIncomplete marks a lookup that could not index the whole document: the
+// references it returns are some, not all, so no caller may act on what is
+// missing from them.
+var errIncomplete = errors.New("the reference index is incomplete")
+
+// referencesOf is the lookup with its whole-call failure contract, the
+// error-bearing result C1 item F4 (references) proposes for References: a
+// version this SDK does not interpret is refused, and a document declaring
+// no valid version is not interpreted (as ValueContractCompiler.Resolve
+// does); a document that cannot be encoded is an error; and a walk that
+// meets the nesting limit returns what it found with an error matching
+// errIncomplete. A nil error means the index is complete, so an empty
+// result with a nil error means the document holds no reference.
+func referencesOf(doc *openbindings.Interface) ([]docRef, *refIndex, error) {
+	switch supported, err := openbindings.IsSupportedVersion(doc.OpenBindings); {
+	case err != nil:
+		return nil, nil, fmt.Errorf("the document declares no valid version (%q), so it is not interpreted", doc.OpenBindings)
+	case !supported:
+		return nil, nil, &openbindings.VersionRefusalError{Version: doc.OpenBindings, Reason: "a version this lookup does not interpret"}
+	}
+	view, err := genericView(doc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the document cannot be encoded: %w", err)
+	}
+	ix := indexReferences(view)
+	if len(ix.stopped) > 0 {
+		return ix.refs, ix, fmt.Errorf("%w: the walk stopped at %d levels at %v", errIncomplete, refNestingLimit, ix.stopped)
+	}
+	return ix.refs, ix, nil
+}
+
 // indexReferences walks the OBI positions (§7): schemas entries and
 // operation input and output, through the keywords §7 lists, entering $id
 // resources. Source and binding content, examples, and x- members are not
 // schemas, so a $ref-shaped member there is ordinary data and never listed.
 // It follows no reference, so a cycle cannot trap it.
 func indexReferences(view map[string]any) *refIndex {
-	ix := &refIndex{schemas: map[string]string{}, resources: map[string]string{}, anchors: map[string]string{}}
+	ix := &refIndex{schemas: map[string]string{}, resources: map[string]string{}, declared: map[string][]string{}}
 	if schemas, ok := view["schemas"].(map[string]any); ok {
 		for _, name := range slices.Sorted(maps.Keys(schemas)) {
-			ix.walk(schemas[name], []string{"schemas", name}, "")
+			ix.walk(schemas[name], []string{"schemas", name}, "", 0)
 		}
 	}
 	if operations, ok := view["operations"].(map[string]any); ok {
@@ -1058,7 +1121,7 @@ func indexReferences(view map[string]any) *refIndex {
 			operation, _ := operations[key].(map[string]any)
 			for _, side := range []string{"input", "output"} {
 				if schema, present := operation[side]; present {
-					ix.walk(schema, []string{"operations", key, side}, "")
+					ix.walk(schema, []string{"operations", key, side}, "", 0)
 				}
 			}
 		}
@@ -1070,8 +1133,12 @@ func indexReferences(view map[string]any) *refIndex {
 	return ix
 }
 
-func (ix *refIndex) walk(v any, at []string, base string) {
+func (ix *refIndex) walk(v any, at []string, base string, depth int) {
 	here := pointerOf(at...)
+	if depth > refNestingLimit {
+		ix.stopped = append(ix.stopped, here)
+		return
+	}
 	switch schema := v.(type) {
 	case bool:
 		ix.schemas[here] = base
@@ -1081,9 +1148,15 @@ func (ix *refIndex) walk(v any, at []string, base string) {
 			ix.resources[base] = here
 		}
 		ix.schemas[here] = base
+		// Each $anchor and each $dynamicAnchor declaration counts, even two
+		// on one schema (OBI-D-13 counts them so, and so does core).
 		for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
 			if name, ok := schema[keyword].(string); ok {
-				ix.anchors[base+"#"+name] = here
+				key := base + "#" + name
+				ix.declared[key] = append(ix.declared[key], here)
+				if keyword == "$dynamicAnchor" {
+					ix.dynamic = append(ix.dynamic, anchorDeclaration{name, here})
+				}
 			}
 		}
 		for _, keyword := range []string{"$ref", "$dynamicRef"} {
@@ -1097,18 +1170,18 @@ func (ix *refIndex) walk(v any, at []string, base string) {
 				if _, isArray := members[name].([]any); isArray {
 					continue // a legacy dependencies array lists names, not a schema
 				}
-				ix.walk(members[name], append(slices.Clone(at), keyword, name), base)
+				ix.walk(members[name], append(slices.Clone(at), keyword, name), base, depth+1)
 			}
 		}
 		for _, keyword := range refValueKeywords {
 			if sub, ok := schema[keyword]; ok {
-				ix.walk(sub, append(slices.Clone(at), keyword), base)
+				ix.walk(sub, append(slices.Clone(at), keyword), base, depth+1)
 			}
 		}
 		for _, keyword := range refArrayKeywords {
 			items, _ := schema[keyword].([]any)
 			for i, sub := range items {
-				ix.walk(sub, append(slices.Clone(at), keyword, strconv.Itoa(i)), base)
+				ix.walk(sub, append(slices.Clone(at), keyword, strconv.Itoa(i)), base, depth+1)
 			}
 		}
 	}
@@ -1127,12 +1200,54 @@ func resolveReference(base, ref string) string {
 	return strings.TrimSuffix(r.String(), "#")
 }
 
+// wellFormedFragment reports whether s is an RFC 3986 fragment: pchar, "/",
+// and "?", with every "%" starting an escape. OBI-D-05 requires it.
+func wellFormedFragment(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '%':
+			if i+2 >= len(s) || !isHex(s[i+1]) || !isHex(s[i+2]) {
+				return false
+			}
+			i += 2
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', strings.IndexByte("-._~!$&'()*+,;=:@/?", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+// plainName looks a plain name up in a resource: it identifies a schema only
+// when exactly one declaration names it (§7.4: a plain name declared twice
+// leaves the result undefined).
+func (ix *refIndex) plainName(r *docRef, resource, name string) {
+	switch at := ix.declared[resource+"#"+name]; len(at) {
+	case 0:
+		where := "the document resource"
+		if resource != "" {
+			where = resource
+		}
+		r.Unresolved = "no plain name " + name + " in " + where
+	case 1:
+		r.Target = at[0]
+	default:
+		r.Unresolved = "the plain name " + name + " is declared more than once, so the result is undefined (§7.4)"
+	}
+}
+
 func (ix *refIndex) resolve(r *docRef) {
 	if r.Base == "" && (r.Value == "" || strings.HasPrefix(r.Value, "#")) {
 		ix.lookUpInDocument(r) // OBI-D-12's lookup (§7.2, §7.3)
 		return
 	}
-	if parsed, err := url.Parse(r.Value); r.Base == "" && (err != nil || !parsed.IsAbs()) {
+	parsed, err := url.Parse(r.Value)
+	if err != nil || r.Base == "" && !parsed.IsAbs() {
 		r.Unresolved = "neither absolute nor same-document (OBI-D-05)"
 		return
 	}
@@ -1149,43 +1264,46 @@ func (ix *refIndex) resolve(r *docRef) {
 	case name == "":
 		r.Target = root
 	case strings.HasPrefix(name, "/"):
-		if ix.schemas[root+name] == resource {
+		// Within a resource, JSON Schema follows the pointer through the
+		// resource's document (RFC 6901), nested resources included, as core does.
+		if _, isSchema := ix.schemas[root+name]; isSchema {
 			r.Target = root + name
 		} else {
 			r.Unresolved = "no schema of " + resource + " there"
 		}
 	default:
-		if target, ok := ix.anchors[resource+"#"+name]; ok {
-			r.Target = target
-		} else {
-			r.Unresolved = "no plain name " + name + " in " + resource
-		}
+		ix.plainName(r, resource, name)
 	}
 }
 
 func (ix *refIndex) lookUpInDocument(r *docRef) {
-	name, err := url.PathUnescape(strings.TrimPrefix(r.Value, "#"))
+	fragment := strings.TrimPrefix(r.Value, "#")
+	if !wellFormedFragment(fragment) {
+		r.Unresolved = "not a well-formed URI-reference (OBI-D-05)"
+		return
+	}
+	name, err := url.PathUnescape(fragment)
 	switch {
 	case err != nil || !utf8.ValidString(name):
 		r.Unresolved = "its fragment does not decode to UTF-8"
 	case name == "":
 		r.Unresolved = "it names the document, not a schema (§7.2)"
 	case strings.HasPrefix(name, "/"):
-		resource, isSchema := ix.schemas[name]
-		switch {
-		case !isSchema:
+		if _, isSchema := ix.schemas[name]; !isSchema {
 			r.Unresolved = "no schema at an OBI position there (§7.3)"
-		case resource != "" && ix.resources[resource] != name:
-			r.Unresolved = "inside a schema that declares $id (§7.3)"
-		default:
-			r.Target = name
+			return
 		}
+		// A pointer may land on a schema that declares $id, never pass
+		// through one: every enclosing boundary is checked (§7.3).
+		for _, root := range ix.resources {
+			if strings.HasPrefix(name, root+"/") {
+				r.Unresolved = "inside a schema that declares $id (§7.3)"
+				return
+			}
+		}
+		r.Target = name
 	default:
-		if target, ok := ix.anchors["#"+name]; ok {
-			r.Target = target
-		} else {
-			r.Unresolved = "no plain name " + name + " in the document resource"
-		}
+		ix.plainName(r, "", name)
 	}
 }
 
@@ -1216,14 +1334,16 @@ func setAt(view any, pointer string, value any) {
 }
 
 // retarget rewrites, in view, the references whose initial target lies
-// under from and whose spelling names it by a same-document pointer, so they
+// under from and whose spelling names it by a same-document pointer, in any
+// spelling that decodes to one (#/schemas/Task, #%2Fschemas%2FTask), so they
 // name the same place under to. Anchors, $id references, references inside
 // $id resources, and ordinary data are left alone: they do not spell the
 // renamed key. This is the CLI's rewriting policy, outside core.
-func retarget(view map[string]any, ix *refIndex, from, to string) []string {
+func retarget(view map[string]any, refs []docRef, from, to string) []string {
 	var rewritten []string
-	for _, r := range ix.refs {
-		if r.Base != "" || !strings.HasPrefix(r.Value, "#/") || r.Target == "" || !under(r.Target, from) {
+	for _, r := range refs {
+		pointer, err := url.PathUnescape(strings.TrimPrefix(r.Value, "#"))
+		if r.Base != "" || !strings.HasPrefix(r.Value, "#") || err != nil || !strings.HasPrefix(pointer, "/") || r.Target == "" || !under(r.Target, from) {
 			continue
 		}
 		spelled := (&url.URL{Fragment: to + strings.TrimPrefix(r.Target, from)}).String()
@@ -1266,10 +1386,11 @@ func labRewrite(v any, at []string, from string) []string {
 	return hits
 }
 
-// referencesOBI holds an anchor, a percent-encoded pointer, a self-reference
-// (a cycle), a $dynamicRef, an $id resource referenced by its $id and holding
-// a reference of its own, an operation-schema target, an external schema,
-// and $ref-shaped ordinary data in content, an example, and an x- member.
+// referencesOBI holds an anchor, a percent-encoded pointer and a pointer
+// whose leading slash is encoded, a self-reference (a cycle), a $dynamicRef,
+// an $id resource referenced by its $id and holding a reference of its own,
+// an operation-schema target, an external schema, and $ref-shaped ordinary
+// data in content, an example, and an x- member.
 const referencesOBI = `{
   "openbindings": "0.2.0",
   "schemas": {
@@ -1281,14 +1402,29 @@ const referencesOBI = `{
   "operations": {
     "a": { "input": { "$ref": "#task" }, "output": { "$ref": "#/schemas/List" }, "examples": { "e": { "input": { "$ref": "#/schemas/Task" } } } },
     "b": { "input": { "$ref": "#/operations/a/output" }, "output": { "$ref": "https://example.com/wrapped" } },
-    "c": { "input": { "$ref": "https://schemas.example.com/address.json" } }
+    "c": { "input": { "$ref": "https://schemas.example.com/address.json" } },
+    "d": { "output": { "$ref": "#%2Fschemas%2FTask" } }
   },
   "sources": { "s": { "kind": "example.openapi@1", "content": { "$ref": "#/schemas/Task" } } },
   "x-note": { "$ref": "#/schemas/Task" }
 }`
 
-func referencesDocument() (*openbindings.Interface, map[string]any, *refIndex) {
-	doc, err := openbindings.ParseDocument([]byte(referencesOBI))
+// dynamicOBI is the SDK's own scope-wrapper fixture (value_contracts_test.go,
+// TestBundle_ScopeWrappers): List's $dynamicRef initially targets List's own
+// string schema, but an evaluation beginning in the document resource finds
+// Override's $dynamicAnchor first, so inDocument's items must be numbers.
+const dynamicOBI = `{"openbindings":"0.2.0","operations":{
+  "inDocument":{"input":{"$ref":"https://ex.test/list"}}},
+  "schemas":{
+  "List":{"$id":"https://ex.test/list","type":"array","items":{"$dynamicRef":"#item"},"$defs":{"item":{"$dynamicAnchor":"item","type":"string"}}},
+  "Override":{"$dynamicAnchor":"item","type":"number"}}}`
+
+func lookUp(document string) (*openbindings.Interface, map[string]any, []docRef, *refIndex) {
+	doc, err := openbindings.ParseDocument([]byte(document))
+	if err != nil {
+		panic(err)
+	}
+	refs, ix, err := referencesOf(doc)
 	if err != nil {
 		panic(err)
 	}
@@ -1296,16 +1432,16 @@ func referencesDocument() (*openbindings.Interface, map[string]any, *refIndex) {
 	if err != nil {
 		panic(err)
 	}
-	return doc, view, indexReferences(view)
+	return doc, view, refs, ix
 }
 
 // The lookup over the document: every reference keyword in the schemas the
 // document contains, and nothing from content, examples, or x- members.
 func Example_cliReferenceLookup() {
-	doc, _, ix := referencesDocument()
+	doc, _, refs, _ := lookUp(referencesOBI)
 	report, _ := doc.Validate()
 	fmt.Println(report.Conclusion)
-	for _, r := range ix.refs {
+	for _, r := range refs {
 		fmt.Println(r)
 	}
 	// Output:
@@ -1315,6 +1451,7 @@ func Example_cliReferenceLookup() {
 	// /operations/b/input/$ref "#/operations/a/output" -> /operations/a/output
 	// /operations/b/output/$ref "https://example.com/wrapped" -> /schemas/Wrapped
 	// /operations/c/input/$ref "https://schemas.example.com/address.json" unresolved: outside the document, an external schema (§7.4)
+	// /operations/d/output/$ref "#%2Fschemas%2FTask" -> /schemas/Task
 	// /schemas/List/items/$ref "#/schemas/T%61sk" -> /schemas/Task
 	// /schemas/Task/properties/next/$ref "#/schemas/Task" -> /schemas/Task
 	// /schemas/Tree/properties/kids/items/$dynamicRef "#node" -> /schemas/Tree (initial; dynamic)
@@ -1322,11 +1459,123 @@ func Example_cliReferenceLookup() {
 	// /schemas/Wrapped/properties/t/$ref "https://example.com/wrapped#/$defs/x" -> /schemas/Wrapped/$defs/x
 }
 
+// The lookup against the SDK: every reference of the spec's §7.5 table,
+// and the boundary and duplicate-name cases, each as an operation's input
+// reference. The SDK's answer is OBI-D-12 and OBI-D-05 for a reference in the
+// document resource, and the value contract otherwise: an undefined result
+// or an unresolvable reference means the lookup identifies nothing.
+func Example_cliReferenceParity() {
+	section75 := `"Task":{"$anchor":"task","type":"object","properties":{"my type":{"type":"string"}}},
+	  "Tree":{"$id":"https://example.com/schemas/tree.json","$anchor":"tree","type":"object","properties":{"children":{"type":"array","items":{"$ref":"#"}}}}`
+	cases := []struct{ ref, schemas string }{
+		{"#", section75},
+		{"#/schemas/Task", section75},
+		{"#/schemas/Task/properties/my%20type", section75},
+		{"#/schemas/Task/properties/my type", section75},
+		{"#/schemas/Task/properties/my%2520type", section75},
+		{"#%2Fschemas%2FTask", section75},
+		{"#/schemas/Task/type", section75},
+		{"#/operations", section75},
+		{"#/schemas/Missing", section75},
+		{"#/schemas/~2", section75},
+		{"#/schemas/Tree", section75},
+		{"#/schemas/Tree/properties/children", section75},
+		{"#task", section75},
+		{"#t%61sk", section75},
+		{"#tree", section75},
+		{"#%FF", section75},
+		{"tree.json#/properties/children", section75},
+		{"https://example.com/schemas/tree.json#/properties/children", section75},
+		// Both A and x declare $id: the pointer crosses A's boundary.
+		{"#/schemas/A/properties/x", `"A":{"$id":"https://ex.test/a","properties":{"x":{"$id":"https://ex.test/b","type":"string"}}}`},
+		// Within a resource, a pointer follows the resource's document.
+		{"https://ex.test/a#/properties/x/properties/y", `"A":{"$id":"https://ex.test/a","properties":{"x":{"$id":"https://ex.test/b","properties":{"y":{"type":"string"}}}}}`},
+		// A plain name declared twice inside an $id resource, in a
+		// conformant document, and in the document resource.
+		{"https://ex.test/a#n", `"A":{"$id":"https://ex.test/a","$defs":{"p":{"$anchor":"n","type":"string"},"q":{"$anchor":"n","type":"integer"}}}`},
+		{"#n", `"P":{"$anchor":"n","type":"string"},"Q":{"$anchor":"n","type":"integer"}`},
+		// $anchor and $dynamicAnchor on one schema are two declarations.
+		{"#n", `"P":{"$anchor":"n","$dynamicAnchor":"n","type":"string"}`},
+	}
+	compiler, err := openbindings.NewValueContractCompiler(typeOnly{})
+	if err != nil {
+		panic(err)
+	}
+	agreed := 0
+	for _, c := range cases {
+		reference, _ := json.Marshal(c.ref)
+		document := `{"openbindings":"0.2.0","schemas":{` + c.schemas + `},"operations":{"op":{"input":{"$ref":` + string(reference) + `}}}}`
+		iface, report, _ := openbindings.ValidateDocument([]byte(document))
+		at := "/operations/op/input/$ref"
+		sdk := "resolves"
+		for _, finding := range report.Violations() {
+			if (finding.Rule == "OBI-D-12" || finding.Rule == "OBI-D-05") && finding.Path == at {
+				sdk = "fails " + finding.Rule
+			}
+		}
+		if sdk == "resolves" && iface != nil {
+			contracts, err := compiler.Resolve(context.Background(), iface)
+			if err != nil {
+				panic(err)
+			}
+			contract, _ := contracts.CompileInput(context.Background(), "op")
+			var noVerdict *openbindings.NoVerdictError
+			if errors.As(contract.Err(), &noVerdict) && noVerdict.Location != "" {
+				sdk = "no target (" + map[bool]string{true: "undefined", false: "core refuses"}[errors.Is(noVerdict, openbindings.ErrUndefined)] + ")"
+			}
+		}
+		var iface2 openbindings.Interface
+		if err := json.Unmarshal([]byte(document), &iface2); err != nil {
+			panic(err)
+		}
+		mine := "resolves"
+		refs, _, err := referencesOf(&iface2)
+		if err != nil {
+			panic(err)
+		}
+		for _, r := range refs {
+			if r.At == at && r.Target == "" {
+				mine = "no target: " + r.Unresolved
+			}
+		}
+		if (mine == "resolves") == (sdk == "resolves") {
+			agreed++
+		}
+		fmt.Printf("%-60s SDK %-24s lookup %s\n", c.ref, sdk, mine)
+	}
+	fmt.Println("agree:", agreed, "of", len(cases))
+	// Output:
+	// #                                                            SDK fails OBI-D-12           lookup no target: it names the document, not a schema (§7.2)
+	// #/schemas/Task                                               SDK resolves                 lookup resolves
+	// #/schemas/Task/properties/my%20type                          SDK resolves                 lookup resolves
+	// #/schemas/Task/properties/my type                            SDK fails OBI-D-05           lookup no target: not a well-formed URI-reference (OBI-D-05)
+	// #/schemas/Task/properties/my%2520type                        SDK fails OBI-D-12           lookup no target: no schema at an OBI position there (§7.3)
+	// #%2Fschemas%2FTask                                           SDK resolves                 lookup resolves
+	// #/schemas/Task/type                                          SDK fails OBI-D-12           lookup no target: no schema at an OBI position there (§7.3)
+	// #/operations                                                 SDK fails OBI-D-12           lookup no target: no schema at an OBI position there (§7.3)
+	// #/schemas/Missing                                            SDK fails OBI-D-12           lookup no target: no schema at an OBI position there (§7.3)
+	// #/schemas/~2                                                 SDK fails OBI-D-12           lookup no target: no schema at an OBI position there (§7.3)
+	// #/schemas/Tree                                               SDK resolves                 lookup resolves
+	// #/schemas/Tree/properties/children                           SDK fails OBI-D-12           lookup no target: inside a schema that declares $id (§7.3)
+	// #task                                                        SDK resolves                 lookup resolves
+	// #t%61sk                                                      SDK resolves                 lookup resolves
+	// #tree                                                        SDK fails OBI-D-12           lookup no target: no plain name tree in the document resource
+	// #%FF                                                         SDK fails OBI-D-12           lookup no target: its fragment does not decode to UTF-8
+	// tree.json#/properties/children                               SDK fails OBI-D-05           lookup no target: neither absolute nor same-document (OBI-D-05)
+	// https://example.com/schemas/tree.json#/properties/children   SDK resolves                 lookup resolves
+	// #/schemas/A/properties/x                                     SDK fails OBI-D-12           lookup no target: inside a schema that declares $id (§7.3)
+	// https://ex.test/a#/properties/x/properties/y                 SDK resolves                 lookup resolves
+	// https://ex.test/a#n                                          SDK no target (undefined)    lookup no target: the plain name n is declared more than once, so the result is undefined (§7.4)
+	// #n                                                           SDK no target (undefined)    lookup no target: the plain name n is declared more than once, so the result is undefined (§7.4)
+	// #n                                                           SDK no target (undefined)    lookup no target: the plain name n is declared more than once, so the result is undefined (§7.4)
+	// agree: 23 of 23
+}
+
 // `ob schema rename <obi> Task Todo` and `ob operation rename <obi> a alpha`
 // on the lookup, against the lab's rewrite.
 func Example_cliSchemaRename() {
-	_, view, ix := referencesDocument()
-	for _, line := range retarget(view, ix, "/schemas/Task", "/schemas/Todo") {
+	_, view, refs, _ := lookUp(referencesOBI)
+	for _, line := range retarget(view, refs, "/schemas/Task", "/schemas/Todo") {
 		fmt.Println(line)
 	}
 	schemas := view["schemas"].(map[string]any)
@@ -1338,8 +1587,8 @@ func Example_cliSchemaRename() {
 	fmt.Println("ordinary data untouched:", string(renamed.Sources["s"].Content), string(renamed.Operations["a"].Examples["e"].Input), string(renamed.Extensions["x-note"]))
 
 	// Renaming an operation moves the schemas at its input and output too.
-	_, view, ix = referencesDocument()
-	for _, line := range retarget(view, ix, "/operations/a", "/operations/alpha") {
+	_, view, refs, _ = lookUp(referencesOBI)
+	for _, line := range retarget(view, refs, "/operations/a", "/operations/alpha") {
 		fmt.Println(line)
 	}
 	operations := view["operations"].(map[string]any)
@@ -1350,10 +1599,11 @@ func Example_cliSchemaRename() {
 
 	// The lab's rewrite of "#/schemas/Task": it writes into content, an
 	// example, an x- member, and a reference inside the $id resource, and
-	// misses the percent-encoded one.
-	_, view, _ = referencesDocument()
+	// misses both percent-encoded spellings.
+	_, view, _, _ = lookUp(referencesOBI)
 	fmt.Println("lab rewrite writes:", labRewrite(view, nil, "#/schemas/Task"))
 	// Output:
+	// /operations/d/output/$ref: #%2Fschemas%2FTask -> #/schemas/Todo
 	// /schemas/List/items/$ref: #/schemas/T%61sk -> #/schemas/Todo
 	// /schemas/Task/properties/next/$ref: #/schemas/Task -> #/schemas/Todo
 	// after schema rename: conformant
@@ -1365,53 +1615,62 @@ func Example_cliSchemaRename() {
 
 // `ob schema remove <obi> <name>` refuses while a reference outside the
 // schema lands in it, whatever the spelling: a pointer, an anchor, or an $id.
+// Initial targets are not the whole answer: a $dynamicRef can resolve to any
+// schema in the dynamic scope that declares its $dynamicAnchor, so the CLI's
+// conservative policy also refuses to remove a schema declaring a
+// $dynamicAnchor that a $dynamicRef outside it names.
 func Example_cliSchemaRemove() {
-	doc, _, ix := referencesDocument()
-	referrers := func(name string) []string {
+	removable := func(ix *refIndex, refs []docRef, name string) string {
 		root := pointerOf("schemas", name)
-		var out []string
-		for _, r := range ix.refs {
+		var by []string
+		for _, r := range refs {
 			if !under(r.At, root) && r.Target != "" && under(r.Target, root) {
-				out = append(out, r.At)
+				by = append(by, r.At)
 			}
 		}
-		return out
+		if len(by) > 0 {
+			return fmt.Sprintf("refused: referenced from %v", by)
+		}
+		for _, declaration := range ix.dynamic {
+			if !under(declaration.at, root) {
+				continue
+			}
+			for _, r := range refs {
+				if !under(r.At, root) && r.dynamicName() == declaration.name {
+					return fmt.Sprintf("refused: %s declares $dynamicAnchor %s, which %s may resolve to dynamically", declaration.at, declaration.name, r.At)
+				}
+			}
+		}
+		return "removable"
 	}
+	_, _, refs, ix := lookUp(referencesOBI)
 	for _, name := range []string{"Task", "Wrapped", "Tree", "List"} {
-		fmt.Println(name, referrers(name))
+		fmt.Println(name, removable(ix, refs, name))
 	}
-	// The lab's answer (nxSchemaReferrers): the serialized text of each
-	// operation and other schema holding "#/schemas/Task".
-	var lab []string
-	for _, key := range slices.Sorted(maps.Keys(doc.Operations)) {
-		text, _ := json.Marshal(doc.Operations[key])
-		if bytes.Contains(text, []byte(`"#/schemas/Task"`)) {
-			lab = append(lab, "operation "+key)
-		}
-	}
-	for _, key := range slices.Sorted(maps.Keys(doc.Schemas)) {
-		text, _ := json.Marshal(doc.Schemas[key])
-		if key != "Task" && bytes.Contains(text, []byte(`"#/schemas/Task"`)) {
-			lab = append(lab, "schema "+key)
-		}
-	}
-	fmt.Println("lab says Task is referenced by:", lab)
+	// The SDK's scope-wrapper fixture: no reference targets Override, yet
+	// removing it changes what inDocument accepts, in a document that stays
+	// conformant.
+	_, _, refs, ix = lookUp(dynamicOBI)
+	fmt.Println("Override", removable(ix, refs, "Override"))
 	// Output:
-	// Task [/operations/a/input/$ref /schemas/List/items/$ref]
-	// Wrapped [/operations/b/output/$ref]
-	// Tree []
-	// List [/operations/a/output/$ref]
-	// lab says Task is referenced by: [operation a schema Wrapped]
+	// Task refused: referenced from [/operations/a/input/$ref /operations/d/output/$ref /schemas/List/items/$ref]
+	// Wrapped refused: referenced from [/operations/b/output/$ref]
+	// Tree removable
+	// List refused: referenced from [/operations/a/output/$ref]
+	// Override refused: /schemas/Override declares $dynamicAnchor item, which /schemas/List/items/$dynamicRef may resolve to dynamically
 }
 
 // `ob merge <obi> <from> --operation <key>` brings the named schemas an
 // operation's schemas reach, transitively; a cycle ends where it began. A
 // target in another operation's schema, and an unresolved reference, are the
-// merge policy's to decide, so the lookup only reports them.
+// merge policy's to decide, so the closure only reports them. A $dynamicRef
+// in the closure makes it incomplete: the schemas it may resolve to depend on
+// the dynamic scope, which the lookup does not resolve, so the CLI's
+// conservative policy refuses the merge and names the candidates.
 func Example_cliMergeClosure() {
-	_, _, ix := referencesDocument()
-	closure := func(key string) (schemas, operations, unresolved []string) {
+	closure := func(ix *refIndex, refs []docRef, key string) string {
 		visited := map[string]bool{}
+		var schemas, operations, unresolved, dynamic []string
 		queue := []string{pointerOf("operations", key, "input"), pointerOf("operations", key, "output")}
 		for len(queue) > 0 {
 			here := queue[0]
@@ -1420,9 +1679,18 @@ func Example_cliMergeClosure() {
 				continue
 			}
 			visited[here] = true
-			for _, r := range ix.refs {
+			for _, r := range refs {
 				if !under(r.At, here) {
 					continue
+				}
+				if name := r.dynamicName(); name != "" {
+					var candidates []string
+					for _, declaration := range ix.dynamic {
+						if declaration.name == name {
+							candidates = append(candidates, declaration.at)
+						}
+					}
+					dynamic = append(dynamic, fmt.Sprintf("%s may resolve to %v", r.At, candidates))
 				}
 				tokens := strings.Split(r.Target, "/")
 				switch {
@@ -1440,19 +1708,64 @@ func Example_cliMergeClosure() {
 			}
 		}
 		slices.Sort(schemas)
-		return schemas, operations, unresolved
+		if len(dynamic) > 0 {
+			return fmt.Sprintf("refused, incomplete: %v", dynamic)
+		}
+		return fmt.Sprintf("schemas %v, other operations %v, unresolved %v", schemas, operations, unresolved)
 	}
-	for _, key := range []string{"a", "b", "c"} {
-		schemas, operations, unresolved := closure(key)
-		fmt.Printf("%s: schemas %v, other operations %v, unresolved %v\n", key, schemas, operations, unresolved)
+	_, _, refs, ix := lookUp(referencesOBI)
+	for _, key := range []string{"a", "b", "c", "d"} {
+		fmt.Printf("%s: %s\n", key, closure(ix, refs, key))
 	}
+	_, _, refs, ix = lookUp(dynamicOBI)
+	fmt.Printf("inDocument: %s\n", closure(ix, refs, "inDocument"))
 	// Output:
 	// a: schemas [List Task], other operations [], unresolved []
 	// b: schemas [Wrapped], other operations [/operations/a/output], unresolved [/schemas/Wrapped/$defs/x/$ref]
 	// c: schemas [], other operations [], unresolved [/operations/c/input/$ref]
+	// d: schemas [Task], other operations [], unresolved []
+	// inDocument: refused, incomplete: [/schemas/List/items/$dynamicRef may resolve to [/schemas/List/$defs/item /schemas/Override]]
 }
 
-// ---------------------------------- a minimal evaluator (C1 item F17)
+// The lookup's whole-call failures, which per-reference Unresolved cannot
+// carry: a version this lookup does not interpret, a document declaring no
+// valid version, a document that cannot be encoded, and an index cut short
+// at the nesting limit, which returns what it found and an error. Only a nil
+// error makes an empty result mean "no references".
+func Example_cliReferenceFailures() {
+	report := func(name string, doc *openbindings.Interface) {
+		refs, _, err := referencesOf(doc)
+		var refusal *openbindings.VersionRefusalError
+		switch {
+		case errors.As(err, &refusal):
+			fmt.Println(name+": refused, version", refusal.Version)
+		case errors.Is(err, errIncomplete):
+			fmt.Println(name+":", len(refs), "references found, and incomplete")
+		case err != nil:
+			fmt.Println(name+":", err)
+		default:
+			fmt.Println(name+":", len(refs), "references, complete")
+		}
+	}
+	report("next version", &openbindings.Interface{OpenBindings: "0.3.0", Operations: map[string]openbindings.Operation{}})
+	report("no version", &openbindings.Interface{OpenBindings: "0.2", Operations: map[string]openbindings.Operation{}})
+	report("unencodable", &openbindings.Interface{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: map[string]any{"maximum": math.NaN()}}}})
+	deep := strings.Repeat(`{"not":`, 300) + `{"$ref":"#/schemas/S"}` + strings.Repeat(`}`, 300)
+	var deepDoc openbindings.Interface
+	if err := json.Unmarshal([]byte(`{"openbindings":"0.2.0","schemas":{"S":{"type":"string"}},"operations":{"op":{"input":`+deep+`,"output":{"$ref":"#/schemas/S"}}}}`), &deepDoc); err != nil {
+		panic(err)
+	}
+	report("deep", &deepDoc)
+	report("no references", &openbindings.Interface{OpenBindings: "0.2.0", Operations: map[string]openbindings.Operation{"op": {Input: true}}})
+	// Output:
+	// next version: refused, version 0.3.0
+	// no version: the document declares no valid version ("0.2"), so it is not interpreted
+	// unencodable: the document cannot be encoded: json: error calling MarshalJSON for type *openbindings.Interface: json: error calling MarshalJSON for type openbindings.Operation: json: unsupported value: NaN
+	// deep: 1 references found, and incomplete
+	// no references: 0 references, complete
+}
+
+// ---------------------------------- C1 item F17 (evaluator cost)
 
 // typeOnly is the smallest evaluator that keeps the evaluator contract: it
 // decides a schema whose only assertion is "type" with one type name,
