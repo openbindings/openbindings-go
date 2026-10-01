@@ -117,6 +117,12 @@ func TestKitCatchesFaults(t *testing.T) {
 			}
 			return nil
 		}}, Options{}, "refusal sentinels"},
+		"the inconclusive sentinel": {naive{validate: func(_ context.Context, _ any, answer error) error {
+			if answer != nil {
+				return fmt.Errorf("naive: %w", errors.Join(answer, openbindings.ErrInconclusive))
+			}
+			return nil
+		}}, Options{}, "refusal sentinels"},
 		"its own deadline": {naive{validate: func(context.Context, any, error) error { return context.DeadlineExceeded }}, Options{}, "context error while its ctx is live"},
 		"a spelling dependence": {naive{compile: func(bundle openbindings.SchemaBundle, compiled openbindings.CompiledSchema) (openbindings.CompiledSchema, error) {
 			if bytes.Contains(bundle.Document, []byte("contract.invalid")) {

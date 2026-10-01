@@ -354,7 +354,8 @@ func (k *kit) checkPaths(g group, c testCase, spellings [2][]string, counts *tal
 
 // checkAnswer checks an error the evaluator returned against its contract:
 // it never holds a *NoVerdictError or matches ErrNoVerdict, ErrUndefined,
-// ErrNoValueContract, or ErrOperationNotFound; it matches ErrMismatch only by
+// ErrNoValueContract, ErrOperationNotFound, or ErrInconclusive; it matches
+// ErrMismatch only by
 // holding a *MismatchError, which Compile's errors never hold; and it matches
 // a context error only when ctx is done.
 func (k *kit) checkAnswer(id string, err error, fromCompile bool, ctx context.Context) {
@@ -367,7 +368,7 @@ func (k *kit) checkAnswer(id string, err error, fromCompile bool, ctx context.Co
 	switch {
 	case errors.As(err, &refusal):
 		k.t.Errorf("%s: the evaluator returned a *NoVerdictError, core's own type: %v", id, err)
-	case errors.Is(err, openbindings.ErrNoVerdict), errors.Is(err, openbindings.ErrUndefined), errors.Is(err, openbindings.ErrNoValueContract), errors.Is(err, openbindings.ErrOperationNotFound):
+	case errors.Is(err, openbindings.ErrNoVerdict), errors.Is(err, openbindings.ErrUndefined), errors.Is(err, openbindings.ErrNoValueContract), errors.Is(err, openbindings.ErrOperationNotFound), errors.Is(err, openbindings.ErrInconclusive):
 		k.t.Errorf("%s: the evaluator's error matches one of core's refusal sentinels: %v", id, err)
 	case errors.Is(err, openbindings.ErrMismatch) && !holdsMismatch:
 		k.t.Errorf("%s: the evaluator's error matches ErrMismatch without holding a *MismatchError: %v", id, err)

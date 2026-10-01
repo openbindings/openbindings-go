@@ -98,7 +98,7 @@ func readAnswer(answer error) (reading answerReading, panicked error) {
 // matchesRefusal reports whether an evaluator's error speaks core's refusal
 // vocabulary, which the contract forbids it.
 func matchesRefusal(err error) bool {
-	for _, sentinel := range []error{ErrNoVerdict, ErrUndefined, ErrNoValueContract, ErrOperationNotFound} {
+	for _, sentinel := range []error{ErrNoVerdict, ErrUndefined, ErrNoValueContract, ErrOperationNotFound, ErrInconclusive} {
 		if errors.Is(err, sentinel) {
 			return true
 		}

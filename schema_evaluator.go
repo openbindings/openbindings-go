@@ -36,9 +36,11 @@ import (
 //     cancellation need not be prompt;
 //   - answers in three ways only: nil, an error holding a *MismatchError, or
 //     any other error, which never matches ErrNoVerdict, ErrUndefined,
-//     ErrNoValueContract, or ErrOperationNotFound, never holds a
-//     *NoVerdictError, and matches ErrMismatch only by holding a
-//     *MismatchError. Compile's errors hold no *MismatchError.
+//     ErrNoValueContract, ErrOperationNotFound, or ErrInconclusive, never
+//     holds a *NoVerdictError, and matches ErrMismatch only by holding a
+//     *MismatchError. Compile's errors hold no *MismatchError. Core reads an
+//     answer that breaks this as no verdict, and keeps the evaluator's error
+//     out of the returned error's chain, in Cause alone.
 //
 // A problem's InstanceLocation is an RFC 6901 pointer into the value, at the
 // instance location of the deepest failing keyword on its failing path:

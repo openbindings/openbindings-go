@@ -74,7 +74,8 @@ behavior and recognizable names, not identical signatures:
 - **Inconclusive, distinctly.** One category for a call that decided
   nothing: a parse that cannot read a document in full, a document declaring
   no valid version, an incomplete reference index, and value input that is
-  not JSON; never a conformance conclusion or a value verdict.
+  not JSON; never a conformance conclusion or a value verdict, and disjoint
+  from them whatever an evaluator or a value's own encoding says.
 - **Schema references.** Every `$ref` and `$dynamicRef` in the schemas a
   document contains, with location, keyword, value, base, initial target or
   why there is none, by the same lookup as OBI-D-12 and value validation;

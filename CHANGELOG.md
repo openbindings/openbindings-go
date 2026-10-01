@@ -75,6 +75,14 @@
   `parse document: ...`, read `openbindings: inconclusive: ...`; value
   validation's errors for input that is not JSON read
   `openbindings: inconclusive: ...`.
+- **Value validation's outcome categories stay disjoint.** `ErrInconclusive`
+  joins the sentinels the evaluator contract reserves for core: an
+  evaluator's error matching it is read as no verdict and kept in `Cause`
+  alone, as one matching `ErrUndefined` is, and openbindingstest reports
+  it. A Go value whose own encoding fails is not a JSON value whatever its
+  marshaler says: the marshaler's error is kept as text, so the result
+  matches `ErrInconclusive` alone, where a marshaler returning a sentinel or
+  a `*NoVerdictError` used to make it match that category too.
 - **Messages name the package once.** `ValidationError` and the model's
   decode errors begin `openbindings:`, as the package's other errors do, and
   a no-verdict's own cause (no value contract, an undefined result) no

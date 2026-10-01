@@ -55,7 +55,11 @@ func readGoValue(value any) (any, error) {
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return nil, fmt.Errorf("not a JSON value: %w", err)
+		// The error can be a marshaler's own, which may say anything, a
+		// sentinel or a *NoVerdictError of this package included. It is kept
+		// as text, so the failure matches no category but the one notAValue
+		// gives it.
+		return nil, fmt.Errorf("not a JSON value: %v", err)
 	}
 	return readJSONText(data)
 }
@@ -81,12 +85,15 @@ func base64Bytes(value any) bool {
 	return !marshals(reflect.PointerTo(v.Type().Elem()))
 }
 
-// notAValue frames a failure to read a value: a *NoVerdictError as it is,
-// and input that is not one JSON value as ErrInconclusive, since there is no
-// value to judge.
+// notAValue frames a failure to read a value: core's own refusal to read it
+// exactly, a *NoVerdictError readJSONText returns itself, as it is, and input
+// that is not one JSON value as ErrInconclusive, since there is no value to
+// judge. The refusal is told apart by its type, not searched for in a chain,
+// and the other failures hold no error from outside core, so the result
+// matches exactly one of ErrNoVerdict and ErrInconclusive.
 func notAValue(err error) error {
-	if refusal := (*NoVerdictError)(nil); errors.As(err, &refusal) {
-		return err
+	if refusal, isRefusal := err.(*NoVerdictError); isRefusal {
+		return refusal
 	}
 	return fmt.Errorf("%w: %w", ErrInconclusive, err)
 }
