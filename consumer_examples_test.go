@@ -872,7 +872,8 @@ func Example_cliMergeIdentical() {
 // carries schema numbers as json.Number, so they come back as written; what
 // the caller adds in Go is written as Go encodes it, and a json.RawMessage
 // held in the any-typed member is written as given. A number is lost only
-// when a caller decodes schema text into float64 itself.
+// when a caller decodes schema text into float64 itself. The any-typed
+// member has its own hazard: a typed nil held there is a present null.
 func Example_producerSchemaEdit() {
 	iface, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"setLimit":{"input":
 	  {"type":"object","properties":{"limit":{"type":"integer","maximum":9007199254740993,"multipleOf":1.0,"minimum":1e0}}}}}}`))
@@ -928,6 +929,16 @@ func Example_producerSchemaEdit() {
 	type rawSchema json.RawMessage
 	b, _ := json.Marshal(struct{ Input rawSchema }{rawSchema(`{"type":"string"}`)})
 	fmt.Println(string(b))
+
+	// The any-typed member's own hazard: absence is a nil interface, so a
+	// typed nil held there (a nil json.RawMessage or a nil map) is a present
+	// null, which OBI-D-02 and OBI-D-10 then report.
+	for _, held := range []openbindings.JSONSchema{nil, json.RawMessage(nil), map[string]any(nil)} {
+		doc := openbindings.Interface{OpenBindings: openbindings.AuthoringVersion, Operations: map[string]openbindings.Operation{"o": {Input: held}}}
+		out, _ := json.Marshal(doc)
+		report, _ := doc.Validate()
+		fmt.Printf("%T: %s %s\n", held, out, report.Conclusion)
+	}
 	// Output:
 	// "maximum":9007199254740993 true
 	// "multipleOf":1.0 true
@@ -937,6 +948,9 @@ func Example_producerSchemaEdit() {
 	// read back and written again: same bytes false same value true stable after true
 	// {"maximum":9007199254740992} {"maximum":9007199254740993}
 	// {"Input":"eyJ0eXBlIjoic3RyaW5nIn0="}
+	// <nil>: {"openbindings":"0.2.0","operations":{"o":{}}} conformant
+	// json.RawMessage: {"openbindings":"0.2.0","operations":{"o":{"input":null}}} non-conformant
+	// map[string]interface {}: {"openbindings":"0.2.0","operations":{"o":{"input":null}}} non-conformant
 }
 
 // ------------------------------------------- the formatting boundary (F1)
