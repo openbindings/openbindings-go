@@ -103,11 +103,14 @@ type ValidationReport struct {
 	// in the order the validator records them, which is the same every time
 	// for the same document: its checks run in a fixed sequence, and the
 	// document schema's findings (OBI-D-02), which its library reports in no
-	// fixed order, are ordered by where the failing keyword applies, by
-	// reference token, then by message. A report is as large as what it
-	// reports: each finding's Path is as long as its location is deep, so a
-	// deeply nested document with a finding at every level makes a report
-	// that grows with the square of its depth. Findings are not capped.
+	// fixed order, are ordered by where the failing keyword applies (the
+	// object, for a member the schema does not allow; the member, for a
+	// member name it refuses; the value otherwise), comparing reference
+	// tokens one by one as strings, so /a/10 comes before /a/2, then by
+	// message. A report is as large as what it reports: each finding's Path
+	// is as long as its location is deep, so a deeply nested document with a
+	// finding at every level makes a report that grows with the square of
+	// its depth. Findings are not capped.
 	Findings []Finding
 }
 

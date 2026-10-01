@@ -224,7 +224,9 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 		case !located[*problem.Name]:
 			// A member name the schema refuses is located where the document
 			// holds it, once per such member however often it is reported.
-			// namedMaps holds every map whose names the schema constrains
+			// namedMaps holds every map whose names the schema constrains,
+			// and all refuse the same names, so a name refused in one is
+			// refused in every map holding it
 			// (TestDocumentSchema_NamedMapsAreEveryConstrainedMap); a name
 			// found in none is still a violation, of the whole document.
 			located[*problem.Name] = true

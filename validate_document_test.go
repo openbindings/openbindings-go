@@ -429,8 +429,9 @@ func TestValidateDocument_KeyFindingsAreLocatedAtTheKey(t *testing.T) {
 }
 
 // Validation records the same findings in the same order every time, for a
-// document with many sibling problems across its maps, whether it is given
-// as bytes, decoded, or built in memory. The document schema check, whose
+// document with many sibling problems across its maps, given as bytes,
+// decoded (json.Unmarshal carries its unknown members), or built in memory,
+// whose encoding is checked as bytes too. The document schema check, whose
 // library walks a document's objects in no fixed order, orders its findings
 // by where the failing keyword applies, then by message.
 func TestValidate_FindingsAreDeterministic(t *testing.T) {
@@ -438,14 +439,37 @@ func TestValidate_FindingsAreDeterministic(t *testing.T) {
 		"names and unknown members":            `{"openbindings":"0.2.0","operations":{"op":{"zz":1,"aa":2,"examples":{"e<1>":{}}}}}`,
 		"an empty name beside unknown members": `{"openbindings":"0.2.0","zz":1,"aa":2,"operations":{"":{},"op":{"zz":1,"aa":2}}}`,
 		"problems in every map": `{"openbindings":"0.2.0","zz":1,"aa":2,
-			"schemas":{"s<1>":{"type":"nope","$ref":"#/nowhere"},"ok":{"properties":{"a":{"type":3}}}},
+			"schemas":{"s<1>":{"type":"nope","$ref":"#/nowhere"},"ok":{"properties":{"a":{"type":3}}},"":{}},
 			"operations":{"o<1>":{"bad":1,"examples":{"e<1>":{},"e 2":{"x":1}},"aliases":["a","a","b<"]},
 				"o2":{"zz":1,"aa":[],"input":{"$ref":"#/schemas/missing"},"examples":{"f<":{}}},
-				"o3":{"aliases":["b<"],"tags":[1]}},
-			"dependencies":{"d<":{"operation":"none","kinds":[]},"d2":{"operation":3}},
+				"o3":{"aliases":["b<"],"tags":["t","t"]}},
+			"dependencies":{"d<":{"operation":"none","kinds":[]},"d2":{"operation":"o2","kinds":["k","k"]}},
 			"sources":{"s<":{"kind":""},"s2":{"kind":"k","zz":1}},
-			"bindings":{"b<":{"operation":"o9","source":"s9","preference":1.5},"b2":{"operation":"o2","source":"s2","aa":1,"zz":2},
-				"b3":{"operation":"o2","source":"s2","preference":1e400}}}`,
+			"bindings":{"b<":{"operation":"o9","source":"s9"},"b2":{"operation":"o2","source":"s2","aa":1,"zz":2},
+				"":{"operation":"o2","source":"s2"}}}`,
+	}
+	outcome := func(report ValidationReport, err error) string {
+		return fmt.Sprintf("%v\n%v", report.Findings, err)
+	}
+	stable := func(name string, validate func() (ValidationReport, error)) {
+		t.Helper()
+		first := outcome(validate())
+		for i := range 200 {
+			if got := outcome(validate()); got != first {
+				t.Fatalf("%s, run %d:\n%s\nwant\n%s", name, i, got, first)
+			}
+		}
+	}
+	for name, text := range documents {
+		stable(name+", as bytes", func() (ValidationReport, error) {
+			_, report, err := ValidateDocument([]byte(text))
+			return report, err
+		})
+		var doc Document
+		if err := json.Unmarshal([]byte(text), &doc); err != nil {
+			t.Fatalf("%s: the model does not carry it, so its decoded route is not exercised: %v", name, err)
+		}
+		stable(name+", decoded", doc.Validate)
 	}
 	built := Document{OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{"s<1>": map[string]any{"type": "nope"}, "s 2": map[string]any{"$ref": "#/nowhere"}},
@@ -453,39 +477,20 @@ func TestValidate_FindingsAreDeterministic(t *testing.T) {
 			"o<1>": {Aliases: []string{"a", "a"}, Examples: map[string]OperationExample{"e<1>": {}, "e 2": {}}},
 			"o 2":  {Input: map[string]any{"$ref": "#/schemas/missing"}, LosslessFields: LosslessFields{Unknown: map[string]json.RawMessage{"zz": json.RawMessage(`1`), "aa": json.RawMessage(`2`)}}},
 		},
-		Bindings: map[string]Binding{"b<": {Operation: "o9", Source: "s9"}, "b 2": {Operation: "o 2", Source: "s 2"}},
+		Bindings: map[string]Binding{
+			"b<":  {Operation: "o9", Source: "s9", Preference: Present(int64(maxPreference + 1))},
+			"b 2": {Operation: "o 2", Source: "s 2", Preference: Present(int64(-maxPreference - 1))},
+		},
 	}
-	outcome := func(report ValidationReport, err error) string {
-		return fmt.Sprintf("%v\n%v", report.Findings, err)
+	stable("built in memory", built.Validate)
+	encoded, err := json.Marshal(built)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, text := range documents {
-		_, report, err := ValidateDocument([]byte(text))
-		first := outcome(report, err)
-		doc, err := ParseDocument([]byte(text))
-		if err != nil {
-			doc = nil // a document the model refuses is judged as bytes alone
-		}
-		var firstDecoded string
-		if doc != nil {
-			firstDecoded = outcome(doc.Validate())
-		}
-		for i := range 200 {
-			if _, report, err := ValidateDocument([]byte(text)); outcome(report, err) != first {
-				t.Fatalf("%s, as bytes, run %d:\n%s\nwant\n%s", name, i, outcome(report, err), first)
-			}
-			if doc != nil {
-				if got := outcome(doc.Validate()); got != firstDecoded {
-					t.Fatalf("%s, decoded, run %d:\n%s\nwant\n%s", name, i, got, firstDecoded)
-				}
-			}
-		}
-	}
-	first := outcome(built.Validate())
-	for i := range 200 {
-		if got := outcome(built.Validate()); got != first {
-			t.Fatalf("built in memory, run %d:\n%s\nwant\n%s", i, got, first)
-		}
-	}
+	stable("built in memory, as bytes", func() (ValidationReport, error) {
+		_, report, err := ValidateDocument(encoded)
+		return report, err
+	})
 }
 
 // OBI-D-06 governs every schema in the document, inside schema resources too:

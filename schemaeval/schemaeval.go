@@ -21,10 +21,10 @@
 // library (v6.0.3) records a failed propertyNames' instance location without
 // copying it, so for an object below the value's top level a later sibling
 // can overwrite it, and which one depends on the order the library walks the
-// object's members, which is not fixed; so a failed propertyNames is located
-// at the root of the value, whatever object it applies to, with each name's
-// message in sorted order. openbindingstest checks it against the evaluator
-// contract.
+// object's members, which is not fixed; so each failed propertyNames keyword
+// is one problem, located at the root of the value whatever objects it
+// applies to, naming each invalid name once, in sorted order.
+// openbindingstest checks it against the evaluator contract.
 //
 // # Adapting another library
 //

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"maps"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -74,13 +75,13 @@ func TestDocumentSchema_NamedMapsAreEveryConstrainedMap(t *testing.T) {
 	if err := json.Unmarshal(openbindingsSchemaJSON, &document); err != nil {
 		t.Fatal(err)
 	}
-	constrained := 0
+	var constrained []any
 	var walk func(value any)
 	walk = func(value any) {
 		switch value := value.(type) {
 		case map[string]any:
-			if _, ok := value["propertyNames"]; ok {
-				constrained++
+			if names, ok := value["propertyNames"]; ok {
+				constrained = append(constrained, names)
 			}
 			for _, child := range value {
 				walk(child)
@@ -92,8 +93,15 @@ func TestDocumentSchema_NamedMapsAreEveryConstrainedMap(t *testing.T) {
 		}
 	}
 	walk(document)
-	if constrained != len(namedMaps) {
-		t.Fatalf("the document schema constrains the names of %d maps; namedMaps lists %d", constrained, len(namedMaps))
+	if len(constrained) != len(namedMaps) {
+		t.Fatalf("the document schema constrains the names of %d maps; namedMaps lists %d", len(constrained), len(namedMaps))
+	}
+	// A refused name is located at every named map holding it, which is
+	// right only while every map refuses the same names.
+	for _, names := range constrained[1:] {
+		if !reflect.DeepEqual(names, constrained[0]) {
+			t.Fatalf("the document schema constrains map names differently: %v and %v", constrained[0], names)
+		}
 	}
 	base := `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"s":{"kind":"k"}}`
 	for path, document := range map[string]string{
@@ -118,12 +126,12 @@ func TestDocumentSchema_NamedMapsAreEveryConstrainedMap(t *testing.T) {
 }
 
 // numberComparisons lists where a schema, or a subschema it describes, tells
-// numbers apart other than by type, by equality, and by comparison with
-// zero: a nonzero bound, a multipleOf, or a number in const or enum, each as
-// a JSON Pointer to the keyword. A stand-in for a number beyond the numeric
-// limits of schema evaluation keeps only those three
-// (schemacompiler.Substitute).
-func numberComparisons(schema any) []string {
+// numbers apart other than by type and by equality: a bound (a zero bound
+// only unless withZero allows comparison with zero), a multipleOf, or a
+// number in const or enum, each as a JSON Pointer to the keyword. A stand-in
+// for a number beyond the numeric limits of schema evaluation keeps type,
+// equality, and comparison with zero (schemacompiler.Substitute).
+func numberComparisons(schema any, withZero bool) []string {
 	var holdsNumber func(value any) bool
 	holdsNumber = func(value any) bool {
 		switch value := value.(type) {
@@ -147,7 +155,7 @@ func numberComparisons(schema any) []string {
 			value := object[keyword]
 			switch keyword {
 			case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum":
-				if value != float64(0) {
+				if !withZero || value != float64(0) {
 					found = append(found, jsonpointer.Format(append(slices.Clip(tokens), keyword)...))
 				}
 			case "multipleOf":
@@ -174,8 +182,11 @@ func numberComparisons(schema any) []string {
 // fails here, for review.
 func TestMetaSchema_ComparesNumbersOnlyWithZero(t *testing.T) {
 	probe := map[string]any{"properties": map[string]any{"minimum": map[string]any{"minimum": float64(1)}, "b": map[string]any{"exclusiveMinimum": float64(0), "enum": []any{"s", float64(2)}}}}
-	if got, want := numberComparisons(probe), []string{"/properties/b/enum", "/properties/minimum/minimum"}; !slices.Equal(got, want) {
+	if got, want := numberComparisons(probe, true), []string{"/properties/b/enum", "/properties/minimum/minimum"}; !slices.Equal(got, want) {
 		t.Fatalf("the walk found %v, want %v", got, want)
+	}
+	if got, want := numberComparisons(probe, false), []string{"/properties/b/enum", "/properties/b/exclusiveMinimum", "/properties/minimum/minimum"}; !slices.Equal(got, want) {
+		t.Fatalf("the walk with zero found %v, want %v", got, want)
 	}
 	walked := 0
 	err := fs.WalkDir(metaSchemaFiles, ".", func(path string, entry fs.DirEntry, err error) error {
@@ -191,7 +202,7 @@ func TestMetaSchema_ComparesNumbersOnlyWithZero(t *testing.T) {
 			return err
 		}
 		walked++
-		if found := numberComparisons(metaSchema); len(found) > 0 {
+		if found := numberComparisons(metaSchema, true); len(found) > 0 {
 			t.Errorf("%s compares numbers at %v", path, found)
 		}
 		return nil
@@ -207,14 +218,15 @@ func TestMetaSchema_ComparesNumbersOnlyWithZero(t *testing.T) {
 // The document schema tells numbers apart only by type and equality, which a
 // stand-in keeps (validateAgainstOBISchema), except at a binding's
 // preference, which validation decides exactly. A schema update comparing
-// numbers anywhere else fails here, and the preference range is §5.3's.
+// numbers anywhere else, with zero included, fails here, and the preference
+// range is §5.3's.
 func TestDocumentSchema_ComparesNumbersOnlyAtAPreference(t *testing.T) {
 	var document any
 	if err := json.Unmarshal(openbindingsSchemaJSON, &document); err != nil {
 		t.Fatal(err)
 	}
 	preference := "/$defs/BindingEntry/properties/preference"
-	if got, want := numberComparisons(document), []string{preference + "/maximum", preference + "/minimum"}; !slices.Equal(got, want) {
+	if got, want := numberComparisons(document, false), []string{preference + "/maximum", preference + "/minimum"}; !slices.Equal(got, want) {
 		t.Fatalf("the document schema compares numbers at %v, want %v", got, want)
 	}
 	bounds, _ := jsonpointer.Resolve(document, preference)

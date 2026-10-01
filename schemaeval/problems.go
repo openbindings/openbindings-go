@@ -2,6 +2,7 @@ package schemaeval
 
 import (
 	"errors"
+	"maps"
 	"math/big"
 	"slices"
 	"strings"
@@ -23,12 +24,29 @@ var kindPrinter = message.NewPrinter(language.English)
 // additionalProperties is one problem per member; an anyOf, or a oneOf no
 // alternative satisfies, is one problem at its own location, stating what
 // each alternative lacked; contains and not are located at the value they
-// apply to. A failed propertyNames is located at the root of the value,
-// whatever object it applies to: v6.0.3 records its instance location
-// without copying it, so below the top level a later sibling can overwrite
-// it, and which sibling depends on the order the library walks an object's
-// members, which is not fixed.
+// apply to.
+//
+// A failed propertyNames keyword is one problem, wherever in the tree and on
+// however many objects it fails, located at the root of the value and naming
+// each invalid name once, in sorted order: v6.0.3 records its instance
+// location without copying it, so below the top level a later sibling can
+// overwrite it (which sibling depends on the order the library walks an
+// object's members, which is not fixed), and how it groups the failures
+// depends on the objects' shapes.
 func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []openbindings.SchemaProblem {
+	names := map[string][]string{}
+	out := projected(ve, standsFor, names)
+	for _, keyword := range slices.Sorted(maps.Keys(names)) {
+		messages := slices.Compact(slices.Sorted(slices.Values(names[keyword])))
+		out = append(out, openbindings.SchemaProblem{InstanceLocation: "", Message: joinMessages(messages)})
+	}
+	return out
+}
+
+// projected projects an error tree as problems does, but gathers each failed
+// propertyNames into names, by its keyword's schema URL, for problems to
+// report once per keyword.
+func projected(ve *jsonschema.ValidationError, standsFor map[string]string, names map[string][]string) []openbindings.SchemaProblem {
 	at := pointerOf(ve.InstanceLocation...)
 	switch k := ve.ErrorKind.(type) {
 	case *kind.AnyOf, *kind.OneOf:
@@ -53,7 +71,8 @@ func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []ope
 			messages = []string{ve.ErrorKind.LocalizedString(kindPrinter)}
 		}
 		slices.Sort(messages)
-		return []openbindings.SchemaProblem{{InstanceLocation: "", Message: "the member name " + quote(k.Property) + " is invalid: " + joinMessages(messages)}}
+		names[ve.SchemaURL] = append(names[ve.SchemaURL], "the member name "+quote(k.Property)+" is invalid: "+joinMessages(messages))
+		return nil
 	case *kind.Format:
 		if strings.HasPrefix(k.Want, "schemaeval-bound-") {
 			return []openbindings.SchemaProblem{{InstanceLocation: at, Message: k.Err.Error()}}
@@ -80,26 +99,8 @@ func problems(ve *jsonschema.ValidationError, standsFor map[string]string) []ope
 		return []openbindings.SchemaProblem{{InstanceLocation: at, Message: ve.ErrorKind.LocalizedString(kindPrinter)}}
 	}
 	var out []openbindings.SchemaProblem
-	// The library reports propertyNames once per invalid name, in the order
-	// it walks the object's members, which is not fixed; one keyword, its
-	// schema's, fails once, with each name's message in sorted order.
-	names := map[string]int{}
-	merged := map[int][]string{}
 	for _, cause := range ve.Causes {
-		found := problems(cause, standsFor)
-		if _, isNames := cause.ErrorKind.(*kind.PropertyNames); isNames && len(found) == 1 {
-			if i, seen := names[cause.SchemaURL]; seen {
-				merged[i] = append(merged[i], found[0].Message)
-				continue
-			}
-			names[cause.SchemaURL] = len(out)
-			merged[len(out)] = []string{found[0].Message}
-		}
-		out = append(out, found...)
-	}
-	for i, messages := range merged {
-		slices.Sort(messages)
-		out[i].Message = joinMessages(messages)
+		out = append(out, projected(cause, standsFor, names)...)
 	}
 	return out
 }
