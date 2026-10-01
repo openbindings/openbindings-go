@@ -12,15 +12,19 @@ through bindings and named dependencies whose implementations are supplied by
 its environment, independently of protocol. See the
 [spec](https://github.com/openbindings/spec) for details.
 
-**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.CheckVersion(version)` makes the version decision (OBI-T-04) for a caller holding a document it decoded itself: it returns the `*VersionRefusalError` that `ParseDocument`, `ValidateDocument`, and `Document.Validate` return for a well-formed version outside the supported set, and nil otherwise. Nil means only that there is no refusal: a malformed version declares no version, which is an OBI-D-09 violation, never a refusal. `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
+**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.CheckVersion(version)` makes the version decision (OBI-T-04) for a caller holding a document it decoded itself: it returns the `*VersionRefusalError` that `ParseDocument`, `ValidateDocument`, `Document.Validate`, `Document.References`, and `ValueContractCompiler.Resolve` return for a well-formed version outside the supported set, and nil otherwise. Nil means only that there is no refusal: a malformed version declares no version, which is an OBI-D-09 violation, never a refusal. `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
 
 > **Draft status:** this branch implements the unreleased 0.2 working draft.
 > The install command below describes the released package path; it does not
 > install this branch until `v0.2.0` is tagged.
 
 This implementation targets the Core 0.2 working draft on the spec's
-`release/0.2` branch, whose conformance corpus it passes; a validation report
-names the revision of that text it applied (`ValidationReport.Revision`).
+`release/0.2` branch, whose conformance corpus it passes but for one keyed
+corpus defect: scenario T09-S-01 expects conformant from evidence that omits
+OBI-D-12 and OBI-D-13, which OBI-T-09 rules out, so the harness holds this
+SDK to the corrected conclusion, undetermined, and reports the case as a
+keyed expected failure until the corpus is corrected. A validation report
+names the revision of the text it applied (`ValidationReport.Revision`).
 
 **Conformance:** `ValidateDocument(data)` validates a document's exact bytes
 and returns a `ValidationReport` in the vocabulary of
@@ -256,7 +260,7 @@ document contains, for a tool that renames, removes, or copies schemas:
 ```go
 refs, err := doc.References()
 if err != nil {
-    return err // refused, no valid version, or an index it could not complete
+    return err // refused, no valid version, cannot be encoded, or an index it could not complete
 }
 for _, r := range refs {
     fmt.Println(r.Location, r.Value, r.Target) // Target "" when it identifies no schema; Unresolved says why

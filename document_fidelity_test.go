@@ -498,6 +498,9 @@ func TestDocumentModel_MemberOrder(t *testing.T) {
 // writes them as held, in typed members, schemas, raw members, and kept
 // members alike. Text a member holds already escaped stays as written.
 func TestDocumentModel_HTMLEscapingFollowsTheEncoder(t *testing.T) {
+	// The escape is built from the backslash's code point so that no
+	// cleanup of the source can turn it into the character it escapes,
+	// which would leave this check comparing "<x>" with itself.
 	backslash := string(rune(92))
 	alreadyEscaped := `"` + backslash + `u003cx` + backslash + `u003e"`
 	doc := Document{

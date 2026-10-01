@@ -22,18 +22,26 @@ type Reference struct {
 	Value string
 	// Base is the identifier of the schema resource the keyword lies in,
 	// which Value resolves against (§7.2). It is "" in the document resource,
-	// whose base the document names nowhere, and in a resource whose $id
-	// gives it no identifier.
+	// whose base the document names nowhere, and also in a resource whose $id
+	// gives it no identifier, so an empty Base does not by itself place the
+	// keyword in the document resource: Location says where the keyword
+	// lies, and a schema at or above it that declares $id begins a resource
+	// of its own.
 	Base string
 	// Target is where the schema the initial lookup identifies lies in the
 	// document, as an RFC 6901 JSON Pointer from the document root; "" when
 	// the lookup identifies no schema there.
 	Target string
-	// Unresolved says why Target is "": the reference names a resource
-	// outside the document, no schema lies where it points, it points inside
-	// a schema resource from outside it, it names a plain name declared
-	// nowhere or more than once, or it is not a well-formed URI-reference.
-	// The text is advisory. It is "" when Target is set.
+	// Unresolved says why Target is "", for reasons such as these: the
+	// reference names a resource outside the document, a JSON Schema
+	// meta-schema included; no schema lies where it points; it points inside
+	// a schema resource from outside it; it names a plain name declared
+	// nowhere or more than once; its fragment does not decode to UTF-8; it is
+	// relative where its resource has no base to resolve it against; it is
+	// not a well-formed URI-reference; it names an identifier more than one
+	// resource carries in normal form, which this SDK's conservative policy
+	// refuses; or what it names lies deeper than the 256 levels this SDK
+	// indexes. The text is advisory. It is "" when Target is set.
 	Unresolved string
 }
 
@@ -44,8 +52,11 @@ type Reference struct {
 // reference in the document resource by OBI-D-12's own lookup (§7.2, §7.3),
 // and any other by JSON Schema 2020-12 resolution among the document's own
 // schema resources, whose identifiers are compared character for character
-// (§7.4). It fetches nothing, evaluates nothing, and changes nothing. Like
-// Validate, it reads the document the Document encodes.
+// (§7.4). A reference naming an identifier that more than one resource
+// carries in normal form is refused by this SDK's conservative policy, even
+// when one resource carries it character for character; §7.4 leaves that
+// case to JSON Schema. It fetches nothing, evaluates nothing, and changes
+// nothing. Like Validate, it reads the document the Document encodes.
 //
 // The schemas a document contains are those at its OBI positions (an
 // operation's input or output, an entry of schemas) and every subschema the
@@ -53,7 +64,8 @@ type Reference struct {
 // definitions and dependencies included. A $ref-shaped member anywhere else
 // (source or binding content, an example, an x- member) is data, not a
 // reference, and is not listed; neither is a $ref or $dynamicRef whose value
-// is not a string, which OBI-D-05 reports.
+// is not a string, which OBI-D-10 reports, and OBI-D-05 too in the document
+// resource.
 //
 // What a caller may conclude, given a nil error: every reference keyword in
 // the schemas the document contains, and where each one is; for each, the

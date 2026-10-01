@@ -33,7 +33,7 @@
   where a finding from `ValidateDocument` or `ParseDocument` lies in the
   input bytes (byte offset, line, and column, as `go/token` counts them): a
   member at its name, any other value at its first byte, and a break in
-  OBI-D-01 at the byte that breaks it. `Interface.Validate` reads no bytes,
+  OBI-D-01 at the byte that breaks it. `Document.Validate` reads no bytes,
   so its findings carry the zero `Position`.
 - **A validation report names the specification revision it applied
   (OBI-T-09).** `ValidationReport.Revision` is the commit of
@@ -124,7 +124,7 @@
 
 - **Validation takes no options (breaking, pre-1.0).** `ValidateOptions`
   is gone: no document rule takes anything an application supplies, so
-  `Interface.Validate()` and `ValidateDocument(data)` take no options
+  `Document.Validate()` and `ValidateDocument(data)` take no options
   parameter.
 
 - **Value validation takes an evaluator the application supplies (breaking,
@@ -195,7 +195,7 @@
     decided on the declared version.
   - `ValidationReport.Version` names the release whose text the SDK applies
     (0.2.0), not the patch release a document declares (OBI-T-09).
-  - `Interface.Validate` decides OBI-D-01 on the host object's
+  - `Document.Validate` decides OBI-D-01 on the host object's
     serialization, which is what a claim about a value in memory is about
     (§10), so a well-formed host object can conclude conformant. It judges
     the value, not the bytes it may have been decoded from.

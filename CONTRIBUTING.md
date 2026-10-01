@@ -43,7 +43,8 @@ pre-1.0 version policy.
 This SDK declares which spec versions it supports (§8.1) via:
 
 - `openbindings.SupportedVersions`, the supported set, and
-  `openbindings.IsSupportedVersion(v)`, which decides membership
+  `openbindings.CheckVersion(v)`, which refuses a well-formed version outside
+  it as every refusing entry point does
 - `openbindings.AuthoringVersion`, the version a document written with the
   SDK declares
 

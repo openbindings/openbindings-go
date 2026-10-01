@@ -65,9 +65,11 @@ behavior and recognizable names, not identical signatures:
 - **Names.** The document type is a document (`Document`), and the binding
   and dependency objects are a binding and a dependency, as the spec's §3
   names them; a dependency's kind check is "accepts" (`AcceptsKind`).
-- **Lookups on the document.** Resolving a name and finding an operation's
-  bindings by its key, sorted for presentation, with an alias, an unknown
-  key, and a missing document finding nothing (OBI-T-07).
+- **Lookups on the document.** Resolving a name to an operation against its
+  key and its aliases, with equal standing, where a name several operations
+  carry resolves to none (OBI-T-07); and finding an operation's bindings by
+  its key alone, sorted for presentation, where an alias or a key no
+  operation has finds nothing. Neither finds anything in a missing document.
 - **The version decision as a refusal.** A check that returns the same
   refusal every entry point returns, or none; no refusal for a text that
   declares no version (OBI-T-04). No exported SemVer validity predicate.

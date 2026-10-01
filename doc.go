@@ -46,10 +46,13 @@
 //
 // Every OBI declares its target spec version via the top-level openbindings
 // field. A document declaring a version [SupportedVersions] states, which is
-// every release of the 0.2 line, is interpreted, and every entry point
-// refuses one declaring another well-formed version (OBI-T-04);
-// [CheckVersion] makes that decision for a caller holding a document it
-// decoded itself. A document written with this SDK declares
+// every release of the 0.2 line, is interpreted. [ParseDocument],
+// [ValidateDocument], [Document.Validate], [Document.References], and
+// [ValueContractCompiler.Resolve] refuse one declaring another well-formed
+// version (OBI-T-04). [Document.ResolveOperation] and
+// [Document.OperationBindings] read the model as it is and refuse nothing,
+// so a caller holding a document it decoded itself makes the decision with
+// [CheckVersion]. A document written with this SDK declares
 // [AuthoringVersion].
 //
 // # Operations, Bindings, and References

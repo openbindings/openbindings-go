@@ -180,7 +180,7 @@ func TestValidSemver(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
 			if got := isValidSemver(c.in); got != c.want {
-				t.Errorf("IsValidSemver(%q) = %v, want %v", c.in, got, c.want)
+				t.Errorf("isValidSemver(%q) = %v, want %v", c.in, got, c.want)
 			}
 		})
 	}

@@ -96,10 +96,10 @@ type OperationExample struct {
 
 type operationExampleMembers OperationExample
 
-func (e *OperationExample) UnmarshalJSON(b []byte) error { return decodeExact(b, "example", e) }
+func (e *OperationExample) UnmarshalJSON(data []byte) error { return decodeExact(data, "example", e) }
 
-func (e *OperationExample) decodeVerified(b []byte) error {
-	return decodeObject(b, "example", (*operationExampleMembers)(e))
+func (e *OperationExample) decodeVerified(data []byte) error {
+	return decodeObject(data, "example", (*operationExampleMembers)(e))
 }
 
 func (e OperationExample) MarshalJSON() ([]byte, error) {
@@ -130,10 +130,10 @@ type Operation struct {
 
 type operationMembers Operation
 
-func (o *Operation) UnmarshalJSON(b []byte) error { return decodeExact(b, "operation", o) }
+func (o *Operation) UnmarshalJSON(data []byte) error { return decodeExact(data, "operation", o) }
 
-func (o *Operation) decodeVerified(b []byte) error {
-	return decodeObject(b, "operation", (*operationMembers)(o))
+func (o *Operation) decodeVerified(data []byte) error {
+	return decodeObject(data, "operation", (*operationMembers)(o))
 }
 
 func (o Operation) MarshalJSON() ([]byte, error) {
@@ -159,10 +159,10 @@ type Source struct {
 
 type sourceMembers Source
 
-func (s *Source) UnmarshalJSON(b []byte) error { return decodeExact(b, "source", s) }
+func (s *Source) UnmarshalJSON(data []byte) error { return decodeExact(data, "source", s) }
 
-func (s *Source) decodeVerified(b []byte) error {
-	return decodeObject(b, "source", (*sourceMembers)(s))
+func (s *Source) decodeVerified(data []byte) error {
+	return decodeObject(data, "source", (*sourceMembers)(s))
 }
 
 func (s Source) MarshalJSON() ([]byte, error) {
@@ -229,10 +229,10 @@ type Dependency struct {
 
 type dependencyMembers Dependency
 
-func (d *Dependency) UnmarshalJSON(b []byte) error { return decodeExact(b, "dependency", d) }
+func (d *Dependency) UnmarshalJSON(data []byte) error { return decodeExact(data, "dependency", d) }
 
-func (d *Dependency) decodeVerified(b []byte) error {
-	return decodeObject(b, "dependency", (*dependencyMembers)(d))
+func (d *Dependency) decodeVerified(data []byte) error {
+	return decodeObject(data, "dependency", (*dependencyMembers)(d))
 }
 
 func (d Dependency) MarshalJSON() ([]byte, error) {
