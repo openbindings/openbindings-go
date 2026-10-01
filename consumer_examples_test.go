@@ -9,9 +9,10 @@ package openbindings_test
 //   - the 0.2 CLI (ob-cli-surface-lab at f7a9d16, NewNextSurfaceRoot):
 //     reading a document, validating and reporting it, refusing an
 //     unsupported version, editing in place, resolving an operation and
-//     choosing its binding, and checking a dependency's kinds. Validating
-//     values against value contracts needs an evaluator, so those
-//     exercises are in schemaeval/consumer_examples_test.go;
+//     choosing its binding, checking a dependency's kinds, finding a
+//     schema's referrers, comparing entries for merge, and the media type.
+//     Validating values against value contracts needs an evaluator, so
+//     those exercises are in schemaeval/consumer_examples_test.go;
 //   - a producer: building a document in code, writing it, reading it back,
 //     and amending a report;
 //   - an evaluator author: see schemaeval/consumer_examples_test.go, which
@@ -302,10 +303,22 @@ func Example_cliEdit() {
 	written, _ = cliEdit([]byte(withMarkup), addOperation("archiveTask", true))
 	escaped := `"a` + `\` + `u003cb"`
 	fmt.Println(bytes.Contains(written, []byte(`"a<b"`)), bytes.Contains(written, []byte(escaped)))
+	var held openbindings.Interface
+	if err := json.Unmarshal([]byte(withMarkup), &held); err != nil {
+		panic(err)
+	}
+	var unescaped bytes.Buffer
+	encoder := json.NewEncoder(&unescaped)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(held); err != nil {
+		panic(err)
+	}
+	fmt.Println(bytes.Contains(unescaped.Bytes(), []byte(`"a<b"`)), bytes.Contains(unescaped.Bytes(), []byte(escaped)))
 	// Output:
 	// <nil> [openbindings name version schemas operations dependencies sources bindings]
 	// refused: the change would add OBI-D-10 at /operations/x/input/type
 	// <nil> [bindings dependencies name openbindings operations schemas sources version x-owner]
+	// false true
 	// false true
 }
 
@@ -643,4 +656,33 @@ func Example_cliMediaType() {
 	req.Header.Set("Accept", openbindings.MediaType+", application/json;q=0.5")
 	fmt.Println(req.Header.Get("Accept"))
 	// Output: application/vnd.openbindings+json, application/json;q=0.5
+}
+
+// `ob merge <obi> <from>` skips an entry both documents hold identically and
+// refuses one they hold differently, so it compares entries as JSON values.
+// C1 item json-equality: the model keeps raw members as written, so two
+// decodings of one JSON value differ as Go values when their whitespace
+// differs; the caller compares encodings instead, which compacts raw
+// members but keeps number spellings (1.0 and 1) and string escapes.
+func Example_cliMergeIdentical() {
+	ours, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"ping":{"input":{"maximum":1}}},
+	  "sources":{"api":{"kind":"example.openapi@1","content":{ "location" : "https://api.example.com" }}}}`))
+	if err != nil {
+		panic(err)
+	}
+	theirs, err := openbindings.ParseDocument([]byte(`{"openbindings":"0.2.0","operations":{"ping":{"input":{"maximum":1.0}}},
+	  "sources":{"api":{"kind":"example.openapi@1","content":{"location":"https://api.example.com"}}}}`))
+	if err != nil {
+		panic(err)
+	}
+	encodedEqual := func(a, b any) bool {
+		x, errX := json.Marshal(a)
+		y, errY := json.Marshal(b)
+		return errX == nil && errY == nil && bytes.Equal(x, y)
+	}
+	fmt.Println("source: same Go value", reflect.DeepEqual(ours.Sources["api"], theirs.Sources["api"]), "same encoding", encodedEqual(ours.Sources["api"], theirs.Sources["api"]))
+	fmt.Println("operation: same Go value", reflect.DeepEqual(ours.Operations["ping"], theirs.Operations["ping"]), "same encoding", encodedEqual(ours.Operations["ping"], theirs.Operations["ping"]))
+	// Output:
+	// source: same Go value false same encoding true
+	// operation: same Go value false same encoding false
 }
