@@ -318,15 +318,15 @@ func Example_cliEdit() {
 	})
 	fmt.Println(err)
 
-	// C1 item F1 (member order): the same edit to a document holding one x-
-	// member writes every top-level member in sorted order instead of field
-	// order, so `name` now precedes `openbindings`.
+	// Member order: the same edit to a document holding an x- member writes
+	// the typed members in field order and the kept member after them.
 	withExtension := strings.Replace(tasksOBI, `"name"`, `"x-owner": "tasks-team", "name"`, 1)
 	written, err = cliEdit([]byte(withExtension), addOperation("archiveTask", true))
 	fmt.Println(err, memberOrder(written))
 
-	// C1 item F2 (HTML escaping): a description holding "<" is rewritten as
-	// a \u003c escape by any edit, whatever the encoder's SetEscapeHTML.
+	// HTML escaping follows the caller's encoder: json.MarshalIndent writes
+	// a description holding "<" as a \u003c escape, and an encoder set not
+	// to escape HTML writes it as held.
 	withMarkup := strings.Replace(tasksOBI, `"version": "1.4.0",`, `"version": "1.4.0", "description": "a<b",`, 1)
 	written, _ = cliEdit([]byte(withMarkup), addOperation("archiveTask", true))
 	escaped := `"a` + `\` + `u003cb"`
@@ -347,9 +347,9 @@ func Example_cliEdit() {
 	// refused: the change would add OBI-D-10 at /operations/x/input/type
 	// refused: the edit declares a version this ob does not interpret: openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)
 	// refused: the edited document cannot be written: openbindings: encode document: json: error calling MarshalJSON for type openbindings.Document: member "x-owner": unexpected end of JSON input
-	// <nil> [bindings dependencies name openbindings operations schemas sources version x-owner]
+	// <nil> [openbindings name version schemas operations dependencies sources bindings x-owner]
 	// false true
-	// false true
+	// true false
 }
 
 // cliInvokeChoice is how `ob invoke <obi> <operation> [--binding B]...`

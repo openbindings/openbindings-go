@@ -246,8 +246,11 @@ func (d Dependency) AcceptsKind(kind string) bool {
 // holds, but not the text's whitespace, member order, or string escapes, nor
 // the spelling of a number the model types (a binding's preference, an
 // int64); numbers in schemas, example values, content, and kept members keep
-// their spelling. A claim about a text is a claim about its bytes:
-// ValidateDocument judges those.
+// their spelling. Encoding writes each object's typed members in field
+// order, then the members LosslessFields keeps in name order, and each map's
+// entries in key order; it escapes HTML only as the calling encoder does. A
+// claim about a text is a claim about its bytes: ValidateDocument judges
+// those.
 //
 // OpenBindings is the declared specification version. Every other member is
 // absent exactly when its Go value is nil. That includes Operations, which §5

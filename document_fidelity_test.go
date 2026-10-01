@@ -470,3 +470,78 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 		t.Fatalf("round trip changed\n%s\ninto\n%s", data, again)
 	}
 }
+
+// Encoding writes an object's typed members in field order, then the members
+// LosslessFields keeps in name order, whichever map holds them and whatever
+// order the input used.
+func TestDocumentModel_MemberOrder(t *testing.T) {
+	var doc Document
+	if err := json.Unmarshal([]byte(`{"x-b":true,"operations":{"op":{"x-a":1,"zz":2,"aliases":["z"],"description":"d"}},"unknown":0,"name":"N","openbindings":"0.2.0"}`), &doc); err != nil {
+		t.Fatal(err)
+	}
+	written, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"openbindings":"0.2.0","name":"N","operations":{"op":{"description":"d","aliases":["z"],"x-a":1,"zz":2}},"unknown":0,"x-b":true}`; string(written) != want {
+		t.Fatalf("got  %s\nwant %s", written, want)
+	}
+	// An object with no typed member present writes its kept members alone.
+	written, err = json.Marshal(Operation{LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-b": json.RawMessage(`2`), "x-a": nil}}})
+	if err != nil || string(written) != `{"x-a":null,"x-b":2}` {
+		t.Fatalf("%s %v", written, err)
+	}
+}
+
+// HTML escaping is the calling encoder's: json.Marshal escapes <, >, and &
+// everywhere, as it does in any value, and an encoder set not to escape them
+// writes them as held, in typed members, schemas, raw members, and kept
+// members alike. Text a member holds already escaped stays as written.
+func TestDocumentModel_HTMLEscapingFollowsTheEncoder(t *testing.T) {
+	doc := Document{
+		OpenBindings: "0.2.0",
+		Description:  Present("a<b&c>"),
+		Operations: map[string]Operation{"op": {
+			Input:    map[string]any{"title": "<op>"},
+			Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"<p>"`)}},
+		}},
+		Sources:        map[string]Source{"s": {Kind: "k", Content: json.RawMessage(`{"held":"<x>"}`)}},
+		LosslessFields: LosslessFields{Extensions: map[string]json.RawMessage{"x-note": json.RawMessage(`"<x>"`)}},
+	}
+	escaped, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unescaped strings.Builder
+	encoder := json.NewEncoder(&unescaped)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(doc); err != nil {
+		t.Fatal(err)
+	}
+	direct, err := doc.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, held := range []string{`"a<b&c>"`, `"<op>"`, `"<p>"`, `"<x>"`} {
+		if strings.Contains(string(escaped), held) {
+			t.Errorf("json.Marshal wrote %s unescaped: %s", held, escaped)
+		}
+		if !strings.Contains(unescaped.String(), held) || !strings.Contains(string(direct), held) {
+			t.Errorf("%s is not written as held:\n%s\n%s", held, unescaped.String(), direct)
+		}
+	}
+	if !strings.Contains(unescaped.String(), `"<x>"`) {
+		t.Errorf("an escape held in content was not kept: %s", unescaped.String())
+	}
+	// Both spellings decode to the same document.
+	var a, b Document
+	if err := json.Unmarshal(escaped, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(unescaped.String()), &b); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decodedJSON(t, escaped), decodedJSON(t, []byte(unescaped.String()))) {
+		t.Fatal("the two encodings hold different values")
+	}
+}

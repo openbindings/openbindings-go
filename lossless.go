@@ -43,8 +43,8 @@ import (
 
 // LosslessFields is embedded in every OBI-defined object type to carry the
 // members its typed fields do not: Extensions holds `x-` members (§12) and
-// Unknown every other one. Decoding fills both; encoding writes
-// them back beside the typed members.
+// Unknown every other one. Decoding fills both; encoding writes them back
+// after the typed members, in name order whichever map holds them.
 //
 // An entry whose name is a typed member's name is never encoded: the typed
 // field alone states that member, so a nil field is absent whatever these maps
@@ -298,7 +298,11 @@ func preferenceValue(token string) (int64, bool) {
 }
 
 // encodeObject encodes an OBI-defined object: typed, the method-less
-// counterpart of its type, and the members its lossless fields carry.
+// counterpart of its type, and the members its lossless fields carry. It
+// writes the typed members first, in field order, then the kept members in
+// name order. It escapes no HTML itself: the encoder that calls MarshalJSON
+// decides, so json.Marshal escapes <, >, and & as it does everywhere, and an
+// encoder set not to (SetEscapeHTML(false)) writes them as held.
 func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyRawMembers(typed, lossless); err != nil {
 		return nil, err
@@ -306,26 +310,42 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 	if err := verifyStrings(typed, lossless); err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(typed)
+	data, err := marshalUnescaped(typed)
 	if err != nil {
 		return nil, err
 	}
-	if len(lossless.Extensions) > 0 || len(lossless.Unknown) > 0 {
-		var members map[string]json.RawMessage
-		if err := json.Unmarshal(data, &members); err != nil {
-			return nil, err
-		}
-		typedNames := membersOf(reflect.TypeOf(typed)).typed
-		for _, carried := range []map[string]json.RawMessage{lossless.Unknown, lossless.Extensions} {
-			for name, raw := range carried {
-				if !typedNames[name] {
-					members[name] = raw
-				}
+	typedNames := membersOf(reflect.TypeOf(typed)).typed
+	kept := map[string]json.RawMessage{}
+	for _, carried := range []map[string]json.RawMessage{lossless.Unknown, lossless.Extensions} {
+		for name, raw := range carried {
+			if !typedNames[name] {
+				kept[name] = raw
 			}
 		}
-		if data, err = json.Marshal(members); err != nil {
-			return nil, err
+	}
+	if len(kept) > 0 {
+		var b bytes.Buffer
+		b.Write(data[:len(data)-1]) // the typed members, without the closing brace
+		separate := len(data) > 2
+		for _, name := range slices.Sorted(maps.Keys(kept)) {
+			encodedName, err := marshalUnescaped(name)
+			if err != nil {
+				return nil, err
+			}
+			encodedValue, err := marshalUnescaped(kept[name])
+			if err != nil {
+				return nil, fmt.Errorf("member %s: %w", strconv.Quote(name), err)
+			}
+			if separate {
+				b.WriteByte(',')
+			}
+			separate = true
+			b.Write(encodedName)
+			b.WriteByte(':')
+			b.Write(encodedValue)
 		}
+		b.WriteByte('}')
+		data = b.Bytes()
 	}
 	// A value the model holds as any (a schema) can hold what the checks
 	// above do not reach, such as raw JSON or a type with its own encoding:
@@ -334,6 +354,17 @@ func encodeObject(typed any, lossless LosslessFields) ([]byte, error) {
 		return nil, fmt.Errorf("the encoding is not one decoding accepts: %w", err)
 	}
 	return data, nil
+}
+
+// marshalUnescaped encodes v as json.Marshal does, but escaping no HTML.
+func marshalUnescaped(v any) ([]byte, error) {
+	var b bytes.Buffer
+	encoder := json.NewEncoder(&b)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // verifyStrings refuses invalid UTF-8 in a string or a name an OBI-defined
