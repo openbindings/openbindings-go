@@ -400,6 +400,18 @@
 
 ### Fixed
 
+- **A dynamic capture into a name the document resource declares twice
+  gets no verdict (B6 round 2, cold read Q08).** An evaluation beginning
+  in the document resource makes it outermost in the dynamic scope (§7.2),
+  so a `$dynamicRef` whose initial target declares a `$dynamicAnchor`
+  looks the name up there first (JSON Schema Core §8.2.3.2). Where the
+  document resource declares that name more than once, by `$anchor` or
+  `$dynamicAnchor`, the capture is undefined (Core §8.2.2), so the value
+  contract is refused as `ErrUndefined`; it counted only `$dynamicAnchor`
+  declarations, so one beside an `$anchor` of the same name, in another
+  OBI position, gave a verdict. The names counted are OBI-D-12's (§7.3),
+  and a capturing declaration past the 256 levels core indexes is now
+  core's limit, where the capture was left out.
 - **OBI-D-02 findings on a refused member name point at the member.** The
   JSON Schema library records such a failure's location without copying it,
   so a later sibling could overwrite it and the finding pointed somewhere

@@ -204,6 +204,50 @@ func TestBundle_ScopeWrappers(t *testing.T) {
 	}
 }
 
+// An evaluation beginning in the document resource makes it outermost in the
+// dynamic scope (§7.2), so a $dynamicRef whose initial target declares a
+// $dynamicAnchor looks the name up there first (JSON Schema Core §8.2.3.2).
+// A name the document resource declares more than once, by $anchor or
+// $dynamicAnchor, leaves that capture undefined (Core §8.2.2): no verdict,
+// whichever schema would have won. The first case is the B6 builders'
+// (cold read Q08); a name declared once captures as before, and one past
+// core's index is core's limit, not a verdict.
+func TestDynamicScope_DuplicateDocumentNames(t *testing.T) {
+	inner := `"Inner":{"$id":"https://e.test/inner","$dynamicAnchor":"node","type":"string"}`
+	entry := `"operations":{"op":{"input":{"$dynamicRef":"https://e.test/inner#node"}}}`
+	for _, c := range []struct {
+		name, schemas string
+		values        []any
+		want          []string
+		undefined     bool
+	}{
+		{"a $dynamicAnchor and an $anchor", `"Outer":{"$dynamicAnchor":"node","type":"integer"},` + inner + `,"AlsoOuter":{"$anchor":"node"}`, []any{json.Number("1")}, []string{"no verdict"}, true},
+		{"two $dynamicAnchors", `"Outer":{"$dynamicAnchor":"node","type":"integer"},` + inner + `,"AlsoOuter":{"$dynamicAnchor":"node"}`, []any{json.Number("1")}, []string{"no verdict"}, true},
+		{"two $anchors", `"Outer":{"$anchor":"node","type":"integer"},` + inner + `,"AlsoOuter":{"$anchor":"node"}`, []any{json.Number("1")}, []string{"no verdict"}, true},
+		{"one $dynamicAnchor captures", `"Outer":{"$dynamicAnchor":"node","type":"integer"},` + inner, []any{json.Number("1"), "s"}, []string{"valid", "mismatch"}, false},
+		{"one $anchor does not capture", `"Outer":{"$anchor":"node","type":"integer"},` + inner, []any{"s", json.Number("1")}, []string{"valid", "mismatch"}, false},
+		{"a name declared outside the grammar twice", `"Outer":{"$dynamicAnchor":"1node"},"AlsoOuter":{"$anchor":"1node"},` + inner, []any{"s", json.Number("1")}, []string{"valid", "mismatch"}, false},
+	} {
+		document := `{"openbindings":"0.2.0",` + entry + `,"schemas":{` + c.schemas + `}}`
+		if got := verdicts(t, document, "op", c.values...); !equalStrings(got, c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+			continue
+		}
+		if c.undefined {
+			if refusal := refusalOf(t, document, "op"); !errors.Is(refusal, ErrUndefined) || refusal.Location != "#/operations/op/input" || !strings.Contains(refusal.Error(), "declares more than once") {
+				t.Errorf("%s: %v at %s", c.name, refusal, refusal.Location)
+			}
+		}
+	}
+	// The only declaration past core's index: its limit, never a verdict
+	// that leaves the capture out.
+	deep := strings.Repeat(`{"not":`, 300) + `{"$dynamicAnchor":"node","type":"integer"}` + strings.Repeat(`}`, 300)
+	refusal := refusalOf(t, `{"openbindings":"0.2.0",`+entry+`,"schemas":{"Deep":`+deep+`,`+inner+`}}`, "op")
+	if errors.Is(refusal, ErrUndefined) || !strings.Contains(refusal.Error(), "does not index") {
+		t.Errorf("a declaration past the index: %v", refusal)
+	}
+}
+
 // A reference to a JSON Schema 2020-12 meta-schema nothing in the space
 // declares is satisfied by embedding it.
 func TestBundle_EmbedsMetaSchemas(t *testing.T) {

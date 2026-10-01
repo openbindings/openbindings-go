@@ -83,6 +83,11 @@ pending for each of these, each marked by its ruling:
   form: OBI-D-05 reports it in the document resource, OBI-D-12 does not
   govern it, a value whose evaluation depends on it gets no verdict, and
   the schema-reference listing omits it.
+- **Ambiguous dynamic capture (B6 round 2).** A value whose evaluation,
+  beginning in the document resource, looks a `$dynamicRef`'s name up in
+  the dynamic scope gets no verdict when the document resource declares
+  that name more than once, by either keyword (JSON Schema Core §8.2.2,
+  §8.2.3.2; §7.2).
 
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable
