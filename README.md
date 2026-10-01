@@ -156,9 +156,10 @@ go get github.com/openbindings/openbindings-go
 - **Operation resolution** by key or alias (`Document.ResolveOperation`),
   and an operation's bindings found by its key (`Document.OperationBindings`)
 - **Schema references** (`Document.References`): every `$ref` and
-  `$dynamicRef` in the schemas a document contains, with the schema each
-  one's initial lookup identifies, looked up as OBI-D-12 and value
-  validation look them up
+  `$dynamicRef` in the schemas a document contains whose value is a
+  URI-reference (a string that is not one is no reference of any form,
+  §7.1), with the schema each one's initial lookup identifies, looked up as
+  OBI-D-12 and value validation look them up
 - **Value-contract validation** of values against an operation's input or output contract (§3, OBI-T-08), with a JSON Schema evaluator the application supplies: core resolves the document's schemas (§7), refuses what the specification leaves undefined, and hands the evaluator a closed JSON Schema 2020-12 bundle per value contract; the evaluator evaluates. [`schemaeval`](schemaeval) is the project's evaluator, and [`openbindingstest`](openbindingstest) checks any evaluator against the contract
 
 ## Quick start
@@ -262,7 +263,8 @@ document references but does not embed are supplied as `Resource`s to
 ### List a document's schema references
 
 `Document.References` lists every `$ref` and `$dynamicRef` in the schemas a
-document contains, for a tool that renames, removes, or copies schemas:
+document contains whose value is a URI-reference, for a tool that renames,
+removes, or copies schemas:
 
 ```go
 refs, err := doc.References()

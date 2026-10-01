@@ -64,10 +64,12 @@
 //	bindings := doc.OperationBindings(key) // binding keys, sorted
 //
 // [Document.References] lists every $ref and $dynamicRef in the schemas the
-// document contains, with the schema each one's initial lookup identifies,
-// looked up as OBI-D-12 and value validation look them up (§7). Its doc says
-// what a caller may conclude from it, and what not: a schema no reference
-// targets is not thereby unused, and a $dynamicRef may land elsewhere.
+// document contains whose value is a URI-reference (a string that is not
+// one is no reference of any form, §7.1), with the schema each one's
+// initial lookup identifies, looked up as OBI-D-12 and value validation
+// look them up (§7). Its doc says what a caller may conclude from it, and
+// what not: a schema no reference targets is not thereby unused, and a
+// $dynamicRef may land elsewhere.
 //
 // # Value Contracts
 //

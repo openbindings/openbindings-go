@@ -37,16 +37,17 @@ type Reference struct {
 	// meta-schema included; no schema lies where it points; it points inside
 	// a schema resource from outside it; it names a plain name declared
 	// nowhere or more than once; its fragment does not decode to UTF-8; it is
-	// relative where its resource has no base to resolve it against; it is
-	// not a well-formed URI-reference; it names an identifier more than one
-	// resource carries in normal form, which this SDK's conservative policy
-	// refuses; or what it names lies deeper than the 256 levels this SDK
-	// indexes. The text is advisory. It is "" when Target is set.
+	// relative where its resource has no base to resolve it against; it
+	// names an identifier more than one resource carries in normal form,
+	// which this SDK's conservative policy refuses; or what it names lies
+	// deeper than the 256 levels this SDK indexes. The text is advisory. It
+	// is "" when Target is set.
 	Unresolved string
 }
 
-// References lists every $ref and $dynamicRef keyword with a string value in
-// the schemas the document contains (§7), sorted by Location, each with the
+// References lists every $ref and $dynamicRef keyword whose value is a
+// well-formed URI-reference (RFC 3986 §4.1) in the schemas the document
+// contains (§7), sorted by Location, each with the
 // schema its initial lookup identifies, or why it identifies none. Each is
 // looked up as this SDK resolves references everywhere: a same-document
 // reference in the document resource by OBI-D-12's own lookup (§7.2, §7.3),
@@ -65,7 +66,10 @@ type Reference struct {
 // (source or binding content, an example, an x- member) is data, not a
 // reference, and is not listed; neither is a $ref or $dynamicRef whose value
 // is not a string, which OBI-D-10 reports, and OBI-D-05 too in the document
-// resource.
+// resource; nor one whose value is a string that is not a well-formed
+// URI-reference, which is not a reference of any form (§7.1): OBI-D-05
+// reports it in the document resource, OBI-D-12 does not govern it, and a
+// value whose evaluation depends on it has an undefined result.
 //
 // What a caller may conclude, given a nil error: every reference keyword in
 // the schemas the document contains, and where each one is; for each, the
@@ -115,6 +119,9 @@ func (d *Document) References() ([]Reference, error) {
 			value, isString := object[keyword].(string)
 			if !isString {
 				continue
+			}
+			if wellFormed, _ := uriReference(value); !wellFormed {
+				continue // not a reference of any form (§7.1)
 			}
 			ref := Reference{Location: location + jsonpointer.Format(keyword), Keyword: keyword, Value: value}
 			if !resource.document {

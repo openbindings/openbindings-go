@@ -11,10 +11,14 @@
   presentation. An alias, a key no operation has, and a nil `Document` find
   nothing: a name is resolved first (OBI-T-07).
 - **A document's schema references.** `Document.References()` lists every
-  `$ref` and `$dynamicRef` keyword in the schemas a document contains, as a
-  `Reference`: its location, keyword, and value, the base it resolves
-  against, and the schema its initial lookup identifies or why there is
-  none, looked up by the resolution OBI-D-12 and value validation use. It
+  `$ref` and `$dynamicRef` keyword in the schemas a document contains whose
+  value is a well-formed URI-reference, as a `Reference`: its location,
+  keyword, and value, the base it resolves against, and the schema its
+  initial lookup identifies or why there is none, looked up by the
+  resolution OBI-D-12 and value validation use. A string that is not a
+  well-formed URI-reference is not a reference of any form (ruling S6,
+  §7.1), so it is not listed, where it was listed with that as the reason
+  it identified nothing; OBI-D-05 reports it in the document resource. It
   refuses an unsupported version, does not interpret a document declaring no
   valid version, and returns what it found with `ErrInconclusive` where a
   schema nests past the index's 256 levels. Its doc states what a caller may

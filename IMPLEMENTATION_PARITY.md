@@ -78,6 +78,11 @@ pending for each of these, each marked by its ruling:
   and a misplaced `$schema` selects nothing. A foreign `$schema` still
   violates OBI-D-06; value validation gives no verdict only where the
   resource's dialect is one the tool lacks.
+- **Malformed strings are no references (S6).** A `$ref` or `$dynamicRef`
+  string that is not a well-formed URI-reference is not a reference of any
+  form: OBI-D-05 reports it in the document resource, OBI-D-12 does not
+  govern it, a value whose evaluation depends on it gets no verdict, and
+  the schema-reference listing omits it.
 
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable
@@ -107,8 +112,9 @@ behavior and recognizable names, not identical signatures:
   conformance conclusion or a value verdict, and disjoint from them whatever
   an evaluator or a value's own encoding says.
 - **Schema references.** Every `$ref` and `$dynamicRef` in the schemas a
-  document contains, with location, keyword, value, base, initial target or
-  why there is none, by the same lookup as OBI-D-12 and value validation;
+  document contains whose value is a well-formed URI-reference, with
+  location, keyword, value, base, initial target or why there is none, by
+  the same lookup as OBI-D-12 and value validation;
   the same whole-call refusals; an incomplete index returned with the
   inconclusive category.
 - **Concluding from evidence.** The conclusion is reached from the document
