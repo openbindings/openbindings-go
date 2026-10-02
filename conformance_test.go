@@ -61,10 +61,7 @@ func findConformanceCorpus() string { return corpus.Locate(".") }
 // decision: gates derived from the code under test could gate its own
 // defects out.
 func sdkDeclaration() corpus.Declaration {
-	line := supportedLine.major
-	if supportedLine.major == "0" {
-		line += "." + supportedLine.minor
-	}
+	line := supportedLine.major + "." + supportedLine.minor
 	return corpus.Declaration{Lines: []string{line}, Prereleases: slices.Clone(supportedPrereleases)}
 }
 
@@ -703,26 +700,22 @@ func successor(n string) string {
 }
 
 // The gates are judged against SupportedVersions' declaration: the authoring
-// version and a later patch of its line are administered; the next major,
-// and while pre-1.0 the next minor, are not. End to end, a poisoned case
+// version and a later patch of its line are administered; the next major
+// and the next minor are not. End to end, a poisoned case
 // gated out is never run, and a gated-in one is.
 func TestConformanceGates(t *testing.T) {
 	authoring, _ := parseSemverStrict(AuthoringVersion)
 	nextMajor := successor(authoring.major) + ".0.0"
+	nextMinor := authoring.major + "." + successor(authoring.minor) + ".0"
 	higherPatch := authoring.major + "." + authoring.minor + "." + successor(authoring.patch)
 	declaration := sdkDeclaration()
-	for v, want := range map[string]bool{AuthoringVersion: true, higherPatch: true, nextMajor: false, AuthoringVersion + "-rc.1": false} {
+	for v, want := range map[string]bool{AuthoringVersion: true, higherPatch: true, nextMajor: false, nextMinor: false, AuthoringVersion + "-rc.1": false} {
 		if got := declaration.Supports(v); got != want {
 			t.Errorf("declaration supports %s: %v, want %v", v, got, want)
 		}
 		// The declaration and the version decision agree on each.
 		if refused := isRefusal(CheckVersion(v)); refused == want {
 			t.Errorf("CheckVersion(%s) refused %v, but the declaration supports it %v", v, refused, want)
-		}
-	}
-	if authoring.major == "0" {
-		if nextMinor := "0." + successor(authoring.minor) + ".0"; declaration.Supports(nextMinor) {
-			t.Errorf("declaration supports %s", nextMinor)
 		}
 	}
 

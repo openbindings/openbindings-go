@@ -260,7 +260,7 @@ func Designate(c Case) (module, reason string) {
 // supports and the prereleases it includes. Gates are judged against it,
 // never against the tool's acceptance or refusal code.
 type Declaration struct {
-	Lines       []string // "0.2"
+	Lines       []string // major.minor, e.g. "0.2" or "1.0"
 	Prereleases []string // "0.2.0-rc.1"
 }
 
@@ -277,8 +277,7 @@ func (d Declaration) Supports(v string) bool {
 	if m[4] != "" {
 		return slices.Contains(d.Prereleases, m[1]+"."+m[2]+"."+m[3]+"-"+m[4])
 	}
-	// A line is major.minor while pre-1.0 and a major version after.
-	return slices.Contains(d.Lines, m[1]+"."+m[2]) || (m[1] != "0" && slices.Contains(d.Lines, m[1]))
+	return slices.Contains(d.Lines, m[1]+"."+m[2])
 }
 
 // Lowest is the first release of the lowest declared line.
@@ -286,9 +285,6 @@ func (d Declaration) Lowest() string {
 	lowest := ""
 	for _, line := range d.Lines {
 		v := line + ".0"
-		if !strings.Contains(line, ".") {
-			v = line + ".0.0"
-		}
 		if lowest == "" || compareRelease(v, lowest) < 0 {
 			lowest = v
 		}

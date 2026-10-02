@@ -412,6 +412,10 @@
 
 ### Fixed
 
+- **Specification support remains per major.minor line after 1.0.** The
+  declaration parser, version decision and corpus gates retain the minor
+  version for every major, as §8.1 requires. The current `0.2.x` support
+  declaration is unchanged; this does not add support for any 1.x line.
 - Supplied schema roots with an empty `$id` or an empty fragment use their
   retrieval URI, instead of incorrectly refusing evaluation as undefined.
   Nested resource identity collisions remain refused.

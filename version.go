@@ -39,17 +39,16 @@ const appliedRevision = "04a84131295dc8c305b4f048d2e129f84fb023de"
 // in SupportedVersions' doc as well.
 var supportedPrereleases []string
 
-// supportedLine is SupportedVersions parsed: its major version, and while
-// pre-1.0 its minor version, which are the release line's own.
+// supportedLine is SupportedVersions parsed: its major and minor versions
+// identify the release line, including after 1.0 (§8.1).
 var supportedLine semver
 
 func init() {
-	line, ok := strings.CutSuffix(SupportedVersions, ".x")
-	major, minor, _ := strings.Cut(line, ".")
-	if !ok || !isNumericIdentifier(major) || (major == "0") != (minor != "") || minor != "" && !isNumericIdentifier(minor) {
+	var ok bool
+	supportedLine, ok = parseReleaseLine(SupportedVersions)
+	if !ok {
 		panic(fmt.Sprintf("openbindings: SupportedVersions %q is not a release line", SupportedVersions))
 	}
-	supportedLine = semver{major: major, minor: minor}
 	for _, prerelease := range supportedPrereleases {
 		if parsed, err := parseSemverStrict(prerelease); err != nil || len(parsed.preRelease) == 0 {
 			panic(fmt.Sprintf("openbindings: supported prerelease %q is not a SemVer prerelease", prerelease))
@@ -58,6 +57,17 @@ func init() {
 	if !isValidSemver(AuthoringVersion) || CheckVersion(AuthoringVersion) != nil {
 		panic(fmt.Sprintf("openbindings: AuthoringVersion %q is not a supported version", AuthoringVersion))
 	}
+}
+
+// parseReleaseLine reads a major.minor.x declaration without bounding either
+// numeric identifier to a machine integer.
+func parseReleaseLine(declaration string) (semver, bool) {
+	line, ok := strings.CutSuffix(declaration, ".x")
+	parsed, err := parseSemverStrict(line + ".0")
+	if !ok || err != nil || line != parsed.major+"."+parsed.minor {
+		return semver{}, false
+	}
+	return semver{major: parsed.major, minor: parsed.minor}, true
 }
 
 // CheckVersion applies OBI-T-04's version decision to a declared version v,
@@ -110,10 +120,10 @@ func versionRefusal(v string) (msg string, refused bool, err error) {
 }
 
 // compareReleaseLine orders v's release line against the supported one: by
-// major version, and while pre-1.0 by minor version, since pre-1.0 minors MAY
-// break (§8.1). A patch version never moves a version out of its line.
+// major and then minor version (§8.1). A patch version never moves a version
+// out of its line; support for a line implies nothing about another line.
 func compareReleaseLine(v semver) int {
-	if order := compareNumeric(v.major, supportedLine.major); order != 0 || supportedLine.major != "0" {
+	if order := compareNumeric(v.major, supportedLine.major); order != 0 {
 		return order
 	}
 	return compareNumeric(v.minor, supportedLine.minor)

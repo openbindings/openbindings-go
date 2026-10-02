@@ -20,6 +20,54 @@ func TestSupportedVersions_AuthoringVersionIsSupported(t *testing.T) {
 	}
 }
 
+func TestParseReleaseLine(t *testing.T) {
+	for _, declaration := range []string{"0.2.x", "1.0.x", "1.2.x", "10.20.x", "999999999999999999999.888888888888888888888.x"} {
+		line, ok := parseReleaseLine(declaration)
+		if !ok || line.major+"."+line.minor+".x" != declaration {
+			t.Errorf("parseReleaseLine(%q) = %+v, %v", declaration, line, ok)
+		}
+	}
+	for _, declaration := range []string{"", "0.x", "1.x", "1.0", "1.0.0.x", "01.0.x", "1.00.x", "-1.0.x", "1.a.x", "1.0.*", "1.0.x-rc.1", "1.0.x+build", " 1.0.x", "1.0.x\n"} {
+		if _, ok := parseReleaseLine(declaration); ok {
+			t.Errorf("parseReleaseLine accepted %q", declaration)
+		}
+	}
+}
+
+// Exercise future declarations without changing the versions this SDK ships.
+// The public refusal decision and the independently judged corpus declaration
+// must both retain the minor, even when that minor is backward-compatible.
+func TestCheckVersion_MajorMinorLines(t *testing.T) {
+	savedLine, savedPrereleases := supportedLine, supportedPrereleases
+	t.Cleanup(func() { supportedLine, supportedPrereleases = savedLine, savedPrereleases })
+	supportedPrereleases = nil
+	for _, tc := range []struct {
+		declaration string
+		versions    map[string]bool
+	}{
+		{"1.0.x", map[string]bool{"1.0.0": true, "1.0.999999999999999999999": true, "1.0.2+build.1": true, "1.0.0-rc.1": false, "1.1.0": false, "0.99.0": false, "2.0.0": false}},
+		{"1.10.x", map[string]bool{"1.10.0": true, "1.10.9": true, "1.2.99": false, "1.9.99": false, "1.11.0": false, "1.10.0-rc.1": false}},
+		{"10.2.x", map[string]bool{"10.2.0": true, "10.2.1": true, "10.1.99": false, "10.3.0": false, "9.99.0": false, "11.0.0": false}},
+	} {
+		t.Run(tc.declaration, func(t *testing.T) {
+			var ok bool
+			supportedLine, ok = parseReleaseLine(tc.declaration)
+			if !ok {
+				t.Fatal("declaration was rejected")
+			}
+			declaration := sdkDeclaration()
+			for version, supported := range tc.versions {
+				if refused := refusedBy(t, version); refused == supported {
+					t.Errorf("CheckVersion(%q) refuses %v, want %v", version, refused, !supported)
+				}
+				if got := declaration.Supports(version); got != supported {
+					t.Errorf("declaration.Supports(%q) = %v, want %v", version, got, supported)
+				}
+			}
+		})
+	}
+}
+
 // refusedBy reports whether CheckVersion refuses v, failing a test whose
 // refusal is not the one for v.
 func refusedBy(t *testing.T, v string) bool {
