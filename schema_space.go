@@ -220,6 +220,10 @@ func (r *docResource) declare(raw any, base string, atPosition bool) {
 		r.idProblem, r.idKind = fmt.Sprintf("its $id %q is not a URI-reference (RFC 3986 §4.1)", id), undefinedResult
 	case strings.Contains(trimmed, "#"):
 		r.idProblem, r.idKind = fmt.Sprintf("its $id %q carries a fragment", id), undefinedResult
+	case trimmed == "" && r.doc.kind == suppliedDocument && r.location == "":
+		// A supplied root already has its retrieval URI as its base. An
+		// empty reference names that same root, not a second resource.
+		r.id = base
 	case trimmed == "":
 		// The $id resolves to its base, a URI what encloses it already has
 		// (JSON Schema Core §8.2.1).

@@ -202,3 +202,9 @@ allows: `ValidateDocument` corresponds to `validateInterface`,
 `ConcludeConformance` to `concludeConformance`, and so on. A user moving
 between SDKs should recognize the role before learning its language-specific
 mechanics.
+
+The conformance-conclusion clarification (spec `04a8413`, adopted 2026-10-02)
+keeps positive reporting optional while preserving the meaning of an
+undetermined conclusion. Go already computed the specified conclusion; its
+corpus adapter now requires that exact result from supplied evidence. This
+records the Go adoption without asserting a new TypeScript parity result.

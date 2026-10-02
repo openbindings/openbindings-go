@@ -76,13 +76,26 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*Va
 		keys:     map[string]string{},
 		states:   map[string][2]bool{},
 	}
+	// Index identifiers once. Repeated identifiers on one operation still
+	// name it; identifiers shared by different operations stay ambiguous,
+	// even if a third operation carries them (OBI-T-07).
+	ambiguous := map[string]bool{}
+	addName := func(name, key string) {
+		if ambiguous[name] {
+			return
+		}
+		if previous, found := contracts.keys[name]; found && previous != key {
+			delete(contracts.keys, name)
+			ambiguous[name] = true
+			return
+		}
+		contracts.keys[name] = key
+	}
 	for key, operation := range doc.Operations {
 		contracts.states[key] = [2]bool{operation.Input != nil, operation.Output != nil}
-		// A name more than one operation carries resolves to none.
-		for _, name := range append([]string{key}, operation.Aliases...) {
-			if resolved, _, found := doc.ResolveOperation(name); found {
-				contracts.keys[name] = resolved
-			}
+		addName(key, key)
+		for _, alias := range operation.Aliases {
+			addName(alias, key)
 		}
 	}
 	return contracts, nil
