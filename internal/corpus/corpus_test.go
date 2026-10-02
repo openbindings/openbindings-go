@@ -8,6 +8,33 @@ import (
 	"testing"
 )
 
+func TestDeclarationMajorMinorLines(t *testing.T) {
+	d := Declaration{Lines: []string{"2.0", "1.10"}, Prereleases: []string{"1.11.0-rc.1"}}
+	for version, want := range map[string]bool{
+		"1.10.0": true, "1.10.999999999999999999999": true, "1.10.3+build": true, "2.0.0": true,
+		"1.9.99": false, "1.11.0": false, "2.1.0": false, "1.10.0-rc.1": false,
+		"1.11.0-rc.1+build": true, "1.11.0-rc.2": false,
+	} {
+		if got := d.Supports(version); got != want {
+			t.Errorf("Supports(%q) = %v, want %v", version, got, want)
+		}
+		if _, skipped := Gate(Gates{RequiresSupports: version}, d); skipped == want {
+			t.Errorf("support gate for %q skipped %v, want %v", version, skipped, !want)
+		}
+		if _, skipped := Gate(Gates{RequiresUnsupported: version}, d); skipped != want {
+			t.Errorf("unsupported gate for %q skipped %v, want %v", version, skipped, want)
+		}
+	}
+	if got := d.Lowest(); got != "1.10.0" {
+		t.Errorf("Lowest() = %q, want 1.10.0", got)
+	}
+	for minimum, skip := range map[string]bool{"1.9.0": false, "1.10.0": false, "1.10.1": true, "1.11.0": true, "2.0.0": true} {
+		if _, got := Gate(Gates{RequiresMinSupported: minimum}, d); got != skip {
+			t.Errorf("minimum %q skipped %v, want %v", minimum, got, skip)
+		}
+	}
+}
+
 func TestDeclarationAndGates(t *testing.T) {
 	d := Declaration{Lines: []string{"0.2"}, Prereleases: []string{"0.3.0-rc.1"}}
 	for v, want := range map[string]bool{
@@ -18,8 +45,8 @@ func TestDeclarationAndGates(t *testing.T) {
 			t.Errorf("Supports(%s) = %v, want %v", v, got, want)
 		}
 	}
-	if got := (Declaration{Lines: []string{"1"}}).Supports("1.7.3"); !got {
-		t.Error("a post-1.0 line is its major version")
+	if got := (Declaration{Lines: []string{"1"}}).Supports("1.7.3"); got {
+		t.Error("a major version alone does not declare a release line")
 	}
 	if got := d.Lowest(); got != "0.2.0" {
 		t.Errorf("Lowest = %s", got)

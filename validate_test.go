@@ -47,7 +47,7 @@ func TestParseDocumentRejectsDuplicateObjectKeys(t *testing.T) {
 }
 
 func TestDocumentValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
-	// OBI-T-04: refuse to load when document's major version exceeds MaxTested.
+	// OBI-T-04: a higher major is outside the declared supported line.
 	i := Document{
 		OpenBindings: "1.0.0",
 		Operations:   map[string]Operation{},
@@ -62,15 +62,15 @@ func TestDocumentValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 	}
 }
 
-func TestDocumentValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
-	// OBI-T-04: while MaxTested is pre-1.0, refuse strictly higher minor too.
+func TestDocumentValidate_RefusesHigherMinor_OBI_T_04(t *testing.T) {
+	// OBI-T-04: a higher minor is also a different specification line.
 	i := Document{
 		OpenBindings: "0.99.0",
 		Operations:   map[string]Operation{},
 	}
 	_, err := i.Validate()
 	if err == nil {
-		t.Fatalf("expected error for pre-1.0 higher-minor version")
+		t.Fatalf("expected error for higher-minor version")
 	}
 	var refusal *VersionRefusalError
 	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "0.99.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)` {
@@ -606,11 +606,9 @@ func TestInputContract_NullAndExternalReferences(t *testing.T) {
 	}
 }
 
-// OBI-T-04's refusal runs downward too: a version below the SDK's minimum is
-// refused rather than processed under the wrong rules (pre-1.0 minors may
-// change field semantics in either direction — the priority→preference
-// inversion being the live example).
-func TestDocumentValidate_RefusesBelowMinSupported(t *testing.T) {
+// OBI-T-04's refusal runs downward too: support for one major.minor line
+// does not imply support for an earlier line.
+func TestDocumentValidate_RefusesEarlierLine(t *testing.T) {
 	iface := Document{
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
