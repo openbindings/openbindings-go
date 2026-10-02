@@ -295,6 +295,39 @@ func TestBundle_SuppliedResources(t *testing.T) {
 	}
 }
 
+// A supplied schema root may identify itself by an empty URI reference.
+func TestBundle_SuppliedRootIdentity(t *testing.T) {
+	const uri = "https://ex.test/schema"
+	for _, declaration := range []string{``, `"$id":"",`, `"$id":"#",`, `"$id":"schema",`, `"$id":"https://ex.test/schema",`} {
+		t.Run(declaration, func(t *testing.T) {
+			resource := Resource{URI: uri, Document: json.RawMessage(`{` + declaration + `"$ref":"#/$defs/value","$defs":{"value":{"type":"string"}}}`)}
+			doc := mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"`+uri+`"}}}}`)
+			contract, err := contractsFor(t, doc, resource).CompileInput(context.Background(), "op")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := contract.Validate(context.Background(), "yes"); err != nil {
+				t.Fatalf("valid string: %v", err)
+			}
+			if err := contract.Validate(context.Background(), json.Number("42")); !errors.Is(err, ErrMismatch) {
+				t.Fatalf("number: want mismatch, got %v", err)
+			}
+		})
+	}
+	// The root exception must not authorize a nested resource to reuse its
+	// enclosing resource's identity, whether spelled relatively or absolutely.
+	for _, id := range []string{"", "#", uri} {
+		t.Run("nested/"+id, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"$id":"","$ref":"#/$defs/value","$defs":{"value":{"$id":%q,"type":"string"}}}`, id)
+			resource := Resource{URI: uri, Document: json.RawMessage(raw)}
+			refusal := refusalOf(t, `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"`+uri+`"}}}}`, "op", resource)
+			if !errors.Is(refusal, ErrNoVerdict) {
+				t.Fatalf("nested identity collision: %v", refusal)
+			}
+		})
+	}
+}
+
 // Dialects go by resource (§5.2, JSON Schema Core §9.3.2). The document
 // resource's is 2020-12, and a $schema in it declares none, so a schema
 // copied with a foreign $schema and no $id is read as 2020-12 and gets a
@@ -520,6 +553,37 @@ func TestCompile_AmbiguousName(t *testing.T) {
 	contracts := contractsFor(t, mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"aliases":["x"]},"b":{"aliases":["x"]}}}`))
 	if _, err := contracts.CompileInput(context.Background(), "x"); !errors.Is(err, ErrOperationNotFound) {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestCompile_OperationIdentifierIndex(t *testing.T) {
+	doc := mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{
+		"a":{"aliases":["a","unique","unique","shared"],"input":{"const":"a"}},
+		"b":{"aliases":["shared","keyCollision"],"input":{"const":"b"}},
+		"c":{"aliases":["shared"],"input":{"const":"c"}},
+		"keyCollision":{"input":{"const":"keyCollision"}},
+		"":{"aliases":["emptyKey"],"input":{"const":""}}
+	}}`)
+	contracts := contractsFor(t, doc)
+	for _, name := range []string{"a", "unique", "b", "c", "", "emptyKey", "shared", "keyCollision", "Unique", " unique", "missing"} {
+		t.Run(name, func(t *testing.T) {
+			// Preparing contracts must retain the public lookup's exact,
+			// equally authoritative key/alias semantics on invalid documents too.
+			key, _, found := doc.ResolveOperation(name)
+			contract, err := contracts.CompileInput(context.Background(), name)
+			if !found {
+				if !errors.Is(err, ErrOperationNotFound) {
+					t.Fatalf("ambiguous or missing %q: %v", name, err)
+				}
+				return
+			}
+			if err != nil || contract == nil {
+				t.Fatalf("%q resolved to %q: %v", name, key, err)
+			}
+			if err := contract.Validate(context.Background(), key); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

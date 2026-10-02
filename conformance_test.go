@@ -71,9 +71,9 @@ func sdkDeclaration() corpus.Declaration {
 // appliedTextRevision and appliedTextSHA256 bind the text this SDK applies:
 // the revision of github.com/openbindings/spec it pins, which must be
 // appliedRevision, and the sha256 of that revision's openbindings.md.
-const appliedTextRevision = "cbc17a6f6fdb9eeeb38dd0fa184df258cedaece0"
+const appliedTextRevision = "04a84131295dc8c305b4f048d2e129f84fb023de"
 
-const appliedTextSHA256 = "958461372e761311a12e3f33bab112876032ffa14d776f39be31f83bebfe0198"
+const appliedTextSHA256 = "afaa04552f5330db6baa13deeb0516d8df0698ae57be26301e2f4bdd341dc1b5"
 
 // appliedTextVerified verifies the text this SDK names against the bytes it
 // pins (verifyAppliedText), for the history of the specification repository
@@ -614,15 +614,15 @@ func concludeGiven(cs corpus.Case) (map[string]RuleEvidenceStatus, string, error
 }
 
 // judgeConclude executes conclude-conformance through ConcludeConformance.
-// conformant admits conformance-undetermined, as validate-document's does:
-// OBI-T-09 only prohibits.
+// The action supplies the evidence: its reported conclusion must match that
+// evidence exactly (§10.4). Withholding a report is not incomplete evidence.
 func judgeConclude(cs corpus.Case) corpus.Judgment {
 	evidence, expected, err := concludeGiven(cs)
 	if err != nil {
 		return fail("%v", err)
 	}
 	report := ConcludeConformance(evidence)
-	if string(report.Conclusion) != expected && !(expected == string(ConclusionConformant) && report.Conclusion == ConclusionConformanceUndetermined) {
+	if string(report.Conclusion) != expected {
 		return fail("concluded %s; expected %s", report.Conclusion, expected)
 	}
 	return pass(string(report.Conclusion))

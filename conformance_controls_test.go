@@ -120,10 +120,8 @@ func TestNoDocument(t *testing.T) {
 	}
 }
 
-// conclude-conformance's conformant admits conformance-undetermined, as
-// validate-document's does (OBI-T-09 only prohibits), and every other
-// conclusion is expected exactly: non-conformant from evidence that
-// establishes no violation fails.
+// conclude-conformance receives the evidence and reports its exact meaning
+// (§10.4); an undetermined result cannot stand for established conformance.
 func TestJudgeConcludeControls(t *testing.T) {
 	satisfied := allRules(EvidenceSatisfied)
 	partial := allRules(EvidenceSatisfied)
@@ -139,7 +137,7 @@ func TestJudgeConcludeControls(t *testing.T) {
 		category string
 	}{
 		{"conformant, concluded conformant", satisfied, "conformant", corpus.Pass},
-		{"conformant, concluded undetermined", partial, "conformant", corpus.Pass},
+		{"conformant, concluded undetermined", partial, "conformant", corpus.Fail},
 		{"undetermined, concluded undetermined", partial, "conformance-undetermined", corpus.Pass},
 		{"undetermined, concluded conformant", satisfied, "conformance-undetermined", corpus.Fail},
 		{"non-conformant without a violation", partial, "non-conformant", corpus.Fail},

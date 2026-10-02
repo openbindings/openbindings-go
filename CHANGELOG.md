@@ -412,6 +412,16 @@
 
 ### Fixed
 
+- Supplied schema roots with an empty `$id` or an empty fragment use their
+  retrieval URI, instead of incorrectly refusing evaluation as undefined.
+  Nested resource identity collisions remain refused.
+- Value-contract preparation indexes operation keys and aliases in one pass,
+  preserving exact lookup and ambiguity behavior without a full operation
+  scan for every identifier.
+- The conformance adapter checks the exact reported conclusion for supplied
+  evidence (§10.4), preserving the distinction between incomplete evidence
+  and withholding a positive report.
+
 - **A dynamic capture into a name the document resource declares twice
   gets no verdict (§7.2; JSON Schema Core §8.2.2, §8.2.3.2).** An
   evaluation beginning in the document resource makes it outermost in the

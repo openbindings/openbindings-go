@@ -109,9 +109,11 @@ each with the spec CHANGELOG entry (0.2.0 working draft) that states it:
   corpus runner reads @2's actions and expectations: value results as
   `valid`, `instance-mismatch`, or `no-verdict` (bare or in object form
   with `orNoVerdict` and `dependsOn`), `notViolated` beside `violates`,
-  conclusions where `conformant` admits `conformance-undetermined`, and a
-  conclusion naming the applied text, verified against the revision's
-  pinned hash. Go's adapter reads @2 only.
+  validation outcomes where `conformant` admits `conformance-undetermined`
+  when the validator lacks evidence, and conclusions naming the applied
+  text, verified against the revision's pinned hash. The separate
+  `conclude-conformance` action requires the exact conclusion determined
+  by its supplied evidence (§10.4). Go's adapter reads @2 only.
 
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable
@@ -202,3 +204,9 @@ allows: `ValidateDocument` corresponds to `validateInterface`,
 `ConcludeConformance` to `concludeConformance`, and so on. A user moving
 between SDKs should recognize the role before learning its language-specific
 mechanics.
+
+The conformance-conclusion clarification (spec `04a8413`, adopted 2026-10-02)
+keeps positive reporting optional while preserving the meaning of an
+undetermined conclusion. Go already computed the specified conclusion; its
+corpus adapter now requires that exact result from supplied evidence. This
+records the Go adoption without asserting a new TypeScript parity result.
