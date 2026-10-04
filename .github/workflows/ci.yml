@@ -82,3 +82,12 @@ jobs:
         env:
           OB_SPEC_CORPUS: ${{ github.workspace }}/spec/conformance
           OB_CORPUS_REQUIRED: "1"
+      - name: vet httpdiscovery
+        working-directory: httpdiscovery
+        run: go vet ./...
+      - name: test httpdiscovery
+        working-directory: httpdiscovery
+        run: go test -race -short ./...
+        env:
+          OB_SPEC_CORPUS: ${{ github.workspace }}/spec/conformance
+          OB_CORPUS_REQUIRED: "1"

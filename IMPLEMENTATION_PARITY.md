@@ -6,10 +6,22 @@ conformance corpus. The checked-in
 [`reference-sdk-correspondence.json`](../spec/conformance/reference-sdk-correspondence.json)
 also guards the public role and family correspondence.
 
-This record covers the core. The layers the Go repository no longer carries
+This record covers the core and the optional HTTP discovery module. The layers
+the Go repository no longer carries
 (invocation, synthesis and inspection, comparison, and the binding modules)
 are preserved with their parity record on the `legacy/pre-core-rebuild`
 branch; each rebuilt layer brings its parity entries back with it.
+
+The rebuilt `httpdiscovery` module (HTTP Discovery companion v0.1.0) is
+established in Go first; TypeScript alignment is pending. Its observable
+contract is documented in [httpdiscovery/README.md](httpdiscovery/README.md):
+origin-only endpoint construction, both JSON media types, redirect metadata,
+404 absence distinct from gated discovery and other HTTP errors, core version
+refusals/violations/inconclusive results preserved, bounded response reads, and
+an immutable publishing handler requiring established document conformance.
+Client transport/redirect and server authentication/CORS policies are supplied
+by the application. Its rule-keyed conformance and transport tests accompany
+the module; they do not constitute a cross-SDK parity claim.
 
 SDK-01 aligns Go with spec draft `ccfe0b6`: `Source.Kind` and
 `Dependency.Kinds` carry the new JSON names exactly, the embedded schema

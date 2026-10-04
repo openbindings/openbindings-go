@@ -6,6 +6,14 @@
 
 ### Added
 
+- **Optional HTTP discovery module.** `httpdiscovery` implements the separately
+  versioned HTTP Discovery companion v0.1.0 with a discovery client and a
+  handler for publishing an immutable, validated document. It preserves core
+  validation reports and error categories, distinguishes absent and gated
+  discovery, and supports application HTTP policy and bounded response reads.
+  Its separate module keeps network acquisition outside the core module.
+  Companion rule tests, authority verification, and race tests run in CI;
+  TypeScript alignment is pending in `IMPLEMENTATION_PARITY.md`.
 - **An operation's bindings by key.** `Document.OperationBindings(key)`
   returns the keys of the bindings whose `operation` is that key, sorted for
   presentation. An alias, a key no operation has, and a nil `Document` find
