@@ -62,6 +62,13 @@ validation failure. A custom transport that omits `Response.Request.URL` leaves
 the final URL empty. A failed HTTP call returns no result. Each call owns its
 result, and the client keeps no cache.
 
+For HTTP/1 connection reuse, short non-200 bodies are discarded with a 2 KiB
+read cap and a 100 ms cleanup budget. Known larger bodies and HTTP/2 bodies are
+closed directly. Cleanup reads do not interpret the body; read failures,
+cancellation, and exhausted cleanup budgets preserve the observed status error
+and response metadata. Custom transports must honor request cancellation during
+body reads, as `net/http.Transport` does.
+
 Redirects use the supplied HTTP client's policy, including `CheckRedirect` and
 its limits. Authentication, cookies, TLS, proxy, scheme and network-range
 restrictions belong to that client's configuration and transport; apply them
@@ -98,6 +105,13 @@ For no published document, leave the path unregistered in a `ServeMux` or use
 `http.NotFoundHandler`. Authentication middleware may answer 401/403 without
 revealing whether a document exists. An empty `AllowOrigin` emits no CORS header;
 public browser discovery should explicitly use `"*"` or an allowed origin.
+The constructor checks the syntax of a single ASCII origin
+(`scheme://host[:port]`), rejecting controls, whitespace, origin lists,
+credentials, paths (including a trailing slash), queries, and fragments.
+The header value is emitted unchanged: supply the browser's serialized origin,
+including its canonical host and port spelling. Internationalized domain names
+use their ASCII form. Literal `"null"` is an explicit opt-in for the origin shared
+by opaque origins; it does not identify one particular caller.
 Credentialed CORS and preflight requests, when needed, use application middleware.
 The helper does not add authentication, credentialed CORS, or cache policy.
 
@@ -118,7 +132,8 @@ servers. The rule coverage is:
 | DISC-S-04 | Explicit public, restricted-origin, and no-CORS configurations |
 
 Additional tests cover context cancellation, response closure, configurable and
-decompressed size bounds, header injection, routing, HEAD, concurrency, result
+decompressed size bounds, invalid CORS configuration, bounded error-body cleanup
+and HTTP/1 connection reuse, routing, HEAD, concurrency, result
 isolation, and preservation of document references and dependencies. CI also
 verifies the companion's pinned text hash using its existing spec checkout.
 

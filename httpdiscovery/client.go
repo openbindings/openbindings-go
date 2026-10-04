@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -17,6 +18,11 @@ import (
 const WellKnownPath = "/.well-known/openbindings"
 
 const defaultMaxDocumentBytes int64 = 1 << 20
+
+const (
+	statusBodyDrainLimit   = 2 << 10
+	statusBodyDrainTimeout = 100 * time.Millisecond
+)
 
 var (
 	// ErrNotFound means the endpoint answered 404. It never describes gated
@@ -101,6 +107,9 @@ func Endpoint(origin string) (string, error) {
 // Content-Type values. Media-type metadata never hides a version refusal.
 // Only a 404 matches ErrNotFound. Other statuses, transport failures, limits,
 // and invalid documents remain explicit errors (DISC-C-03 permits this).
+// Short non-200 HTTP/1 bodies are discarded within a 2 KiB / 100 ms budget to
+// permit connection reuse. Cleanup failure preserves the observed StatusError.
+// As with other HTTP work, custom transports must honor request cancellation.
 //
 // A nil error means the body was decoded and no document-rule violation was
 // established. Report can still be conformance-undetermined. When core cannot
@@ -123,6 +132,9 @@ func (c Client) Discover(ctx context.Context, origin string) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("http discovery: request: %w", err)
 	}
+	requestCtx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	req = req.WithContext(requestCtx)
 	req.Header.Set("Accept", openbindings.MediaType+", application/json")
 	client := c.HTTPClient
 	if client == nil {
@@ -141,6 +153,14 @@ func (c Client) Discover(ctx context.Context, origin string) (*Result, error) {
 		result.FinalURL = resp.Request.URL.String()
 	}
 	if resp.StatusCode != http.StatusOK {
+		if resp.ProtoMajor < 2 && resp.ContentLength <= statusBodyDrainLimit {
+			// Cancel only this request if an error body stalls. Read synchronously:
+			// no background draining goroutine survives Discover. A transport must
+			// honor the request context for response-body reads, as net/http does.
+			timer := time.AfterFunc(statusBodyDrainTimeout, cancel)
+			_, _ = io.CopyN(io.Discard, resp.Body, statusBodyDrainLimit)
+			timer.Stop()
+		}
 		return result, &StatusError{StatusCode: resp.StatusCode}
 	}
 	readLimit := limit
