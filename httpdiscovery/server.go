@@ -88,7 +88,7 @@ func validAllowOrigin(origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.Opaque != "" || u.User != nil ||
 		u.Path != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(origin, "#") ||
-		strings.ContainsAny(u.Host, ",%*\\") {
+		strings.ContainsAny(u.Host, ",%*\\<>\"") {
 		return false
 	}
 	host := u.Hostname()

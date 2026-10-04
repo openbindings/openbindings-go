@@ -58,6 +58,7 @@ func TestHandlerRejectsInvalidCORSOrigin(t *testing.T) {
 		" https://client.example", "https://client.example ", " *", "null ",
 		"client.example", "//client.example", "https:", "https:///",
 		"https://*.example", "https://clïent.example", "https://%63lient.example",
+		"https://<client.example>", "https://client>example", `https://"client.example"`,
 		"https://client.example:", "https://client.example:wrong", "https://client.example:65536",
 		"https://[invalid]", "https://[::1]extra", "https://::1", "https://[fe80::1%25en0]",
 		"https://client.example\\path",
