@@ -420,6 +420,11 @@
 
 ### Fixed
 
+- **HTTP discovery configuration and connection reuse.** The publication handler
+  rejects invalid fixed CORS origins at construction, including controls, origin
+  lists and trailing paths. The client discards short non-200 HTTP/1 bodies within
+  byte and time budgets so connections can be reused, retaining the observed HTTP
+  status even if cleanup fails. Larger bodies and HTTP/2 bodies close directly.
 - **Specification support remains per major.minor line after 1.0.** The
   declaration parser, version decision and corpus gates retain the minor
   version for every major, as §8.1 requires. The current `0.2.x` support

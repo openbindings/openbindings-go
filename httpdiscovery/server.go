@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -13,8 +15,11 @@ import (
 // HandlerOptions configures publication policy outside core document semantics.
 type HandlerOptions struct {
 	// AllowOrigin is a fixed Access-Control-Allow-Origin value. Use "*" for
-	// public browser discovery, or a permitted origin for restricted CORS.
-	// Empty emits no CORS header. Credentialed CORS and preflight handling,
+	// public browser discovery, or a single ASCII origin (scheme://host[:port])
+	// for restricted CORS. The value is syntax-checked and emitted unchanged;
+	// use the browser's serialized origin, without a trailing slash. "null"
+	// explicitly allows the origin shared by opaque origins. Empty emits no
+	// CORS header. Credentialed CORS and preflight handling,
 	// when needed, belong to the application's middleware.
 	AllowOrigin string
 }
@@ -35,8 +40,8 @@ type HandlerOptions struct {
 // http.NotFoundHandler. Authentication/authorization middleware may answer
 // 401/403 before this handler, including when publication is gated.
 func NewHandler(data []byte, options HandlerOptions) (http.Handler, error) {
-	if strings.ContainsAny(options.AllowOrigin, "\r\n\x00") {
-		return nil, fmt.Errorf("http discovery: AllowOrigin contains a header control character")
+	if !validAllowOrigin(options.AllowOrigin) {
+		return nil, fmt.Errorf("http discovery: AllowOrigin must be empty, *, null, or a single ASCII origin without credentials, path, query, or fragment")
 	}
 	body := bytes.Clone(data)
 	_, report, err := openbindings.ValidateDocument(body)
@@ -66,4 +71,42 @@ func NewHandler(data []byte, options HandlerOptions) (http.Handler, error) {
 			_, _ = w.Write(body)
 		}
 	}), nil
+}
+
+// Validate the fixed header's syntax, not application authorization policy or
+// browser-specific origin canonicalization. In particular, do not reuse
+// Endpoint here: it accepts a trailing slash and rewrites an origin as a URL.
+func validAllowOrigin(origin string) bool {
+	if origin == "" || origin == "*" || origin == "null" {
+		return true
+	}
+	for i := range len(origin) {
+		if origin[i] <= ' ' || origin[i] >= 0x7f {
+			return false
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.Opaque != "" || u.User != nil ||
+		u.Path != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(origin, "#") ||
+		strings.ContainsAny(u.Host, ",%*\\<>\"") {
+		return false
+	}
+	host := u.Hostname()
+	if strings.HasPrefix(u.Host, "[") {
+		addr, err := netip.ParseAddr(host)
+		if err != nil || !addr.Is6() || addr.Zone() != "" {
+			return false
+		}
+	} else if strings.ContainsAny(host, "[]:") {
+		return false
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return false
+		}
+	}
+	return true
 }
