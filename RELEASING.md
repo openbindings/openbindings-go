@@ -1,11 +1,12 @@
 # Releasing openbindings-go
 
-This repository holds two Go modules: the core SDK at the repository root,
-and `schemaeval`, the project's schema evaluator, which requires the core.
-Neither has an upstream tag prerequisite; `schemaeval` is tagged after the
-core release it requires. Until then its `go.mod` develops against the core
-beside it through a `replace` directive, which a release drops in favor of
-the tagged core version.
+This repository holds three Go modules: the core SDK at the repository root,
+`schemaeval`, the project's schema evaluator, and `httpdiscovery`, the optional
+HTTP Discovery companion implementation. The optional modules require core and
+are tagged after the core release they require. Until then their `go.mod` files
+develop against the core beside them through a `replace` directive, which a
+release drops in favor of the tagged core version. Their versions are independent
+of the core module and of the specifications they implement.
 
 The eight `formats/*` modules that used to live here were removed on
 2026-09-24 (preserved on the `legacy/pre-core-rebuild` branch). Their published
@@ -42,6 +43,7 @@ through its revision today, so before `appliedRevision` is set to `""`:
 
 - Core SDK: `vX.Y.Z`
 - Schema evaluator: `schemaeval/vX.Y.Z`, after the core tag it requires
+- HTTP discovery: `httpdiscovery/vX.Y.Z`, after the core tag it requires
 
 All release tags are annotated (from 0.2.0 on; the 0.1.0 tags predate this
 convention and are lightweight):
@@ -63,6 +65,13 @@ It disables every local workspace, resolves the module through the public Go
 module path, and compiles a fresh consumer importing it. A release is
 incomplete until this passes.
 
+That script covers the root module. For either optional module, remove its local
+replacement before tagging, run its tests against the required tagged core, and
+verify a fresh external consumer resolves and builds the tagged optional module
+with `GOWORK=off` and no local replacement. HTTP discovery also requires its
+companion conformance tests, pinned-authority check, and `go vet`/race tests to
+pass; its [README](httpdiscovery/README.md) states its separate conformance scope.
+
 ## Release readiness
 
 A release is judged by these rows, each met or not on evidence, rather than
@@ -74,7 +83,7 @@ entry, which also records each row's final state.
 |---|---|
 | Every rule | Every core document rule, and every tool rule that applies to the SDK, is implemented; CI runs the specification's core corpus with `OB_CORPUS_REQUIRED` against the text the release applies. |
 | Exact model | A document read and written back is unchanged, and the embedded document schema is byte-identical to the specification's at the applied revision. |
-| Only the core | Every exported name maps to the core specification or a convenience it implies; the module holds no invocation, synthesis, discovery, or binding-specification code. |
+| Only the core | Every exported name in the root module maps to the core specification or a convenience it implies; the root module holds no invocation, synthesis, discovery, or binding-specification code. Separately installed companion modules name their own authority. |
 | One vocabulary | Public names use the specification's terms. |
 | The text named | `appliedRelease` names the release applied, and `appliedRevision` its revision while that release is a working draft (`""` once released), so a validation report names the text it applied (OBI-T-09). |
 | Parity | The TypeScript SDK matches at the observable OpenBindings boundary: `IMPLEMENTATION_PARITY.md` lists nothing pending. |

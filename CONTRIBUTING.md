@@ -17,8 +17,9 @@ ref.
 
 ## Working on this repo
 
-The repository is a single Go module: the core SDK. It carries only what the
-core specification defines; see the README's "Scope, and the rebuild" for the
+The root module is the core SDK. It carries only what the core specification
+defines. `schemaeval` and `httpdiscovery` are separate optional modules;
+see the README's "Scope, and the rebuild" for the
 layers removed on 2026-09-24 and the `legacy/pre-core-rebuild` branch that
 preserves them.
 
@@ -36,6 +37,11 @@ The corpus's value cases run in the `schemaeval` module's tests, under its
 ECMA-262 evaluator, so run `go test ./...` in `schemaeval` as well; each
 module checks that it executed or omitted, with a reason, every case the
 corpus manifest counts for it.
+
+Run `go vet ./...` and `go test -race ./...` in `httpdiscovery` as well. Its tests
+cover the HTTP Discovery companion's client and server rules and verify the
+companion text at the pinned revision using the same `OB_SPEC_CORPUS` checkout.
+Use `GOWORK=off` when an enclosing development workspace selects other modules.
 
 ## Releasing
 

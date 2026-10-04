@@ -1,7 +1,7 @@
 # openbindings-go
 
-The core [OpenBindings](https://openbindings.com) SDK for Go: the OBI document
-model, its document rules and conformance report, operation resolution, and
+The [OpenBindings](https://openbindings.com) SDK for Go. Its core module carries
+the OBI document model, its document rules and conformance report, operation resolution, and
 validation of values against value contracts, as the core specification
 defines them.
 
@@ -117,7 +117,10 @@ Discovery (`httpdiscovery`), acquisition (`acquire`), schema comparison
 packages), supporting utilities, and the eight `formats/*` binding modules.
 They were removed so that each layer can be rebuilt on this core from its own
 authority, and each returns only once it names that authority and passes its
-conformance corpus. The removed code is preserved, runnable, on the
+conformance corpus. HTTP discovery now returns as the optional, separate
+[`httpdiscovery`](httpdiscovery) module: a client and publication handler governed
+by the HTTP Discovery companion specification v0.1.0. The other layers remain
+outside the rebuilt SDK. The removed code is preserved, runnable, on the
 `legacy/pre-core-rebuild` branch at `aceb788`, the last commit at which every
 module built and passed. The published `v0.1.0` and `formats/*/v0.1.0` tags
 remain resolvable through the Go module proxy.
@@ -129,6 +132,8 @@ remain resolvable through the Go module proxy.
   openbindingstest/        ← the conformance kit for schema evaluators
   schemaeval/              ← github.com/openbindings/openbindings-go/schemaeval,
                              the project's schema evaluator (its own module)
+  httpdiscovery/           ← github.com/openbindings/openbindings-go/httpdiscovery,
+                             the optional HTTP discovery companion (its own module)
   internal/jsonpointer/    ← RFC 6901 pointers for finding locations
   internal/schemacompiler/ ← the document rules' use of the JSON Schema library,
                              and the ECMA-262 pattern grammar
