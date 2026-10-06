@@ -97,7 +97,7 @@ func cliValidate(name string, data []byte) (exit int) {
 	}
 	// err is nil or a *ValidationError; the report already holds the same
 	// violations, so the command reads the report alone.
-	text := "OpenBindings " + report.Version
+	text := "OpenBindings " + report.Release
 	if report.Revision != "" {
 		text += " (working draft, spec revision " + report.Revision[:7] + ")"
 	}
@@ -588,7 +588,7 @@ func amendRule(report openbindings.ValidationReport, rule string, status openbin
 	evidence := maps.Clone(report.Evidence)
 	evidence[rule] = status
 	amended := openbindings.ConcludeConformance(evidence)
-	amended.Version, amended.Revision = report.Version, report.Revision
+	amended.Release, amended.Revision = report.Release, report.Revision
 	for _, finding := range report.Findings {
 		if finding.Rule != rule {
 			amended.Findings = append(amended.Findings, finding)
@@ -610,14 +610,14 @@ func Example_producerAmendReport() {
 	// the provenance nor the findings, so a report built from it alone names
 	// no specification text.
 	bare := openbindings.ConcludeConformance(maps.Clone(report.Evidence))
-	fmt.Printf("bare: %s, version %q, %d findings\n", bare.Conclusion, bare.Version, len(bare.Findings))
+	fmt.Printf("bare: %s, release %q, %d findings\n", bare.Conclusion, bare.Release, len(bare.Findings))
 	// Evidence that leaves out a document rule leaves it inconclusive
 	// (OBI-T-09): no evidence concludes nothing.
 	partial := openbindings.ConcludeConformance(map[string]openbindings.RuleEvidenceStatus{"OBI-D-01": openbindings.EvidenceSatisfied})
 	fmt.Println("one rule satisfied:", partial.Conclusion, len(partial.Inconclusive), "inconclusive")
 
 	amended, err := amendRule(report, "OBI-D-10", openbindings.EvidenceSatisfied)
-	fmt.Println(err, amended.Conclusion, amended.Version, amended.Revision[:7], len(amended.Findings), "findings")
+	fmt.Println(err, amended.Conclusion, amended.Release, amended.Revision[:7], len(amended.Findings), "findings")
 
 	// With a violation elsewhere, the other rule's findings stay.
 	violating := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":` + deeplyNested + `}},
@@ -637,7 +637,7 @@ func Example_producerAmendReport() {
 	fmt.Println(err)
 	// Output:
 	// conformance-undetermined [OBI-D-10] 1 findings
-	// bare: conformance-undetermined, version "", 0 findings
+	// bare: conformance-undetermined, release "", 0 findings
 	// one rule satisfied: conformance-undetermined 12 inconclusive
 	// <nil> conformant 0.2.0 8e68955 0 findings
 	// <nil> non-conformant [OBI-D-07] [] OBI-D-07 /bindings/b/operation
@@ -1479,9 +1479,14 @@ func Example_cliReferenceFailures() {
 	report := func(name string, doc *openbindings.Document) {
 		refs, err := doc.References()
 		var refusal *openbindings.VersionRefusalError
+		var violation *openbindings.ValidationError
 		switch {
 		case errors.As(err, &refusal):
 			fmt.Println(name+": refused, version", refusal.Version)
+		case errors.As(err, &violation):
+			// An established violation: the document is non-conformant, and
+			// a document declaring no valid version is not interpreted.
+			fmt.Println(name+": non-conformant,", violation.Findings[0].Rule)
 		case errors.Is(err, openbindings.ErrInconclusive):
 			// The references found, if any, are some, not all: nothing may
 			// be concluded from what is missing.
@@ -1505,7 +1510,7 @@ func Example_cliReferenceFailures() {
 	report("nil document", nil)
 	// Output:
 	// next version: refused, version 0.3.0
-	// no version: 0 references found, inconclusive: openbindings: inconclusive: the document declares no valid version ("0.2" is not SemVer 2.0.0, OBI-D-09), so it is not interpreted
+	// no version: non-conformant, OBI-D-09
 	// unencodable: openbindings: encode document: json: error calling MarshalJSON for type openbindings.Document: json: error calling MarshalJSON for type openbindings.Operation: json: unsupported value: NaN
 	// deep: 1 references found, inconclusive: openbindings: inconclusive: the schemas at /operations/op/input nest subschemas deeper than 256 levels, which this SDK does not index, so the references there are not all listed
 	// no references: 0 references, complete

@@ -37,13 +37,14 @@ var (
 	// It is wrapped by ParseDocument's errors other than a
 	// *VersionRefusalError and a *ValidationError; by
 	// ValueContractCompiler.Resolve's and Document.References' errors for a
-	// document declaring no valid version, which they do not interpret, and
-	// for one beyond this SDK's own limits, nesting deeper than encoding/json
+	// document beyond this SDK's own limits, nesting deeper than encoding/json
 	// reads or holding a string escaping a lone UTF-16 surrogate, which the
 	// model does not write (Document.Validate states which documents those
-	// are); by Document.References' error for an index it could not
-	// complete; and by ValueContract.Validate's and ValidateJSON's errors for
-	// input that is not one JSON value.
+	// are); and by Document.References' error for an index it could not
+	// complete. A document declaring no valid version is not one of these:
+	// its OBI-D-09 violation is established, so those calls return it as a
+	// *ValidationError. Nor is value input that is not one JSON value, which
+	// leaves nothing to decide.
 	ErrInconclusive = errors.New("openbindings: inconclusive")
 
 	// ErrOperationNotFound is wrapped by the errors returned for a name that

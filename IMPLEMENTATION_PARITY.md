@@ -143,15 +143,18 @@ behavior and recognizable names, not identical signatures:
   or none; no refusal for a text that declares no version (OBI-T-04). The
   operation lookups refuse nothing. No exported SemVer validity predicate.
 - **Inconclusive, distinctly.** One category for a call that decided
-  nothing: a parse that cannot read a document in full, a document declaring
-  no valid version, a document nesting past the decoder or holding an
-  escaped lone UTF-16 surrogate, given as bytes or, in memory, where the
-  SDK's own checks find it in the text the document encodes to or in a
-  member the model carries as raw JSON (a document that fails to encode at
-  all matches no category; Go states the boundary in `Document.Validate`),
-  an incomplete reference index, and value input that is not JSON; never a
-  conformance conclusion or a value verdict, and disjoint from them whatever
-  an evaluator or a value's own encoding says.
+  nothing because the input is beyond the SDK's own limits: a parse that
+  cannot read a document in full, a document nesting past the decoder or
+  holding an escaped lone UTF-16 surrogate, given as bytes or, in memory,
+  where the SDK's own checks find it in the text the document encodes to or
+  in a member the model carries as raw JSON (a document that fails to encode
+  at all matches no category; Go states the boundary in `Document.Validate`),
+  and an incomplete reference index; never a conformance conclusion or a
+  value verdict, and disjoint from them whatever an evaluator or a value's
+  own encoding says. A document declaring no valid version gets its
+  established OBI-D-09 violation from the reference index and value-contract
+  resolution, as from validation. Value input that is not JSON gets an error
+  of no category: there is no value, so nothing is undecided.
 - **Schema references.** Every `$ref` and `$dynamicRef` in the schemas a
   document contains whose value is a well-formed URI-reference, with
   location, keyword, value, base, initial target or why there is none, by
@@ -197,7 +200,7 @@ each of these observable behaviors:
 | mark what decided nothing | `ErrInconclusive` | pending |
 | validate a value against a value contract, with the application's evaluator | `NewValueContractCompiler(...)`, `Resolve`, `CompileInput` / `CompileOutput`, `ValueContract.Validate` | pending |
 | check an evaluator against the evaluator contract | `openbindingstest.TestSchemaEvaluator(...)` | pending |
-| name the specification text a conclusion applied, with its revision while a working draft (OBI-T-09) | `ValidationReport.Version` and `ValidationReport.Revision` | pending |
+| name the specification text a conclusion applied, with its revision while a working draft (OBI-T-09) | `ValidationReport.Release` and `ValidationReport.Revision` | pending |
 | position a finding in the input bytes | `Finding.Position` | pending |
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |

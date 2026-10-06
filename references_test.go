@@ -232,8 +232,9 @@ func TestReferences_WholeCall(t *testing.T) {
 		t.Errorf("an unsupported version: %v, %v", refs, err)
 	}
 	for _, version := range []string{"0.2", ""} {
-		refs, err := (&Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: map[string]any{"$ref": "#/x"}}}}).References()
-		if !errors.Is(err, ErrInconclusive) || errors.As(err, new(*VersionRefusalError)) || refs != nil {
+		doc := &Document{OpenBindings: version, Operations: map[string]Operation{"op": {Input: map[string]any{"$ref": "#/x"}}}}
+		refs, err := doc.References()
+		if !isVersionViolation(err, doc) || refs != nil {
 			t.Errorf("no valid version %q: %v, %v", version, refs, err)
 		}
 	}

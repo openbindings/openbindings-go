@@ -66,7 +66,9 @@ func TestMessagesNameThePackageOnce(t *testing.T) {
 			t.Errorf("%s: no error", name)
 			continue
 		}
-		if message := err.Error(); !strings.HasPrefix(message, "openbindings: ") || strings.Count(message, "openbindings:") != 1 {
+		// "/openbindings:" is a finding's JSON Pointer to the openbindings
+		// member, not the package name.
+		if message := err.Error(); !strings.HasPrefix(message, "openbindings: ") || strings.Count(message, "openbindings:")-strings.Count(message, "/openbindings:") != 1 {
 			t.Errorf("%s: %q", name, message)
 		}
 	}

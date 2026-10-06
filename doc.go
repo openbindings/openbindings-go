@@ -81,7 +81,7 @@
 //	compiler, _ := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))
 //	contracts, err := compiler.Resolve(ctx, doc)
 //	input, err := contracts.CompileInput(ctx, "tasks.create")
-//	err = input.ValidateJSON(ctx, body) // nil, a *MismatchError, a *NoVerdictError, or ErrInconclusive: body is not JSON
+//	err = input.ValidateJSON(ctx, body) // nil, a *MismatchError, a *NoVerdictError, or another error: body is not JSON
 //
 // Core does what the specification fixes: it resolves the document's schemas
 // (§7), and the resources the application supplies, and refuses, located and

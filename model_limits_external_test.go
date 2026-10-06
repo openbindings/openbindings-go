@@ -372,7 +372,7 @@ func TestModelLimits_SchemasEncodeOnce(t *testing.T) {
 
 // The value lane's side of the boundary, for values a caller builds: raw JSON
 // in a value is encoded by encoding/json like any Go value, so what it
-// refuses is not a JSON value (ErrInconclusive) and what it omits or never
+// refuses is not a JSON value (an error of no category) and what it omits or never
 // writes is not read.
 func TestCategories_RawJSONInCallerValues(t *testing.T) {
 	ctx := context.Background()
@@ -410,8 +410,8 @@ func TestCategories_RawJSONInCallerValues(t *testing.T) {
 		"a repeated name beside two values":                                    {[]any{json.RawMessage(`{"a":1,"a":2}`), json.RawMessage(`1 2`)}, `[{"a":1,"a":2},1 2]`},
 	} {
 		got := contract.Validate(ctx, c.value)
-		if !errors.Is(got, openbindings.ErrInconclusive) || errors.Is(got, openbindings.ErrNoVerdict) || errors.Is(got, openbindings.ErrMismatch) {
-			t.Errorf("%s: %v, want ErrInconclusive alone", name, got)
+		if got == nil || errors.Is(got, openbindings.ErrInconclusive) || errors.Is(got, openbindings.ErrNoVerdict) || errors.Is(got, openbindings.ErrMismatch) {
+			t.Errorf("%s: %v, want an error of no category", name, got)
 		}
 		if c.text != "" {
 			if whole := contract.ValidateJSON(ctx, []byte(c.text)); outcomes(whole, nil) != outcomes(got, nil) {

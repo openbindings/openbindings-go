@@ -52,12 +52,12 @@ func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, report := range []ValidationReport{fromDocument, fromHostObject} {
-		if report.Version != "0.2.0" || len(report.Revision) != 40 || strings.Trim(report.Revision, "0123456789abcdef") != "" {
-			t.Errorf("version %q, revision %q: want 0.2.0 and a full commit hash while 0.2.0 is a working draft", report.Version, report.Revision)
+		if report.Release != "0.2.0" || len(report.Revision) != 40 || strings.Trim(report.Revision, "0123456789abcdef") != "" {
+			t.Errorf("release %q, revision %q: want 0.2.0 and a full commit hash while 0.2.0 is a working draft", report.Release, report.Revision)
 		}
 	}
-	if report := ConcludeConformance(map[string]RuleEvidenceStatus{"OBI-D-01": EvidenceSatisfied}); report.Version != "" || report.Revision != "" {
-		t.Errorf("a report from evidence alone names %q at %q", report.Version, report.Revision)
+	if report := ConcludeConformance(map[string]RuleEvidenceStatus{"OBI-D-01": EvidenceSatisfied}); report.Release != "" || report.Revision != "" {
+		t.Errorf("a report from evidence alone names %q at %q", report.Release, report.Revision)
 	}
 }
 

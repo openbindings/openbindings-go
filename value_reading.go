@@ -115,13 +115,13 @@ func base64Bytes(value any) bool {
 
 // notAValue frames a failure to read a value: core's own refusal to read it
 // exactly, a *NoVerdictError readJSONText returns itself, as it is, and input
-// that is not one JSON value as ErrInconclusive, since there is no value to
-// judge. The refusal is told apart by its type, not searched for in a chain,
-// and the other failures hold no error from outside core, so the result
-// matches exactly one of ErrNoVerdict and ErrInconclusive.
+// that is not one JSON value as a plain error, since there is no value to
+// judge and so nothing undecided. The refusal is told apart by its type, not
+// searched for in a chain, and the other failures hold no error from outside
+// core, so the result matches ErrNoVerdict exactly when it is that refusal.
 func notAValue(err error) error {
 	if refusal, isRefusal := err.(*NoVerdictError); isRefusal {
 		return refusal
 	}
-	return fmt.Errorf("%w: %w", ErrInconclusive, err)
+	return fmt.Errorf("openbindings: %w", err)
 }

@@ -101,7 +101,7 @@ release's CHANGELOG entry states the result.
 | Every rule | Met at spec `8e68955`. OBI-T-05 and OBI-T-11 do not apply: the SDK derives no forms and checks no examples. |
 | Exact model | Met. |
 | Only the core | Met. `openbindingstest` and `schemaeval` serve OBI-T-08's value validation, and `httpdiscovery` names the HTTP Discovery text it applies by revision and SHA-256. |
-| One vocabulary | Not met: `Reference.Target`, `Position`, `ValidationReport.Version`, and `ErrInconclusive` stretch or collide with the specification's terms, pending a ruling. |
+| One vocabulary | Met. `Reference.Target` and `Position` keep their names: a schema reference's target and a finding's place in the input text share no context with the specification's binding target and OBI position. A report names the applied `Release`, and `ErrInconclusive` marks only input beyond this SDK's own limits. |
 | The text named | Met. |
 | Parity | Not met: see `IMPLEMENTATION_PARITY.md`. |
 
