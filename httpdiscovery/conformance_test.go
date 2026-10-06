@@ -262,8 +262,8 @@ func TestCompanionAuthority(t *testing.T) {
 	// CI checks out this revision for core's existing corpus gate. These
 	// companion cases run independently; this check binds them to the named
 	// companion text instead of silently following an edited draft.
-	const revision = "04a84131295dc8c305b4f048d2e129f84fb023de"
-	const digest = "e33492b180dc36b35bc86d39c9ed1f2f59fbfff7272dff2b7bf16a4edaeae91d"
+	const revision = "8e68955ea124915ee83fdc21be5f2358b9b4d62e"
+	const digest = "9f91b2c2bb56ed9d5cbc77b3f1b3d7ff53fd74e5c55ab57a3bb17fbf3c43a71b"
 	corpus := os.Getenv("OB_SPEC_CORPUS")
 	if corpus == "" {
 		if os.Getenv("OB_CORPUS_REQUIRED") == "1" {

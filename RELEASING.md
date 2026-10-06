@@ -94,23 +94,24 @@ specifications (kin-openapi, libopenapi, gqlparser, protocompile with
 protobuf-go's descriptors, Smithy's smithy-model) on named criteria, and the
 release's CHANGELOG entry states the result.
 
-### Readiness of the 0.2.0 working draft (2026-09-30)
+### Readiness of the 0.2.0 working draft (2026-10-06)
 
 | Row | State |
 |---|---|
-| Every rule | Met. OBI-T-05 and OBI-T-11 do not apply: the SDK derives no forms and checks no examples. |
+| Every rule | Met at spec `8e68955`. OBI-T-05 and OBI-T-11 do not apply: the SDK derives no forms and checks no examples. |
 | Exact model | Met. |
-| Only the core | Met. `openbindingstest` and `schemaeval` serve OBI-T-08's value validation. |
-| One vocabulary | Met. |
+| Only the core | Met. `openbindingstest` and `schemaeval` serve OBI-T-08's value validation, and `httpdiscovery` names the HTTP Discovery text it applies by revision and SHA-256. |
+| One vocabulary | Not met: `Reference.Target`, `Position`, `ValidationReport.Version`, and `ErrInconclusive` stretch or collide with the specification's terms, pending a ruling. |
 | The text named | Met. |
 | Parity | Not met: see `IMPLEMENTATION_PARITY.md`. |
 
-Peer ranking (2026-09-30, at aa158a9, two reviewers): 2nd and 3rd of 6,
-behind smithy-model (and protocompile, for one reviewer), ahead of gqlparser,
-libopenapi, and kin-openapi. Strongest on fidelity, validation rigor,
-conformance evidence, and scope; weakest on diagnostics and documentation.
-Since then, findings carry line and column positions, and the mislocated
-OBI-D-02 member-name findings they found are fixed.
+Peer ranking (2026-10-06, at 14da31f, one reviewer): 3rd of 6, behind
+protocompile with protobuf-go's descriptors and smithy-model, ahead of
+gqlparser, libopenapi, and kin-openapi. First on fidelity, validation rigor,
+conformance evidence, and scope; third on API design; fourth on
+diagnostics, documentation, and robustness. The robustness finding behind
+that place, validation work quadratic in refused member names, is fixed
+(#143).
 
 ## Changelog
 
