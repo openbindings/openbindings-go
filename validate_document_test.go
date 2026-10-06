@@ -1132,8 +1132,9 @@ func allocated(f func()) uint64 {
 }
 
 // The work of validation stays linear in the document where hostile input
-// once made it quadratic: setting many members aside, walking a deeply
-// nested schema, and resolving many anchor references into one resource.
+// once made it quadratic: setting many members aside, locating many member
+// names the document schema refuses, walking a deeply nested schema, and
+// resolving many anchor references into one resource.
 func TestValidateDocument_WorkIsLinear(t *testing.T) {
 	scaled := func(name string, build func(n int) string) {
 		t.Helper()
@@ -1148,6 +1149,13 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 		var operations []string
 		for i := range n {
 			operations = append(operations, fmt.Sprintf(`"o%d":{"aliases":[1e10001]}`, i))
+		}
+		return `{"openbindings":"0.2.0","operations":{` + strings.Join(operations, ",") + `}}`
+	})
+	scaled("member names the document schema refuses", func(n int) string {
+		var operations []string
+		for i := range n {
+			operations = append(operations, fmt.Sprintf(`"bad key %d":{}`, i))
 		}
 		return `{"openbindings":"0.2.0","operations":{` + strings.Join(operations, ",") + `}}`
 	})

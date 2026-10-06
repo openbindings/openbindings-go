@@ -211,6 +211,7 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 		}
 	}
 	located := map[string]bool{}
+	var names map[string][][]string
 	for _, problem := range problems {
 		switch {
 		case len(problem.Members) > 0:
@@ -230,7 +231,10 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 			// (TestDocumentSchema_NamedMapsAreEveryConstrainedMap); a name
 			// found in none is still a violation, of the whole document.
 			located[*problem.Name] = true
-			at := memberNamesAt(view, *problem.Name)
+			if names == nil {
+				names = memberNames(view)
+			}
+			at := names[*problem.Name]
 			if len(at) == 0 {
 				at = [][]string{nil}
 			}
@@ -266,15 +270,16 @@ func recordSchemaFindings(c *ruleChecks, found []schemaFinding) {
 // an operation's examples.
 var namedMaps = [][]string{{"schemas"}, {"operations"}, {"dependencies"}, {"sources"}, {"bindings"}, {"operations", "*", "examples"}}
 
-// memberNamesAt returns where the document holds a member named name in one
-// of namedMaps, as reference tokens.
-func memberNamesAt(view any, name string) [][]string {
-	var out [][]string
+// memberNames returns, for each name a member has in one of namedMaps, where
+// the document holds such a member, as reference tokens: in the order of
+// namedMaps, then in sorted order within each. One pass serves every refused
+// name, so locating them stays linear in the document.
+func memberNames(view any) map[string][][]string {
+	out := map[string][][]string{}
 	for _, at := range namedMaps {
 		for _, m := range membersAt(view, append(slices.Clone(at), "*"), nil) {
-			if m.tokens[len(m.tokens)-1] == name {
-				out = append(out, m.tokens)
-			}
+			name := m.tokens[len(m.tokens)-1]
+			out[name] = append(out[name], m.tokens)
 		}
 	}
 	return out
