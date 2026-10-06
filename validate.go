@@ -33,9 +33,9 @@ import (
 // gates on violations. A nil error
 // is not a conformance claim. A rule this SDK cannot decide is inconclusive,
 // not violated, and the report's Conclusion says whether the document is
-// conformant or conformance undetermined. No rule takes binding-specification
-// knowledge: a source's and a binding's content are the binding
-// specification's, and no core rule judges them. OBI-D-10 is inconclusive
+// conformant or conformance undetermined. No rule takes knowledge of a
+// kind: a source's and a binding's content are the kind's, and no core rule
+// judges them. OBI-D-10 is inconclusive
 // for the subschemas a schema nests deeper than 256 levels, where the
 // meta-schema check meets a resource limit (§10.4).
 //

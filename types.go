@@ -81,8 +81,7 @@ func Present[T any](v T) *T { return &v }
 // Value returns the value of an optional member, or the zero value when the
 // member is absent. It suits a reader for whom absence and the zero value mean
 // the same thing, such as a description shown to a person; a reader for whom
-// they differ, as a binding specification's content semantics do, tests for
-// nil instead.
+// they differ, as a kind's content semantics can, tests for nil instead.
 func Value[T any](member *T) T {
 	if member == nil {
 		var zero T
@@ -134,7 +133,7 @@ type Operation struct {
 	Input  JSONSchema `json:"input,omitempty"`
 	Output JSONSchema `json:"output,omitempty"`
 
-	// Examples contains named example input/output pairs.
+	// Examples contains the operation's named examples (§5.1).
 	Examples map[string]OperationExample `json:"examples,omitzero"`
 
 	LosslessFields
@@ -229,8 +228,8 @@ func (b Binding) MarshalJSON() ([]byte, error) {
 // Dependency names an operation contract consumed at a local consumption
 // point (§5.5). Kinds, when present, is an unordered any-of list of exact,
 // opaque kind strings accepted at that point. A nil slice leaves the
-// dependency unconstrained by kind. Operation is the canonical key of an
-// operation in the same document.
+// dependency unconstrained by kind. Operation is the key of an operation in
+// the same document.
 type Dependency struct {
 	Operation   string   `json:"operation"`
 	Kinds       []string `json:"kinds,omitzero"`

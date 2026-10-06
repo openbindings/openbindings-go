@@ -95,11 +95,11 @@ const documentWithBinding = `{
 		"content": {"$ref": "other.json", "inputTransform": "{ \"title\": name }"}}}
 }`
 
-// No document rule takes binding-specification knowledge: a source's and a
-// binding's content are the binding specification's (§5.3, §5.4), so
+// No document rule takes knowledge of a kind: a source's and a binding's
+// content are the kind's (§5.3, §5.4), so
 // nothing within them, relative addresses and $ref members included, is
 // judged, and a document with bindings is decided in full.
-func TestValidateDocument_BindingsNeedNoKindificationKnowledge(t *testing.T) {
+func TestValidateDocument_BindingsNeedNoKindKnowledge(t *testing.T) {
 	_, report, err := ValidateDocument([]byte(documentWithBinding))
 	if err != nil {
 		t.Fatalf("ValidateDocument = %v", err)
@@ -281,7 +281,7 @@ func TestValidateDocument_ReferencesInsideASchemaResourceAreItsOwn(t *testing.T)
 	}
 }
 
-func TestValidateDocument_WhitespaceAroundTheVersionViolatesD12(t *testing.T) {
+func TestValidateDocument_WhitespaceAroundTheVersionViolatesD09(t *testing.T) {
 	for _, version := range []string{" 0.2.0", "0.2.0 ", "0.2.0\n"} {
 		report := mustValidateDocument(t, `{"openbindings":`+strconv.Quote(version)+`,"operations":{}}`)
 		if report.Evidence["OBI-D-09"] != EvidenceViolated {

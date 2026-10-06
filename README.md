@@ -107,8 +107,8 @@ Pending TypeScript parity for the core is recorded in
 ## Scope, and the rebuild
 
 This module carries what the core specification defines, directly or by
-implication, and nothing a binding specification, a published interface, or
-an application defines. Those layers build on it from outside.
+implication, and nothing a kind, a published interface, or an application
+defines. Those layers build on it from outside.
 
 Until 2026-09-24 the repository also carried the invocation runtime
 (`invoke`), interface synthesis and source inspection (`synthesize`), HTTP

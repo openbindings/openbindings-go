@@ -6,7 +6,7 @@
 // (versions and media type).
 //
 // The package covers what the core OpenBindings specification defines, and
-// nothing a binding specification or a published interface defines: those
+// nothing a kind or a published interface defines: those
 // build on it from outside.
 //
 // # Documents
