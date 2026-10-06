@@ -1,10 +1,10 @@
 # HTTP discovery
 
 An optional Go module implementing the client and server contracts of
-[OpenBindings HTTP Discovery v0.1.0](https://github.com/openbindings/spec/blob/04a84131295dc8c305b4f048d2e129f84fb023de/http-discovery.md).
+[OpenBindings HTTP Discovery v0.1.0](https://github.com/openbindings/spec/blob/8e68955ea124915ee83fdc21be5f2358b9b4d62e/http-discovery.md).
 This companion versions independently of core. The implementation applies the
 text at that revision (SHA-256
-`e33492b180dc36b35bc86d39c9ed1f2f59fbfff7272dff2b7bf16a4edaeae91d`).
+`9f91b2c2bb56ed9d5cbc77b3f1b3d7ff53fd74e5c55ab57a3bb17fbf3c43a71b`).
 
 The module is under development on `release/0.2`; it is not yet tagged. Its
 module path is `github.com/openbindings/openbindings-go/httpdiscovery`. During

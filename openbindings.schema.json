@@ -114,7 +114,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Organizational labels for grouping and filtering."
+          "description": "Documentation labels for grouping and filtering."
         },
         "aliases": {
           "type": "array",
@@ -127,11 +127,11 @@
         },
         "input": {
           "$ref": "#/$defs/JSONSchema",
-          "description": "Contract on each caller-facing input value. Omit to leave unspecified; literal null is not valid at this position."
+          "description": "Contract on each caller-facing input value. When absent, no value contract is stated for input; literal null is not valid at this position."
         },
         "output": {
           "$ref": "#/$defs/JSONSchema",
-          "description": "Contract on each caller-facing output value. Omit to leave unspecified; literal null is not valid at this position."
+          "description": "Contract on each caller-facing output value. When absent, no value contract is stated for output; literal null is not valid at this position."
         },
         "examples": {
           "type": "object",
@@ -149,7 +149,7 @@
     },
     "OperationExample": {
       "type": "object",
-      "description": "An operation example: each of its input and output members is one caller-facing value. Positive contract claims: the author asserts that provided values validate against the corresponding specified schemas (§5.1); the claim's truth is not a document rule. Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
+      "description": "An operation example: each of its input and output members is one caller-facing value. Positive author claims: the author asserts that each provided value validates against the corresponding operation schema, where that schema is present (§5.1); the claim's truth is not a document rule. Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
       "properties": {
         "description": {
           "type": "string",
