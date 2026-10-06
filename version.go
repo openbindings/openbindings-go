@@ -15,7 +15,7 @@ const SupportedVersions = "0.2.x"
 
 // AuthoringVersion is the specification version to declare in a document
 // written with this SDK: the lowest version sufficient for everything the
-// document model carries, as §8.1 asks of documents. No function here writes
+// document model carries, as §8.1 advises. No function here writes
 // it; a producer sets Document.OpenBindings to it.
 const AuthoringVersion = "0.2.0"
 

@@ -2,9 +2,7 @@
 
 OpenBindings 0.2.0 treats the Go and TypeScript SDKs as two idiomatic
 implementations of one observable behavior. They run the same core
-conformance corpus. The checked-in
-[`reference-sdk-correspondence.json`](../spec/conformance/reference-sdk-correspondence.json)
-also guards the public role and family correspondence.
+conformance corpus.
 
 This record covers the core and the optional HTTP discovery module. The layers
 the Go repository no longer carries

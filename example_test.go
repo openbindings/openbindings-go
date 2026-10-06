@@ -142,7 +142,7 @@ func ExampleOperation() {
 }
 
 func ExampleSource() {
-	// Content is whatever the source's binding specification defines; this
+	// Content is whatever the source's kind defines; this
 	// shape is illustrative.
 	src := openbindings.Source{
 		Kind:    "openbindings.openapi-3.1@1",
@@ -157,7 +157,7 @@ func ExampleSource() {
 }
 
 func ExampleBinding() {
-	// Content is whatever the source's binding specification defines for the
+	// Content is whatever the source's kind defines for the
 	// binding, such as its target and any value adaptation; this shape is
 	// illustrative.
 	binding := openbindings.Binding{

@@ -78,7 +78,7 @@ func TestDocumentValidate_RefusesHigherMinor_OBI_T_04(t *testing.T) {
 	}
 }
 
-func TestDocumentValidate_RefusesInvalidSemver_OBI_D_12(t *testing.T) {
+func TestDocumentValidate_InvalidSemverViolatesD09(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
@@ -161,12 +161,12 @@ func containsProblem(err error, want string) bool {
 	return false
 }
 
-// A source is its binding specification's identifier and optional content the
-// core gives no meaning (§5.4), and a binding's content is likewise any JSON
-// value its source's binding specification defines (§5.3): a source without
+// A source is its kind and optional content the core gives no meaning
+// (§5.4), and a binding's content is likewise any JSON value its source's
+// kind defines (§5.3): a source without
 // content, source and binding content of every JSON type, and anything within
 // them, relative addresses and $ref members included, break no core rule.
-func TestDocumentValidate_SourceAndBindingContentAreTheKindifications(t *testing.T) {
+func TestDocumentValidate_SourceAndBindingContentAreTheKinds(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"a": {}},
@@ -185,7 +185,7 @@ func TestDocumentValidate_SourceAndBindingContentAreTheKindifications(t *testing
 	}
 	report, err := i.Validate()
 	if err != nil {
-		t.Fatalf("source and binding content are the binding specification's, got %v", err)
+		t.Fatalf("source and binding content are the kind's, got %v", err)
 	}
 	if report.Conclusion != ConclusionConformant {
 		t.Fatalf("every rule is decided for a host object: conclusion %s, inconclusive %v", report.Conclusion, report.Inconclusive)
@@ -266,7 +266,7 @@ func TestDocumentValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
 	}
 }
 
-func TestDocumentValidate_NestedIDScopeSkipsD16(t *testing.T) {
+func TestDocumentValidate_NestedIDScopeSkipsD12(t *testing.T) {
 	// A $ref inside a schema declaring its own $id resolves against that
 	// resource's base per §10 and is out of OBI-D-12's scope.
 	i := Document{
