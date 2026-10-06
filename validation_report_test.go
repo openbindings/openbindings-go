@@ -76,8 +76,8 @@ func TestConcludeConformance(t *testing.T) {
 				t.Errorf("%s: %s is %q in the report, want %q", tc.name, rule, report.Evidence[rule], want)
 			}
 		}
-		if report.Version != "" || report.Revision != "" || report.Findings != nil {
-			t.Errorf("%s: a report from evidence alone carries %q, %q, %v", tc.name, report.Version, report.Revision, report.Findings)
+		if report.Release != "" || report.Revision != "" || report.Findings != nil {
+			t.Errorf("%s: a report from evidence alone carries %q, %q, %v", tc.name, report.Release, report.Revision, report.Findings)
 		}
 	}
 	// The caller's map is not changed, its foreign entries included.

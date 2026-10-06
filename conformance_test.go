@@ -444,8 +444,8 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 			// A conclusion on a document declaring an explicitly included
 			// prerelease names that prerelease (OBI-T-09). The corpus holds
 			// no text for a draft, so there is no text to verify.
-			if named, err := parseSemverStrict(report.Version); err != nil || compareSemver(named, mustSemver(declared)) != 0 {
-				return fail("names %q; a conclusion on a document declaring the included prerelease %q names that prerelease", report.Version, declared)
+			if named, err := parseSemverStrict(report.Release); err != nil || compareSemver(named, mustSemver(declared)) != 0 {
+				return fail("names %q; a conclusion on a document declaring the included prerelease %q names that prerelease", report.Release, declared)
 			}
 			return pass(string(report.Conclusion))
 		}
@@ -458,8 +458,8 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 // name it gives is compared first, always, and then the text it names must
 // have been verified.
 func judgeNaming(report ValidationReport, release, revision string, verified bool, unverified string, required bool) corpus.Judgment {
-	if report.Version != release || report.Revision != revision {
-		return fail("names %q@%q; the applied text is %q@%q", report.Version, report.Revision, release, revision)
+	if report.Release != release || report.Revision != revision {
+		return fail("names %q@%q; the applied text is %q@%q", report.Release, report.Revision, release, revision)
 	}
 	if !verified {
 		if required {

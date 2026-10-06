@@ -256,7 +256,7 @@ case errors.Is(err, openbindings.ErrNoVerdict):
     // no verdict (not a rejection): no schema there (ErrNoValueContract), a
     // result the specification leaves undefined (ErrUndefined), a capability
     // core or the evaluator lacks, or a done ctx
-case errors.Is(err, openbindings.ErrInconclusive):
+case err != nil:
     // the body is not JSON, so there is nothing to judge
 }
 ```

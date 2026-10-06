@@ -51,9 +51,9 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 //
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (OBI-T-04), and one declaring no valid
-// version (OBI-D-09) an error matching ErrInconclusive; either way it is not
-// interpreted. A document beyond this SDK's own limits returns an error
-// matching ErrInconclusive too, and one that fails to encode an error
+// version the *ValidationError naming its OBI-D-09 violation; either way it
+// is not interpreted. A document beyond this SDK's own limits returns an
+// error matching ErrInconclusive, and one that fails to encode an error
 // matching no category, as does a nil document; Document.Validate states
 // which documents are which. A done ctx returns its error.
 func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*ValueContracts, error) {
@@ -227,12 +227,12 @@ func (c *ValueContract) standingRefusal() *NoVerdictError {
 // capability, the value cannot be read exactly, or the ctx is done. A value
 // holding a string with a lone UTF-16 surrogate, which a Go string cannot
 // carry, cannot be read exactly: a declared capability limit of this SDK.
-// Any other error matches ErrInconclusive: the value is not a JSON value, so
-// there is nothing to judge. No returned error matches more than one of
-// ErrMismatch, ErrNoVerdict, and ErrInconclusive; one matches ErrUndefined
-// only when the specification determines the refusal, ErrNoValueContract
-// only when there is no schema, and a context error only when it is the
-// ctx's own, after the ctx is done.
+// Any other error says the value is not a JSON value, so there is nothing to
+// judge; it matches none of ErrMismatch, ErrNoVerdict, and ErrInconclusive.
+// No returned error matches both ErrMismatch and ErrNoVerdict; one matches
+// ErrUndefined only when the specification determines the refusal,
+// ErrNoValueContract only when there is no schema, and a context error only
+// when it is the ctx's own, after the ctx is done.
 func (c *ValueContract) Validate(ctx context.Context, value any) error {
 	if refusal := c.standingRefusal(); refusal != nil {
 		return refusal
@@ -249,7 +249,7 @@ func (c *ValueContract) Validate(ctx context.Context, value any) error {
 
 // ValidateJSON validates JSON text, read exactly, as Validate validates a Go
 // value. Text that is not one JSON value of valid UTF-8 returns an error
-// matching ErrInconclusive that says so; text this SDK cannot read exactly (a
+// that says so and matches no category; text this SDK cannot read exactly (a
 // repeated member name, an escaped lone UTF-16 surrogate, nesting past the
 // decoder) gets no verdict.
 func (c *ValueContract) ValidateJSON(ctx context.Context, data []byte) error {

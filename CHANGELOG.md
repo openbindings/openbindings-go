@@ -4,7 +4,7 @@
 
 Implements the 0.2 line of the OpenBindings core specification, applying the
 0.2.0 working draft at the spec revision `appliedRevision` in `version.go`
-names. Validation reports name that text in `ValidationReport.Version` and
+names. Validation reports name that text in `ValidationReport.Release` and
 `ValidationReport.Revision` (OBI-T-09). The root module is rebuilt as the
 core alone, so code written against 0.1.0 needs the changes listed under
 Changed and Removed.
@@ -32,9 +32,12 @@ Changed and Removed.
   supported set, the refusal that `ParseDocument`, `ValidateDocument`,
   `Document.Validate`, `Document.References`, and
   `ValueContractCompiler.Resolve` return instead of interpreting a document.
-- **`ErrInconclusive`** marks a call that decided nothing because the SDK
-  could not read or interpret its input in full. It is neither a conformance
-  conclusion nor a value verdict.
+- **`ErrInconclusive`** marks a call that decided nothing because the input
+  is beyond the SDK's own limits, such as nesting deeper than it reads. It is
+  neither a conformance conclusion nor a value verdict. A document declaring
+  no valid version is not inconclusive: `Document.References` and
+  `ValueContractCompiler.Resolve` return its OBI-D-09 violation as a
+  `*ValidationError`.
 - **Operation resolution and binding lookup.** `Document.ResolveOperation(name)`
   resolves an operation's key or alias (OBI-T-07), and
   `Document.OperationBindings(key)` returns the keys of its bindings, sorted.
@@ -52,8 +55,8 @@ Changed and Removed.
   whose `CompileInput` and `CompileOutput` return a `ValueContract`. Its
   `Validate` and `ValidateJSON` return nil, a `*MismatchError`
   (`ErrMismatch`), a `*NoVerdictError` (`ErrNoVerdict`, with
-  `ErrNoValueContract` and `ErrUndefined` marking two causes), or an error
-  matching `ErrInconclusive` for input that is not JSON. Core hands the
+  `ErrNoValueContract` and `ErrUndefined` marking two causes), or, for input
+  that is not JSON, an error matching none of these. Core hands the
   evaluator one closed JSON Schema 2020-12 `SchemaBundle` per value contract;
   the root module contains no evaluator.
 - **`schemaeval`**: the project's `SchemaEvaluator`,

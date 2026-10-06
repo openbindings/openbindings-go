@@ -11,8 +11,9 @@ import (
 )
 
 // categories names the outcome categories an error matches, of ErrMismatch,
-// ErrNoVerdict, and ErrInconclusive; a value-validation error matches exactly
-// one.
+// ErrNoVerdict, and ErrInconclusive. A value-validation error matches at most
+// one, ErrMismatch or ErrNoVerdict, and none when the value is not a JSON
+// value.
 func categories(err error) []string {
 	var matched []string
 	for name, sentinel := range map[string]error{"ErrMismatch": ErrMismatch, "ErrNoVerdict": ErrNoVerdict, "ErrInconclusive": ErrInconclusive} {
@@ -23,9 +24,18 @@ func categories(err error) []string {
 	return matched
 }
 
+// requireCategory requires err to match want alone, or, when want is "",
+// to be an error matching no category.
 func requireCategory(t *testing.T, name string, err error, want string) {
 	t.Helper()
-	if got := categories(err); len(got) != 1 || got[0] != want {
+	got := categories(err)
+	if want == "" {
+		if err == nil || len(got) != 0 {
+			t.Errorf("%s: matches %v, want an error of no category: %v", name, got, err)
+		}
+		return
+	}
+	if len(got) != 1 || got[0] != want {
 		t.Errorf("%s: matches %v, want %s alone: %v", name, got, want, err)
 	}
 }
@@ -91,8 +101,8 @@ type failingMarshaler struct{ err error }
 func (m failingMarshaler) MarshalJSON() ([]byte, error) { return nil, m.err }
 
 // A value whose own encoding fails is not a JSON value, whatever its
-// marshaler says: the error matches ErrInconclusive alone, and the evaluator
-// is never called.
+// marshaler says: the error matches no category, and the evaluator is never
+// called.
 func TestCategories_MarshalerErrorsAreNotVerdicts(t *testing.T) {
 	var validated atomic.Int32
 	contract := answering(t, func(context.Context, any) error {
@@ -119,7 +129,7 @@ func TestCategories_MarshalerErrorsAreNotVerdicts(t *testing.T) {
 			} {
 				label := fmt.Sprintf("%s%s, as %s", name, form, shape)
 				got := contract.Validate(context.Background(), value)
-				requireCategory(t, label, got, "ErrInconclusive")
+				requireCategory(t, label, got, "")
 				if errors.As(got, new(*NoVerdictError)) || errors.As(got, new(*MismatchError)) {
 					t.Errorf("%s: the marshaler's error is reachable: %v", label, got)
 				}
@@ -132,7 +142,7 @@ func TestCategories_MarshalerErrorsAreNotVerdicts(t *testing.T) {
 	// A marshaler that writes nothing is not a JSON value either, and core's
 	// own refusal to read a value exactly is still no verdict; neither calls
 	// the evaluator.
-	requireCategory(t, "a marshaler writing nothing", contract.Validate(context.Background(), failingMarshaler{}), "ErrInconclusive")
+	requireCategory(t, "a marshaler writing nothing", contract.Validate(context.Background(), failingMarshaler{}), "")
 	requireCategory(t, "a repeated member name", contract.Validate(context.Background(), repeatingMarshaler{}), "ErrNoVerdict")
 	if validated.Load() != 0 {
 		t.Fatalf("the evaluator was called %d times", validated.Load())
@@ -185,7 +195,7 @@ func TestCategories_RawJSONReadsAsText(t *testing.T) {
 		held := contract.Validate(ctx, value)
 		written, err := json.Marshal(value)
 		if err != nil {
-			requireCategory(t, name+", held in a value encoding/json refuses", held, "ErrInconclusive")
+			requireCategory(t, name+", held in a value encoding/json refuses", held, "")
 			continue
 		}
 		if whole := contract.ValidateJSON(ctx, written); fmt.Sprint(held) != fmt.Sprint(whole) || fmt.Sprint(categories(held)) != fmt.Sprint(categories(whole)) {
@@ -202,10 +212,10 @@ func TestCategories_RawJSONReadsAsText(t *testing.T) {
 	// is not one JSON value. What it writes and core cannot read exactly
 	// gets no verdict, nesting the written text makes too deep included.
 	for name, want := range map[string]string{
-		"nested past the decoder": "ErrInconclusive",
-		"not JSON":                "ErrInconclusive",
-		"two values":              "ErrInconclusive",
-		"empty":                   "ErrInconclusive",
+		"nested past the decoder": "",
+		"not JSON":                "",
+		"two values":              "",
+		"empty":                   "",
 		"a lone surrogate":        "ErrNoVerdict",
 		"a repeated name":         "ErrNoVerdict",
 	} {

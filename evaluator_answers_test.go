@@ -224,9 +224,7 @@ func TestValues_Read(t *testing.T) {
 		"a channel":             make(chan int),
 		"a cycle":               cycle,
 	} {
-		if err := contract.Validate(context.Background(), value); !errors.Is(err, ErrInconclusive) || errors.Is(err, ErrNoVerdict) || errors.Is(err, ErrMismatch) {
-			t.Errorf("%s: want an inconclusive error saying it is not a JSON value, got %v", name, err)
-		}
+		requireCategory(t, name, contract.Validate(context.Background(), value), "")
 	}
 	for name, value := range map[string]any{
 		"a repeated name in raw JSON": json.RawMessage(`{"a":1,"a":2}`),
@@ -237,9 +235,7 @@ func TestValues_Read(t *testing.T) {
 		}
 	}
 	for name, text := range map[string]string{"not JSON": `{`, "two values": `1 2`, "invalid UTF-8": "\"\xff\""} {
-		if err := contract.ValidateJSON(context.Background(), []byte(text)); !errors.Is(err, ErrInconclusive) || errors.Is(err, ErrNoVerdict) || errors.Is(err, ErrMismatch) {
-			t.Errorf("%s: %v", name, err)
-		}
+		requireCategory(t, name, contract.ValidateJSON(context.Background(), []byte(text)), "")
 	}
 	if err := contract.ValidateJSON(context.Background(), []byte(`{"a":1,"a":2}`)); !errors.Is(err, ErrNoVerdict) || errors.Is(err, ErrInconclusive) {
 		t.Errorf("a repeated name: %v", err)

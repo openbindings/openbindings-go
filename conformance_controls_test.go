@@ -83,8 +83,8 @@ func TestAppliedTextControls(t *testing.T) {
 // wrong name fails even when the pinned bytes are verified.
 func TestJudgeNamingControls(t *testing.T) {
 	const rev = appliedRevision
-	report := func(version, revision string) ValidationReport {
-		return ValidationReport{Conclusion: ConclusionConformant, Version: version, Revision: revision}
+	report := func(release, revision string) ValidationReport {
+		return ValidationReport{Conclusion: ConclusionConformant, Release: release, Revision: revision}
 	}
 	for _, c := range []struct {
 		name               string

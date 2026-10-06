@@ -98,7 +98,7 @@ func (d Document) Validate() (ValidationReport, error) {
 		// Only the declared version is read, as ValidateDocument reads it
 		// from such bytes; a version that is not UTF-8 would not be written
 		// as held, so it is not read either.
-		c := ruleChecks{version: appliedRelease, revision: appliedRevision}
+		c := ruleChecks{release: appliedRelease, revision: appliedRevision}
 		reason := fmt.Sprintf("the document %s, so the model does not write it and this rule was not checked", limit.what)
 		if !utf8.ValidString(d.OpenBindings) {
 			c.inconclusiveExcept(reason)
@@ -111,7 +111,7 @@ func (d Document) Validate() (ValidationReport, error) {
 	if err != nil {
 		return ValidationReport{}, err
 	}
-	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
+	c := ruleChecks{release: appliedRelease, revision: appliedRevision}
 	checkDocument(&c, view)
 	return c.conclude()
 }
@@ -152,7 +152,7 @@ func (d Document) Validate() (ValidationReport, error) {
 // So a nil document beside a report says the model does not carry the input;
 // the report says what was decided about it.
 func ValidateDocument(data []byte) (*Document, ValidationReport, error) {
-	c := ruleChecks{version: appliedRelease, revision: appliedRevision}
+	c := ruleChecks{release: appliedRelease, revision: appliedRevision}
 	view, err := decodeDocumentBytes(data)
 	if err != nil {
 		if refusal := inputVersionRefusal(data); refusal != nil {
@@ -342,15 +342,17 @@ func declaredVersionRefusal(view any) *VersionRefusalError {
 
 // interpretable applies the version decision an entry point that interprets
 // a Document in memory makes first: a *VersionRefusalError for a well-formed
-// version outside the supported set (OBI-T-04), and an error matching
-// ErrInconclusive for no valid version (OBI-D-09), neither of which it
-// interprets; nil otherwise.
+// version outside the supported set (OBI-T-04), and for no valid version the
+// *ValidationError naming the OBI-D-09 violation Document.Validate also
+// establishes, neither of which it interprets; nil otherwise.
 func interpretable(version string) error {
 	if refusal := versionRefusalOf(version); refusal != nil {
 		return refusal
 	}
 	if !isValidSemver(version) {
-		return fmt.Errorf("%w: the document declares no valid version (%q is not SemVer 2.0.0, OBI-D-09), so it is not interpreted", ErrInconclusive, version)
+		var c ruleChecks
+		checkDeclaredVersion(&c, map[string]any{"openbindings": version})
+		return c.violationError()
 	}
 	return nil
 }

@@ -73,18 +73,18 @@ type Finding struct {
 // violation is therefore not conformance: a caller reporting a result must use
 // Conclusion, and must not present an undetermined result as conformant.
 type ValidationReport struct {
-	// Version is the release of the specification whose text the report
+	// Release is the release of the specification whose text the report
 	// applies, and to which its rule identifiers belong (§10, OBI-T-09):
 	// 0.2.0, as its working draft until that version is released, whatever
 	// release of the 0.2 line the document declares, since the patch number
 	// a document declares carries no meaning (§8.1). A report
-	// ConcludeConformance builds from evidence alone carries no Version.
-	Version string
+	// ConcludeConformance builds from evidence alone carries no Release.
+	Release string
 	// Revision is the source-control revision of the specification text the
-	// report applies, a commit of github.com/openbindings/spec, while Version
-	// names a working draft rather than a release (OBI-T-09); it is empty
-	// when Version names a release, and in a report ConcludeConformance
-	// builds from evidence alone.
+	// report applies, a commit of github.com/openbindings/spec, while Release
+	// names a working draft rather than a published release (OBI-T-09); it
+	// is empty when Release names a published release, and in a report
+	// ConcludeConformance builds from evidence alone.
 	Revision   string
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per document rule (DocumentRules), the
@@ -99,7 +99,7 @@ type ValidationReport struct {
 	// OBI-D-09.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
-	// Version, in identifier order. These lists are SDK report fields.
+	// Release, in identifier order. These lists are SDK report fields.
 	Violated     []string
 	Inconclusive []string
 	// Findings locate every established violation and every undecided check,
@@ -159,7 +159,7 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 // evidence it concluded from: each rule's status as given, or inconclusive
 // where the evidence omits the rule. It has the shape of the Evidence
 // Document.Validate and ValidateDocument return. The report carries no
-// findings, and no Version or Revision, since evidence alone names no
+// findings, and no Release or Revision, since evidence alone names no
 // specification text. The caller's map is not changed.
 //
 // A caller holding evidence this SDK cannot produce, such as its own
@@ -173,7 +173,7 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 //   - The Conclusion and the Violated and Inconclusive lists are recomputed
 //     by concluding again from the amended Evidence with ConcludeConformance,
 //     never edited.
-//   - Version and Revision are copied from the report: the amending caller
+//   - Release and Revision are copied from the report: the amending caller
 //     applied the same specification text (OBI-T-09). A caller that applied
 //     other text does not amend this report.
 func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationReport {
@@ -227,7 +227,7 @@ func (e *VersionRefusalError) Error() string {
 // record no finding are satisfied, or not applicable where notApplicable
 // says so.
 type ruleChecks struct {
-	version, revision string
+	release, revision string
 	findings          []Finding
 	// notApplicable holds the rules that impose nothing on the document,
 	// which record no finding: every rule but OBI-D-01 for a text violating
@@ -290,7 +290,7 @@ func (c *ruleChecks) report() ValidationReport {
 		}
 	}
 	report := ConcludeConformance(evidence)
-	report.Version, report.Revision = c.version, c.revision
+	report.Release, report.Revision = c.release, c.revision
 	report.Findings = append([]Finding(nil), c.findings...)
 	return report
 }

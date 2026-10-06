@@ -625,19 +625,39 @@ func TestBundle_NamespaceAvoidsTheDocument(t *testing.T) {
 // refuses an unsupported version (OBI-T-04), and does not interpret a
 // document declaring no valid version (OBI-D-09), which is inconclusive, not
 // a refusal.
+// isVersionViolation reports whether err is the *ValidationError naming the
+// OBI-D-09 violation Document.Validate establishes for doc, and nothing else:
+// no other finding, no refusal, and not ErrInconclusive.
+func isVersionViolation(err error, doc *Document) bool {
+	var got, want *ValidationError
+	if !errors.As(err, &got) || errors.As(err, new(*VersionRefusalError)) || errors.Is(err, ErrInconclusive) || len(got.Findings) != 1 {
+		return false
+	}
+	if _, verr := doc.Validate(); !errors.As(verr, &want) {
+		return false
+	}
+	for _, finding := range want.Findings {
+		if finding.Rule == "OBI-D-09" {
+			return finding == got.Findings[0]
+		}
+	}
+	return false
+}
+
 func TestResolve_DeclaredVersion(t *testing.T) {
 	compiler, err := NewValueContractCompiler(testEvaluator{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for version, want := range map[string]string{"0.2.7": "resolved", "0.3.0": "refusal", "0.2": "inconclusive", "": "inconclusive"} {
-		_, err := compiler.Resolve(context.Background(), &Document{OpenBindings: version, Operations: map[string]Operation{}})
+	for version, want := range map[string]string{"0.2.7": "resolved", "0.3.0": "refusal", "0.2": "OBI-D-09", "": "OBI-D-09"} {
+		doc := &Document{OpenBindings: version, Operations: map[string]Operation{}}
+		_, err := compiler.Resolve(context.Background(), doc)
 		got := "resolved"
 		switch {
 		case errors.As(err, new(*VersionRefusalError)) && !errors.Is(err, ErrInconclusive):
 			got = "refusal"
-		case errors.Is(err, ErrInconclusive):
-			got = "inconclusive"
+		case isVersionViolation(err, doc):
+			got = "OBI-D-09"
 		case err != nil:
 			got = err.Error()
 		}
