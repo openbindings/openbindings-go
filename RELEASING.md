@@ -92,7 +92,7 @@ release's CHANGELOG entry states the result.
 
 | Row | State |
 |---|---|
-| Every rule | Met at spec `1d5f08c`. The SDK checks no example against its value contract (§5.1) and derives no form from a schema. |
+| Every rule | Met at spec `2f3b227`. The SDK checks no example against its value contract (§5.1) and derives no form from a schema. |
 | Exact model | Met. |
 | Only the core | Met. `openbindingstest` and `schemaeval` serve value validation (§5.2), and `httpdiscovery` names the HTTP Discovery text it applies by revision and SHA-256. |
 | One vocabulary | Met. `Reference.Target` and `Position` keep their names: a schema reference's target and a finding's place in the input text share no context with the specification's binding target and OBI position. A report names the applied `Release`, and `ErrInconclusive` marks only input beyond this SDK's own limits. |
