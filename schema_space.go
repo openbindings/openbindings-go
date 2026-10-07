@@ -18,7 +18,7 @@ import (
 // schemas (§7), the schema documents the application supplies, and the JSON
 // Schema 2020-12 meta-schemas core embeds. References resolve across the
 // space by the identifiers its resources carry, matched character for
-// character (§7.4, OBI-D-13); normal form (normalURI) is only for writing and
+// character (§7.4, OBI-13); normal form (normalURI) is only for writing and
 // for refusing collisions.
 
 // docKind is where a schema document comes from.
@@ -230,9 +230,9 @@ func (r *docResource) declare(raw any, base string, atPosition bool) {
 		r.idProblem, r.idKind = fmt.Sprintf("its $id %q gives it no URI of its own", id), undefinedResult
 	case !absolute && atPosition:
 		// Its resolved $id would depend on the document's base, which §7.2
-		// makes unique to the document without naming it; OBI-D-05 already
+		// makes unique to the document without naming it; OBI-11 already
 		// makes such a document non-conformant.
-		r.idProblem, r.idKind = fmt.Sprintf("its $id %q is relative, at an OBI position, whose base the document names nowhere (§7.2, OBI-D-05)", id), conservativePolicy
+		r.idProblem, r.idKind = fmt.Sprintf("its $id %q is relative, at an OBI position, whose base the document names nowhere (§7.2, OBI-11)", id), conservativePolicy
 	case !absolute && base == "":
 		r.idProblem, r.idKind = fmt.Sprintf("its $id %q is relative, and what encloses it has no URI to resolve it against", id), conservativePolicy
 	default:
@@ -271,7 +271,7 @@ type schemaTarget struct {
 // the meta-schemas core embeds.
 type schemaSpace struct {
 	obi *schemaDoc
-	// document is what OBI-D-12 looks same-document references in the
+	// document is what OBI-12 looks same-document references in the
 	// document resource up in.
 	document documentSchemas
 	// supplied is nil in a space no application supplies resources to
@@ -305,7 +305,7 @@ func newSchemaSpace(view any, supplied *suppliedResources) *schemaSpace {
 
 // resolve resolves a reference a schema in holder holds, as §7 and JSON
 // Schema 2020-12 resolve it (OBI-T-05). In the document resource, a
-// same-document reference is looked up as OBI-D-12 looks it up (§7.2); any
+// same-document reference is looked up as OBI-12 looks it up (§7.2); any
 // other reference resolves against its resource's identifier and names the
 // resource carrying the result character for character, or a meta-schema
 // core embeds when nothing in the space carries it.
@@ -316,7 +316,7 @@ func (s *schemaSpace) resolve(ref string, holder *docResource) (schemaTarget, *f
 	_, absolute := uriReference(ref)
 	if holder.document && !absolute {
 		if ref != "" && !strings.HasPrefix(ref, "#") {
-			return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q is relative, in the document resource, whose base the document names nowhere (§7.2, OBI-D-05)", ref)}
+			return schemaTarget{}, &failure{undefinedResult, fmt.Sprintf("%q is relative, in the document resource, whose base the document names nowhere (§7.2, OBI-11)", ref)}
 		}
 		return s.resolveInDocument(ref)
 	}
@@ -345,7 +345,7 @@ func (s *schemaSpace) resolve(ref string, holder *docResource) (schemaTarget, *f
 }
 
 // resolveInDocument resolves a same-document reference in the document
-// resource by OBI-D-12's own lookup (§7.2).
+// resource by OBI-12's own lookup (§7.2).
 func (s *schemaSpace) resolveInDocument(ref string) (schemaTarget, *failure) {
 	found := s.document.lookUpSameDocument(ref, s.obi.value)
 	switch {
@@ -444,7 +444,7 @@ func locationOf(d *schemaDoc, location string) string {
 }
 
 // metaSchemaFiles are the dialect meta-schema and the seven vocabulary
-// meta-schemas OBI-D-10 names.
+// meta-schemas OBI-10 names.
 //
 //go:embed metaschemas/draft2020-12
 var metaSchemaFiles embed.FS

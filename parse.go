@@ -6,16 +6,16 @@ import (
 )
 
 // ParseDocument decodes a document for use: it checks the exact input bytes
-// (OBI-D-01), refuses a version this SDK does not apply (CheckVersion),
-// checks the embedded document schema (OBI-D-02), and decodes the model. It
+// (OBI-01), refuses a version this SDK does not apply (CheckVersion),
+// checks the embedded document schema (OBI-02), and decodes the model. It
 // is not a conformance check; ValidateDocument reports every document rule.
 //
 // The version decision comes first because the embedded schema is this
 // version's: a document declaring an unsupported version is refused, not
-// judged against rules it does not claim (§10.1). OBI-D-01 and the declared
+// judged against rules it does not claim (§10.1). OBI-01 and the declared
 // version are read however deep the input nests. An error is one of three:
 //   - a *VersionRefusalError, the refusal;
-//   - a *ValidationError listing violations of OBI-D-01 or of the document
+//   - a *ValidationError listing violations of OBI-01 or of the document
 //     schema, as Document.Validate and ValidateDocument report them;
 //   - an error matching ErrInconclusive, when this SDK cannot read the
 //     document in full: input nested deeper than the decoder reads, a string
@@ -35,7 +35,7 @@ func ParseDocument(data []byte) (*Document, error) {
 		if lone := (*loneSurrogateError)(nil); errors.As(err, &lone) {
 			return nil, fmt.Errorf("%w: %w", ErrInconclusive, err)
 		}
-		return nil, &ValidationError{Findings: []Finding{d01Violation(data, err)}}
+		return nil, &ValidationError{Findings: []Finding{obi01Violation(data, err)}}
 	}
 	if refusal := declaredVersionRefusal(raw); refusal != nil {
 		return nil, refusal
@@ -48,17 +48,17 @@ func ParseDocument(data []byte) (*Document, error) {
 	}
 	for _, finding := range c.findings {
 		if finding.Status == EvidenceInconclusive {
-			return nil, fmt.Errorf("%w: the document schema could not be applied at %q: %s (OBI-D-02)", ErrInconclusive, finding.Path, finding.Message)
+			return nil, fmt.Errorf("%w: the document schema could not be applied at %q: %s (OBI-02)", ErrInconclusive, finding.Path, finding.Message)
 		}
 	}
 	var doc Document
-	if err := doc.decodeVerified(data); err != nil { // OBI-D-01 verified the bytes
+	if err := doc.decodeVerified(data); err != nil { // OBI-01 verified the bytes
 		return nil, fmt.Errorf("%w: the document model cannot carry it: %w", ErrInconclusive, err)
 	}
 	return &doc, nil
 }
 
-// decodeDocumentBytes applies OBI-D-01 to the exact input bytes: valid UTF-8,
+// decodeDocumentBytes applies OBI-01 to the exact input bytes: valid UTF-8,
 // no duplicate object keys in any object, and JSON with no leading
 // byte-order mark. It returns the generic JSON view of the document.
 func decodeDocumentBytes(data []byte) (any, error) {

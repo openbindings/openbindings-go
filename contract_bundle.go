@@ -212,7 +212,7 @@ func (r *contractReach) copiedUnits() []unitKey {
 }
 
 // collisions refuses two copied resources that share a name in normal form
-// (core's conservative policy; OBI-D-13 compares characters).
+// (core's conservative policy; OBI-13 compares characters).
 func collisions(units []unitKey) []located {
 	carrier := map[string]*docResource{}
 	var out []located

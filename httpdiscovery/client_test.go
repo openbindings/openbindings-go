@@ -262,7 +262,7 @@ func TestDocumentContextAndConcurrentIsolation(t *testing.T) {
 			clear(r.Body)
 			r.Header.Set("Content-Type", "changed")
 			delete(r.Document.Dependencies, "d")
-			delete(r.Report.Evidence, "OBI-D-01")
+			delete(r.Report.Evidence, "OBI-01")
 		})
 	}
 	wg.Wait()

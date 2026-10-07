@@ -29,9 +29,9 @@ const (
 // documentRules is every document rule the core specification defines
 // (§10.2), in identifier order.
 var documentRules = []string{
-	"OBI-D-01", "OBI-D-02", "OBI-D-03", "OBI-D-04", "OBI-D-05", "OBI-D-06",
-	"OBI-D-07", "OBI-D-08", "OBI-D-09", "OBI-D-10", "OBI-D-11", "OBI-D-12",
-	"OBI-D-13",
+	"OBI-01", "OBI-02", "OBI-03", "OBI-04", "OBI-05", "OBI-06",
+	"OBI-07", "OBI-08", "OBI-09", "OBI-10", "OBI-11", "OBI-12",
+	"OBI-13",
 }
 
 // DocumentRules returns the identifiers of every document rule the core
@@ -40,7 +40,7 @@ var documentRules = []string{
 // them. A version refusal returns no report, nor does a host object the
 // caller made unencodable (a NaN, invalid UTF-8 in a Go string, a
 // marshaler's error); a host object beyond this SDK's own limits gets a
-// report, deciding at most OBI-D-09.
+// report, deciding at most OBI-03.
 func DocumentRules() []string {
 	return append([]string(nil), documentRules...)
 }
@@ -48,7 +48,7 @@ func DocumentRules() []string {
 // Finding is one located piece of rule evidence: a violation established at a
 // document position, or a check this validator could not decide there.
 type Finding struct {
-	// Rule is the stable rule identifier, such as "OBI-D-07".
+	// Rule is the stable rule identifier, such as "OBI-06".
 	Rule string
 	// Status is EvidenceViolated or EvidenceInconclusive.
 	Status RuleEvidenceStatus
@@ -92,11 +92,11 @@ type ValidationReport struct {
 	// Document.Validate, ValidateDocument, and ConcludeConformance carry
 	// exactly the document rules. In a validator's report, a rule with
 	// nothing to govern in the document is vacuously satisfied, and on a
-	// text violating OBI-D-01 every other rule is not applicable (§10). A
+	// text violating OBI-01 every other rule is not applicable (§10). A
 	// version refusal, or a host object the caller made unencodable,
 	// returns no report, whose Evidence is nil; a host object beyond this
 	// SDK's own limits gets a report whose Evidence decides at most
-	// OBI-D-09.
+	// OBI-03.
 	Evidence map[string]RuleEvidenceStatus
 	// Violated and Inconclusive identify rules by their identifiers in
 	// Release, in identifier order. These lists are SDK report fields.
@@ -105,7 +105,7 @@ type ValidationReport struct {
 	// Findings locate every established violation and every undecided check,
 	// in the order the validator records them, which is the same every time
 	// for the same document: its checks run in a fixed sequence, and the
-	// document schema's findings (OBI-D-02), which its library reports in no
+	// document schema's findings (OBI-02), which its library reports in no
 	// fixed order, are ordered by where the failing keyword applies (the
 	// object, for a member the schema does not allow; the member, for a
 	// member name it refuses; the value otherwise), comparing reference
@@ -141,12 +141,12 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 // and returns the report they conclude. It concludes from the document rules
 // alone (DocumentRules), since §10.4 defines each conclusion by the document
 // rules: evidence under any other identifier is dropped and decides nothing.
-// Each document rule applies to every text that holds OBI-D-01; on a text
-// violating it, OBI-D-02 through OBI-D-13 are not applicable and the
-// OBI-D-01 violation alone establishes non-conformance (§10). Absence is no
+// Each document rule applies to every text that holds OBI-01; on a text
+// violating it, OBI-02 through OBI-13 are not applicable and the
+// OBI-01 violation alone establishes non-conformance (§10). Absence is no
 // evidence either way, so a rule missing from the evidence is inconclusive,
 // and an empty map concludes conformance undetermined. A mistyped
-// identifier, such as "OBI-D-1", is therefore dropped and leaves its rule
+// identifier, such as "OBI-1", is therefore dropped and leaves its rule
 // missing, so it never makes a conclusion conformant or non-conformant.
 //
 // A violation is decisive even when other rules remain inconclusive. In the
@@ -232,8 +232,8 @@ type ruleChecks struct {
 	release, revision string
 	findings          []Finding
 	// notApplicable holds the rules that impose nothing on the document,
-	// which record no finding: every rule but OBI-D-01 for a text violating
-	// OBI-D-01 (§10).
+	// which record no finding: every rule but OBI-01 for a text violating
+	// OBI-01 (§10).
 	notApplicable map[string]bool
 }
 

@@ -13,7 +13,7 @@ import (
 
 // The document rules evaluate fixed schemas with the schema library's Go
 // regexp engine (internal/schemacompiler). That reads a pattern as ECMA-262
-// with the u flag, as OBI-D-02 and OBI-D-10 require, only for patterns like
+// with the u flag, as OBI-02 and OBI-10 require, only for patterns like
 // these: anchored, over ASCII classes and literals. A schema update adding
 // any other pattern fails here, for review.
 func TestFixedSchemaPatterns(t *testing.T) {
@@ -115,12 +115,12 @@ func TestDocumentSchema_NamedMapsAreEveryConstrainedMap(t *testing.T) {
 		_, report, _ := ValidateDocument([]byte(document))
 		var at []string
 		for _, finding := range report.Findings {
-			if finding.Rule == "OBI-D-02" {
+			if finding.Rule == "OBI-02" {
 				at = append(at, finding.Path)
 			}
 		}
 		if !slices.Equal(at, []string{path}) {
-			t.Errorf("OBI-D-02 findings at %q, want one at %s", at, path)
+			t.Errorf("OBI-02 findings at %q, want one at %s", at, path)
 		}
 	}
 }
@@ -177,7 +177,7 @@ func numberComparisons(schema any, withZero bool) []string {
 
 // The 2020-12 meta-schemas tell numbers apart only by type, by equality, and
 // by comparison with zero, which a stand-in for a number beyond the numeric
-// limits keeps, so OBI-D-10 checks a schema holding one as a stand-in
+// limits keeps, so OBI-10 checks a schema holding one as a stand-in
 // (checkAgainstMetaSchema). A meta-schema update comparing numbers otherwise
 // fails here, for review.
 func TestMetaSchema_ComparesNumbersOnlyWithZero(t *testing.T) {

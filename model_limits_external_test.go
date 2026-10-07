@@ -291,8 +291,8 @@ func TestModelLimits_Boundary(t *testing.T) {
 				decided = append(decided, rule)
 			}
 		}
-		if c.side == limit && !slices.Equal(decided, []string{"OBI-D-09"}) {
-			t.Errorf("%s: the report decides %v, want OBI-D-09 alone", name, decided)
+		if c.side == limit && !slices.Equal(decided, []string{"OBI-03"}) {
+			t.Errorf("%s: the report decides %v, want OBI-03 alone", name, decided)
 		}
 		if c.side == failure {
 			for entry, err := range map[string]error{"Validate": validateErr, "References": referencesErr, "Resolve": resolveErr} {
@@ -308,7 +308,7 @@ func TestModelLimits_Boundary(t *testing.T) {
 		if got := outcomes(validateErr, &report); got != wantNoVersion[c.side] {
 			t.Errorf("%s, declaring no valid version: Validate gave %s, want %s: %v", name, got, wantNoVersion[c.side], validateErr)
 		}
-		if c.side != failure && (!errors.As(validateErr, new(*openbindings.ValidationError)) || !slices.Contains(report.Violated, "OBI-D-09")) {
+		if c.side != failure && (!errors.As(validateErr, new(*openbindings.ValidationError)) || !slices.Contains(report.Violated, "OBI-03")) {
 			t.Errorf("%s, declaring no valid version: violated %v, %v", name, report.Violated, validateErr)
 		}
 		if c.side == failure && errors.As(validateErr, new(*openbindings.ValidationError)) {

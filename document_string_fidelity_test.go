@@ -17,7 +17,7 @@ import (
 // An escape of a lone UTF-16 surrogate is RFC 8259 JSON, so it breaks no
 // document rule, but a Go string cannot hold it and encoding/json would
 // replace it with U+FFFD. The document model refuses it rather than alter
-// the document; validation decides OBI-D-01 and leaves every other rule
+// the document; validation decides OBI-01 and leaves every other rule
 // inconclusive, never violated.
 func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 	raw := []byte(`{"openbindings":"0.2.0","operations":{"echo":{"input":{"type":"string","maxLength":1},"examples":{"unit":{"input":"\ud800"}}}}}`)
@@ -34,12 +34,12 @@ func TestDocumentStrings_LoneSurrogatesAreNotCarried(t *testing.T) {
 	if err != nil || decoded != nil {
 		t.Fatalf("no violation is established and no document decoded: %v", err)
 	}
-	if report.Evidence["OBI-D-01"] != EvidenceSatisfied || report.Evidence["OBI-D-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
-		t.Fatalf("OBI-D-01 %q, OBI-D-02 %q, conclusion %q", report.Evidence["OBI-D-01"], report.Evidence["OBI-D-02"], report.Conclusion)
+	if report.Evidence["OBI-01"] != EvidenceSatisfied || report.Evidence["OBI-02"] != EvidenceInconclusive || report.Conclusion != ConclusionConformanceUndetermined {
+		t.Fatalf("OBI-01 %q, OBI-02 %q, conclusion %q", report.Evidence["OBI-01"], report.Evidence["OBI-02"], report.Conclusion)
 	}
 }
 
-// OBI-D-09 is decided on the member the exact scan reads the version from,
+// OBI-03 is decided on the member the exact scan reads the version from,
 // so a lone surrogate elsewhere leaves an established violation of it
 // established, and a satisfied one satisfied.
 func TestDocumentStrings_LoneSurrogatesLeaveTheVersionDecided(t *testing.T) {
@@ -49,22 +49,22 @@ func TestDocumentStrings_LoneSurrogatesLeaveTheVersionDecided(t *testing.T) {
 		`{"openbindings":"0.2.0","operations":{},"description":"\ud800"}`: EvidenceSatisfied,
 	} {
 		_, report, _ := ValidateDocument([]byte(document))
-		if report.Evidence["OBI-D-09"] != want || report.Evidence["OBI-D-02"] != EvidenceInconclusive {
-			t.Errorf("%s: OBI-D-09 %q, want %q; OBI-D-02 %q", document, report.Evidence["OBI-D-09"], want, report.Evidence["OBI-D-02"])
+		if report.Evidence["OBI-03"] != want || report.Evidence["OBI-02"] != EvidenceInconclusive {
+			t.Errorf("%s: OBI-03 %q, want %q; OBI-02 %q", document, report.Evidence["OBI-03"], want, report.Evidence["OBI-02"])
 		}
 	}
 }
 
 // Member names are compared exactly: a lone surrogate and U+FFFD are two
-// names, and the same lone surrogate twice is a repeated one (OBI-D-01).
+// names, and the same lone surrogate twice is a repeated one (OBI-01).
 func TestDocumentStrings_NamesCompareExactly(t *testing.T) {
 	_, report, _ := ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"x-values":{"\ud800":1,"�":2}}`))
-	if report.Evidence["OBI-D-01"] != EvidenceSatisfied {
-		t.Fatalf("distinct names are no duplicate: OBI-D-01 %q", report.Evidence["OBI-D-01"])
+	if report.Evidence["OBI-01"] != EvidenceSatisfied {
+		t.Fatalf("distinct names are no duplicate: OBI-01 %q", report.Evidence["OBI-01"])
 	}
 	_, report, _ = ValidateDocument([]byte(`{"openbindings":"0.2.0","operations":{},"x-values":{"\ud800":1,"\uD800":2}}`))
-	if report.Evidence["OBI-D-01"] != EvidenceViolated {
-		t.Fatalf("the same name twice is a duplicate: OBI-D-01 %q", report.Evidence["OBI-D-01"])
+	if report.Evidence["OBI-01"] != EvidenceViolated {
+		t.Fatalf("the same name twice is a duplicate: OBI-01 %q", report.Evidence["OBI-01"])
 	}
 }
 

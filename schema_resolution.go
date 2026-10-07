@@ -10,8 +10,8 @@ import (
 )
 
 // sameDocumentTarget is what a same-document reference in the document
-// resource identifies, looked up as OBI-D-12 looks it up (§7.3). One lookup
-// serves OBI-D-12 and the value contracts that resolve such a reference
+// resource identifies, looked up as OBI-12 looks it up (§7.3). One lookup
+// serves OBI-12 and the value contracts that resolve such a reference
 // (§7.2), so they cannot disagree.
 type sameDocumentTarget struct {
 	// location is the schema the reference identifies, as a JSON Pointer
@@ -24,7 +24,7 @@ type sameDocumentTarget struct {
 	why string
 	// declaredTwice marks a plain name the document resource declares more
 	// than once: JSON Schema leaves what it identifies undefined (Core
-	// §8.2.2), and OBI-D-13, not OBI-D-12, reports the declarations.
+	// §8.2.2), and OBI-13, not OBI-12, reports the declarations.
 	declaredTwice bool
 }
 
@@ -57,7 +57,7 @@ func (d documentSchemas) lookUpSameDocument(ref string, view any) sameDocumentTa
 	return sameDocumentTarget{why: "names a plain name the document resource declares more than once", declaredTwice: true}
 }
 
-// lookUpPointer follows a JSON Pointer from the document root as OBI-D-12
+// lookUpPointer follows a JSON Pointer from the document root as OBI-12
 // does: it identifies a schema at an OBI position, and never a location
 // inside a schema that declares $id, whose contents a reference reaches
 // through that $id. The pointer is followed step by step through the

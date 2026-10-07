@@ -78,7 +78,7 @@ func TestDocumentValidate_RefusesHigherMinor(t *testing.T) {
 	}
 }
 
-func TestDocumentValidate_InvalidSemverViolatesD09(t *testing.T) {
+func TestDocumentValidate_InvalidSemverViolatesOBI03(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
@@ -87,8 +87,8 @@ func TestDocumentValidate_InvalidSemverViolatesD09(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid semver")
 	}
-	if !containsProblem(err, `/openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-09)`) {
-		t.Fatalf("expected OBI-D-09 problem, got %v", err)
+	if !containsProblem(err, `/openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-03)`) {
+		t.Fatalf("expected OBI-03 problem, got %v", err)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestDocumentValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T) 
 	if err.Error() == "" || err.Error() == "non-conformant interface" {
 		t.Fatalf("expected detailed error, got %q", err.Error())
 	}
-	if want := `/openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-09)`; !containsProblem(err, want) {
+	if want := `/openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-03)`; !containsProblem(err, want) {
 		t.Fatalf("expected problem %q, got %q", want, err.Error())
 	}
 }
@@ -193,7 +193,7 @@ func TestDocumentValidate_SourceAndBindingContentAreTheKinds(t *testing.T) {
 }
 
 func TestDocumentValidate_PlainNameFragments(t *testing.T) {
-	// OBI-D-12: a plain-name fragment in the document resource identifies the
+	// OBI-12: a plain-name fragment in the document resource identifies the
 	// schema there that declares the name, and fails when none does.
 	i := Document{
 		OpenBindings: "0.2.0",
@@ -209,15 +209,15 @@ func TestDocumentValidate_PlainNameFragments(t *testing.T) {
 	}
 	i.Operations["getTask"] = Operation{Output: map[string]any{"$ref": "#missing"}}
 	_, err := i.Validate()
-	if err == nil || !strings.Contains(err.Error(), "names a plain name no schema in the document resource declares (OBI-D-12)") {
-		t.Fatalf("an undeclared plain name violates OBI-D-12, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "names a plain name no schema in the document resource declares (OBI-12)") {
+		t.Fatalf("an undeclared plain name violates OBI-12, got %v", err)
 	}
 }
 
 func TestDocumentValidate_DanglingSchemaRefRejected(t *testing.T) {
-	// OBI-D-12: a same-document schema $ref resolves from the document root;
+	// OBI-12: a same-document schema $ref resolves from the document root;
 	// a dangling pointer invalidates the document (internal referential
-	// integrity, matching OBI-D-07/09).
+	// integrity, matching OBI-06/09).
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -229,8 +229,8 @@ func TestDocumentValidate_DanglingSchemaRefRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("dangling same-document $ref should be rejected")
 	}
-	if !strings.Contains(err.Error(), "does not resolve within the document (OBI-D-12)") {
-		t.Fatalf("expected OBI-D-12 error, got %v", err)
+	if !strings.Contains(err.Error(), "does not resolve within the document (OBI-12)") {
+		t.Fatalf("expected OBI-12 error, got %v", err)
 	}
 }
 
@@ -249,7 +249,7 @@ func TestDocumentValidate_PercentEncodedFragmentResolves(t *testing.T) {
 }
 
 func TestDocumentValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
-	// Decoding identifies Missing, so the reference violates OBI-D-12.
+	// Decoding identifies Missing, so the reference violates OBI-12.
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -261,14 +261,14 @@ func TestDocumentValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("dangling percent-encoded $ref should be rejected")
 	}
-	if !strings.Contains(err.Error(), "(OBI-D-12)") {
-		t.Fatalf("expected OBI-D-12 unresolved-reference error, got %v", err)
+	if !strings.Contains(err.Error(), "(OBI-12)") {
+		t.Fatalf("expected OBI-12 unresolved-reference error, got %v", err)
 	}
 }
 
-func TestDocumentValidate_NestedIDScopeSkipsD12(t *testing.T) {
+func TestDocumentValidate_NestedIDScopeSkipsOBI12(t *testing.T) {
 	// A $ref inside a schema declaring its own $id resolves against that
-	// resource's base per §10 and is out of OBI-D-12's scope.
+	// resource's base per §10 and is out of OBI-12's scope.
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -289,9 +289,9 @@ func TestDocumentValidate_NestedIDScopeSkipsD12(t *testing.T) {
 }
 
 func TestDocumentValidate_AnchorInsideIDScopePermitted(t *testing.T) {
-	// OBI-D-05's pointer-form rule carves out $id-declaring schemas: their
+	// OBI-11's pointer-form rule carves out $id-declaring schemas: their
 	// internal fragments (including plain-name anchors) are that
-	// resource's business, per the same scope rule as OBI-D-12.
+	// resource's business, per the same scope rule as OBI-12.
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -312,7 +312,7 @@ func TestDocumentValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 }
 
 func TestDocumentValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) {
-	// §10 clause 2 / OBI-D-05: a nested $id inside a schema that already
+	// §10 clause 2 / OBI-11: a nested $id inside a schema that already
 	// declares its own $id resolves against that resource's base per JSON
 	// Schema 2020-12 and MAY be relative — that resource's internal
 	// business, the same scope carve-out as $ref/$anchor/dynamic-pair.
@@ -336,7 +336,7 @@ func TestDocumentValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) {
 
 func TestDocumentValidate_TopLevelRelativeIDRejected(t *testing.T) {
 	// A schema $id at an OBI position (not nested inside another
-	// $id-declaring schema) MUST still be absolute (OBI-D-05).
+	// $id-declaring schema) MUST still be absolute (OBI-11).
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -350,14 +350,14 @@ func TestDocumentValidate_TopLevelRelativeIDRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("relative $id at an OBI position should be rejected")
 	}
-	if !strings.Contains(err.Error(), `$id: "task.schema.json" must be an absolute URI (OBI-D-05)`) {
-		t.Fatalf("expected OBI-D-05 $id error, got %v", err)
+	if !strings.Contains(err.Error(), `$id: "task.schema.json" must be an absolute URI (OBI-11)`) {
+		t.Fatalf("expected OBI-11 $id error, got %v", err)
 	}
 }
 
 func TestDocumentValidate_DynamicReferencesInTheDocumentResource(t *testing.T) {
-	// The dynamic pair may appear at OBI positions: OBI-D-05 judges a
-	// $dynamicRef's form, and OBI-D-12 its initial resolution, like a $ref's.
+	// The dynamic pair may appear at OBI positions: OBI-11 judges a
+	// $dynamicRef's form, and OBI-12 its initial resolution, like a $ref's.
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -372,8 +372,8 @@ func TestDocumentValidate_DynamicReferencesInTheDocumentResource(t *testing.T) {
 	}
 	i.Schemas = nil
 	_, err := i.Validate()
-	if err == nil || !strings.Contains(err.Error(), "OBI-D-12") {
-		t.Fatalf("a $dynamicRef naming nothing violates OBI-D-12, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "OBI-12") {
+		t.Fatalf("a $dynamicRef naming nothing violates OBI-12, got %v", err)
 	}
 }
 
@@ -447,7 +447,7 @@ func TestDocumentValidate_OperationRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `/bindings/nonexistent.api/operation: references unknown operation key "nonexistent" (OBI-D-07)`) {
+	if !containsProblem(err, `/bindings/nonexistent.api/operation: references unknown operation key "nonexistent" (OBI-06)`) {
 		t.Fatalf("expected operation ref error, got %v", err)
 	}
 }
@@ -469,7 +469,7 @@ func TestDocumentValidate_SourceRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `/bindings/op.nonexistent/source: references unknown source "nonexistent" (OBI-D-08)`) {
+	if !containsProblem(err, `/bindings/op.nonexistent/source: references unknown source "nonexistent" (OBI-07)`) {
 		t.Fatalf("expected source ref error, got %v", err)
 	}
 }
@@ -539,13 +539,13 @@ func TestInputContract_ResolvesFromTheDocumentRoot(t *testing.T) {
 	}
 }
 
-func TestParseDocument_UnknownTopLevelFieldViolatesD02(t *testing.T) {
+func TestParseDocument_UnknownTopLevelFieldViolatesOBI02(t *testing.T) {
 	// An unprefixed name the specification does not define is reserved for it
 	// (§12): "security", a 0.1 member, makes a 0.2 document non-conformant.
 	doc := []byte(`{"openbindings":"0.2.0","operations":{},"security":"abc"}`)
 	var violation *ValidationError
-	if _, err := ParseDocument(doc); !errors.As(err, &violation) || !strings.Contains(err.Error(), "security") || !strings.Contains(err.Error(), "OBI-D-02") {
-		t.Fatalf("want an OBI-D-02 violation naming security, got %v", err)
+	if _, err := ParseDocument(doc); !errors.As(err, &violation) || !strings.Contains(err.Error(), "security") || !strings.Contains(err.Error(), "OBI-02") {
+		t.Fatalf("want an OBI-02 violation naming security, got %v", err)
 	}
 }
 
@@ -561,14 +561,14 @@ func TestParseDocument_RemovedTransformMembersViolateOBI_D_02(t *testing.T) {
 		"outputTransform": `{"openbindings":"0.2.0","operations":{"op":{}},"sources":{"api":{"kind":"x@1"}},"bindings":{"op.api":{"operation":"op","source":"api","outputTransform":{"$ref":"#/transforms/t"}}}}`,
 	} {
 		var violation *ValidationError
-		if _, err := ParseDocument([]byte(doc)); !errors.As(err, &violation) || !strings.Contains(err.Error(), member) || !strings.Contains(err.Error(), "OBI-D-02") {
-			t.Fatalf("%s: want an OBI-D-02 violation naming it, got %v", member, err)
+		if _, err := ParseDocument([]byte(doc)); !errors.As(err, &violation) || !strings.Contains(err.Error(), member) || !strings.Contains(err.Error(), "OBI-02") {
+			t.Fatalf("%s: want an OBI-02 violation naming it, got %v", member, err)
 		}
 	}
 }
 
 func TestParseDocument_RejectsInvalidUTF8_OBI_D_01(t *testing.T) {
-	// OBI-D-01: documents are UTF-8 encoded JSON. 0xFF can never appear in
+	// OBI-01: documents are UTF-8 encoded JSON. 0xFF can never appear in
 	// valid UTF-8.
 	doc := []byte(`{"openbindings":"0.2.0","name":"X`)
 	doc = append(doc, 0xFF, 0xFE)
@@ -624,7 +624,7 @@ func TestDocumentValidate_RefusesEarlierLine(t *testing.T) {
 }
 
 func TestDocumentValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
-	// OBI-D-10 / §5.2: boolean schemas are valid at every schema position —
+	// OBI-10 / §5.2: boolean schemas are valid at every schema position —
 	// operation input/output, schemas-map entries, and nested subschema
 	// positions.
 	i := Document{
@@ -655,7 +655,7 @@ func TestDocumentValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
 }
 
 func TestDocumentValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.T) {
-	// OBI-D-10: object-form schemas must validate against the 2020-12
+	// OBI-10: object-form schemas must validate against the 2020-12
 	// meta-schemas, recursively through subschemas.
 	cases := []struct {
 		name    string
@@ -691,17 +691,17 @@ func TestDocumentValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.T
 			}
 			_, err := i.Validate()
 			if err == nil {
-				t.Fatal("expected OBI-D-10 violation")
+				t.Fatal("expected OBI-10 violation")
 			}
-			if !strings.Contains(err.Error(), tc.wantSub) || !strings.Contains(err.Error(), "(OBI-D-10)") {
-				t.Fatalf("expected OBI-D-10 problem containing %q, got %v", tc.wantSub, err)
+			if !strings.Contains(err.Error(), tc.wantSub) || !strings.Contains(err.Error(), "(OBI-10)") {
+				t.Fatalf("expected OBI-10 problem containing %q, got %v", tc.wantSub, err)
 			}
 		})
 	}
 }
 
 func TestDocumentValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
-	// OBI-D-10: a value at a schema position that is neither object nor
+	// OBI-10: a value at a schema position that is neither object nor
 	// boolean form is a document defect with a deterministic diagnostic.
 	i := Document{
 		OpenBindings: "0.2.0",
@@ -714,19 +714,19 @@ func TestDocumentValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
 	}
 	_, err := i.Validate()
 	if err == nil {
-		t.Fatal("expected OBI-D-10 violations")
+		t.Fatal("expected OBI-10 violations")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, `/schemas/Task: a schema is a JSON Schema 2020-12 object or boolean; got number (OBI-D-10)`) {
-		t.Errorf("expected schemas-map OBI-D-10 problem, got: %s", msg)
+	if !strings.Contains(msg, `/schemas/Task: a schema is a JSON Schema 2020-12 object or boolean; got number (OBI-10)`) {
+		t.Errorf("expected schemas-map OBI-10 problem, got: %s", msg)
 	}
-	if !strings.Contains(msg, `/operations/op/output: a schema is a JSON Schema 2020-12 object or boolean; got string (OBI-D-10)`) {
-		t.Errorf("expected output OBI-D-10 problem, got: %s", msg)
+	if !strings.Contains(msg, `/operations/op/output: a schema is a JSON Schema 2020-12 object or boolean; got string (OBI-10)`) {
+		t.Errorf("expected output OBI-10 problem, got: %s", msg)
 	}
 }
 
 func TestDocumentValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T) {
-	// OBI-D-10 is narrow: unknown keywords, unparseable `pattern` regexes,
+	// OBI-10 is narrow: unknown keywords, unparseable `pattern` regexes,
 	// and unresolvable external $refs all pass — they surface when the
 	// schema is used, not at document validation.
 	i := Document{
@@ -746,7 +746,7 @@ func TestDocumentValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T) 
 		},
 	}
 	if _, err := i.Validate(); err != nil {
-		t.Fatalf("expected narrow OBI-D-10 to accept, got %v", err)
+		t.Fatalf("expected narrow OBI-10 to accept, got %v", err)
 	}
 }
 
@@ -766,27 +766,27 @@ func TestDocumentValidate_DependencyContracts(t *testing.T) {
 	emptyConstraint.Dependencies = map[string]Dependency{
 		"customer.delivery": {Operation: "deliver", Kinds: []string{}},
 	}
-	if _, err := emptyConstraint.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
-		t.Fatalf("empty kinds validation = %v, want OBI-D-02", err)
+	if _, err := emptyConstraint.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-02") {
+		t.Fatalf("empty kinds validation = %v, want OBI-02", err)
 	}
 
 	missingOperation := valid
 	missingOperation.Dependencies = map[string]Dependency{
 		"customer.delivery": {Operation: "missing"},
 	}
-	if _, err := missingOperation.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-11") {
-		t.Fatalf("missing dependency operation validation = %v, want OBI-D-11", err)
+	if _, err := missingOperation.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-08") {
+		t.Fatalf("missing dependency operation validation = %v, want OBI-08", err)
 	}
 }
 
-// unknownFieldViolations validates iface and returns OBI-D-02 violations by
-// path. An unknown field without the x- prefix violates OBI-D-02 (§12).
+// unknownFieldViolations validates iface and returns OBI-02 violations by
+// path. An unknown field without the x- prefix violates OBI-02 (§12).
 func unknownFieldViolations(t *testing.T, iface Document) map[string]string {
 	t.Helper()
 	report, _ := iface.Validate()
 	byPath := map[string]string{}
 	for _, finding := range report.Violations() {
-		if finding.Rule == "OBI-D-02" {
+		if finding.Rule == "OBI-02" {
 			byPath[finding.Path] = finding.Message
 		}
 	}
@@ -796,11 +796,11 @@ func unknownFieldViolations(t *testing.T, iface Document) map[string]string {
 func requireUnknownFieldViolation(t *testing.T, byPath map[string]string, path, field string) {
 	t.Helper()
 	if message, ok := byPath[path]; !ok || !strings.Contains(message, field) {
-		t.Fatalf("no OBI-D-02 violation naming %q at %q; got %v", field, path, byPath)
+		t.Fatalf("no OBI-02 violation naming %q at %q; got %v", field, path, byPath)
 	}
 }
 
-func TestDocumentValidate_UnknownTopLevelFieldsViolateD02(t *testing.T) {
+func TestDocumentValidate_UnknownTopLevelFieldsViolateOBI02(t *testing.T) {
 	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
@@ -813,7 +813,7 @@ func TestDocumentValidate_UnknownTopLevelFieldsViolateD02(t *testing.T) {
 	requireUnknownFieldViolation(t, byPath, `/unknownField`, "unknownField")
 }
 
-func TestDocumentValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testing.T) {
+func TestDocumentValidate_UnknownFieldsInNestedTypedObjectsViolateOBI02(t *testing.T) {
 	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -845,7 +845,7 @@ func TestDocumentValidate_UnknownFieldsInNestedTypedObjectsViolateD02(t *testing
 	requireUnknownFieldViolation(t, byPath, `/bindings/op.src/unknownField`, "unknownField")
 }
 
-func TestDocumentValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T) {
+func TestDocumentValidate_OperationExampleUnknownFieldsViolateOBI02(t *testing.T) {
 	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -866,7 +866,7 @@ func TestDocumentValidate_OperationExampleUnknownFieldsViolateD02(t *testing.T) 
 	requireUnknownFieldViolation(t, byPath, `/operations/op/examples/ex1/unknownField`, "unknownField")
 }
 
-func TestDocumentValidate_BindingUnknownFieldsViolateD02(t *testing.T) {
+func TestDocumentValidate_BindingUnknownFieldsViolateOBI02(t *testing.T) {
 	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -890,7 +890,7 @@ func TestDocumentValidate_BindingUnknownFieldsViolateD02(t *testing.T) {
 	requireUnknownFieldViolation(t, byPath, `/bindings/op.api/unknownBindingField`, "unknownBindingField")
 }
 
-func TestDocumentValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
+func TestDocumentValidate_DependencyUnknownFieldsViolateOBI02(t *testing.T) {
 	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"deliver": {}},
@@ -906,7 +906,7 @@ func TestDocumentValidate_DependencyUnknownFieldsViolateD02(t *testing.T) {
 	requireUnknownFieldViolation(t, byPath, `/dependencies/delivery/futurePolicy`, "futurePolicy")
 }
 
-func TestDocumentValidate_ExtensionFieldsDoNotViolateD02(t *testing.T) {
+func TestDocumentValidate_ExtensionFieldsDoNotViolateOBI02(t *testing.T) {
 	byPath := unknownFieldViolations(t, Document{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},

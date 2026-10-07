@@ -82,7 +82,7 @@ func parseReleaseLine(declaration string) (semver, bool) {
 // A nil error means only that there is no version refusal. It does not mean
 // that v is a valid version: a v that is not SemVer 2.0.0 ("0.2", or "" for
 // a document that declares none) declares no version (§8.1), so this SDK
-// judges the document under the 0.2 line, where it violates OBI-D-09, which
+// judges the document under the 0.2 line, where it violates OBI-03, which
 // validation reports with the other rules. Refusing a version is this SDK's
 // policy; the specification leaves it to each tool (§10.3).
 func CheckVersion(v string) error {

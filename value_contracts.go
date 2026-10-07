@@ -51,7 +51,7 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 //
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (CheckVersion), and one declaring no valid
-// version the *ValidationError naming its OBI-D-09 violation; either way it
+// version the *ValidationError naming its OBI-03 violation; either way it
 // is not interpreted. A document beyond this SDK's own limits returns an
 // error matching ErrInconclusive, and one that fails to encode an error
 // matching no category, as does a nil document; Document.Validate states

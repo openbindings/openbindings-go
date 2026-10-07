@@ -11,7 +11,7 @@
 //
 // # Documents
 //
-//	doc, err := openbindings.ParseDocument(data) // rejects duplicate keys (OBI-D-01)
+//	doc, err := openbindings.ParseDocument(data) // rejects duplicate keys (OBI-01)
 //	if err != nil {
 //	    log.Fatal(err) // a *VersionRefusalError, a *ValidationError, or ErrInconclusive
 //	}
@@ -21,7 +21,7 @@
 //
 // (json.Unmarshal into a Document also decodes a document exactly;
 // ParseDocument additionally refuses a version this SDK does not apply
-// (CheckVersion) and applies the document schema (OBI-D-02).) A Document
+// (CheckVersion) and applies the document schema (OBI-02).) A Document
 // models the document's meaning, not the text it was read from: re-encoding
 // it keeps every member, but not the text's member order or whitespace, nor
 // every escape and number spelling (see Document).
@@ -67,7 +67,7 @@
 // [Document.References] lists every $ref and $dynamicRef in the schemas the
 // document contains whose value is a URI-reference (a string that is not
 // one is no reference of any form, §7.1), with the schema each one's
-// initial lookup identifies, looked up as OBI-D-12 and value validation
+// initial lookup identifies, looked up as OBI-12 and value validation
 // look them up (§7). Its doc says what a caller may conclude from it, and
 // what not: a schema no reference targets is not thereby unused, and a
 // $dynamicRef may land elsewhere.
@@ -140,12 +140,12 @@
 // value, source or binding content, or a kept member is carried), a missing
 // required string member, or a binding preference that is not an integer
 // number in range. ValidateDocument still judges such a document in full,
-// except input OBI-D-01 refuses (not UTF-8, or repeating a member name),
+// except input OBI-01 refuses (not UTF-8, or repeating a member name),
 // which that violation alone makes non-conformant: the other rules govern a
-// JSON value only when OBI-D-01 holds, so they are not applicable (§10);
+// JSON value only when OBI-01 holds, so they are not applicable (§10);
 // and a document holding a lone surrogate, or input nested deeper than
-// encoding/json reads (10000 levels), where it decides OBI-D-01, and
-// OBI-D-09 on the version it reads from the bytes, and leaves the other
+// encoding/json reads (10000 levels), where it decides OBI-01, and
+// OBI-03 on the version it reads from the bytes, and leaves the other
 // rules inconclusive.
 //
 // Encoding refuses the same inexact bytes in the members the model carries as

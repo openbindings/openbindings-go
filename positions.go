@@ -53,10 +53,10 @@ func positionFindings(data []byte, findings []Finding) {
 	}
 }
 
-// d01Position returns where the input breaks OBI-D-01: the repeated name,
+// obi01Position returns where the input breaks OBI-01: the repeated name,
 // the byte that breaks the syntax, the first byte that is not UTF-8, or the
 // byte-order mark.
-func d01Position(data []byte, err error) Position {
+func obi01Position(data []byte, err error) Position {
 	lines := lineStarts(data)
 	var repeated *duplicateNameError
 	var syntax *json.SyntaxError

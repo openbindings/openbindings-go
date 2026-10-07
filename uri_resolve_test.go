@@ -2,7 +2,7 @@ package openbindings
 
 import "testing"
 
-// TestResolveURIReference checks the strict RFC 3986 §5.2 resolution OBI-D-13
+// TestResolveURIReference checks the strict RFC 3986 §5.2 resolution OBI-13
 // compares identifiers by, against the normal and abnormal examples of RFC
 // 3986 §5.4.
 func TestResolveURIReference(t *testing.T) {
@@ -29,7 +29,7 @@ func TestResolveURIReference(t *testing.T) {
 	}
 }
 
-// TestComparableID checks the identifiers OBI-D-13 compares: resolution
+// TestComparableID checks the identifiers OBI-13 compares: resolution
 // removes dot segments and an empty fragment, and nothing else is normalized.
 func TestComparableID(t *testing.T) {
 	cases := []struct{ raw, enclosing, want string }{

@@ -91,7 +91,7 @@ func ExampleDocument_Validate_unknownFields() {
 	_ = json.Unmarshal(data, &doc)
 
 	// An unprefixed name the specification does not define is reserved for it
-	// (§12), so the document is non-conformant (OBI-D-02).
+	// (§12), so the document is non-conformant (OBI-02).
 	report, err := doc.Validate()
 	fmt.Println("violation established:", err != nil)
 	for _, finding := range report.Violations() {
@@ -99,7 +99,7 @@ func ExampleDocument_Validate_unknownFields() {
 	}
 	// Output:
 	// violation established: true
-	// OBI-D-02 /unknownFeild does not validate against the document schema: additional property "unknownFeild" not allowed
+	// OBI-02 /unknownFeild does not validate against the document schema: additional property "unknownFeild" not allowed
 }
 
 func ExampleDocument_exact() {

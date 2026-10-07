@@ -34,19 +34,19 @@ Go first; TypeScript alignment is pending for each of these:
 
 - **Model.** `idempotent` is a binding member; a dependency carries an
   optional `description`.
-- **Rule numbering.** OBI-D-01 through OBI-D-13 as the draft numbers them; no
+- **Rule numbering.** OBI-01 through OBI-13 as the draft numbers them; no
   `$vocabulary` rule and no example validity (examples are author claims).
-- **References.** OBI-D-05 admits plain names and the dynamic pair in the
-  document resource; OBI-D-12 decodes a fragment once, then reads a pointer or
+- **References.** OBI-11 admits plain names and the dynamic pair in the
+  document resource; OBI-12 decodes a fragment once, then reads a pointer or
   a plain name the document resource declares, and leaves absolute references
   to JSON Schema; the legacy `definitions` and `dependencies` hold OBI
   positions.
-- **Uniqueness.** OBI-D-13 counts each `$anchor` and `$dynamicAnchor`
+- **Uniqueness.** OBI-13 counts each `$anchor` and `$dynamicAnchor`
   declaration and compares `$id`s after strict RFC 3986 §5.2 resolution.
 - **Resource boundaries.** A schema with an `$id` member is a boundary
   whatever the member's value; a pointer from the document resource reaches
-  nothing inside one, for OBI-D-12 and value validation alike.
-- **Host objects.** Validating a document in memory decides OBI-D-01 on its
+  nothing inside one, for OBI-12 and value validation alike.
+- **Host objects.** Validating a document in memory decides OBI-01 on its
   serialization (§10), so it can conclude conformant.
 - **Version decision.** A text beginning with a byte-order mark declares no
   version (§8.1). A report names the release whose text it applies
@@ -72,38 +72,38 @@ The revised 0.2 working draft (spec `cbc17a6`, adopted 2026-10-01) is
 established in Go first; TypeScript alignment is pending for each of these,
 each with the spec CHANGELOG entry (0.2.0 working draft) that states it:
 
-- **OBI-D-01 decides alone** (Changed, "What the other document rules say
-  about a text OBI-D-01 rejects"). On a text violating OBI-D-01, OBI-D-02
-  through OBI-D-13 are not applicable, recorded so with no finding, and the
-  conclusion is non-conformant from OBI-D-01 alone; nothing is left
-  inconclusive. A validator that has not decided OBI-D-01 and fails a check
+- **OBI-01 decides alone** (Changed, "What the other document rules say
+  about a text OBI-01 rejects"). On a text violating OBI-01, OBI-02
+  through OBI-13 are not applicable, recorded so with no finding, and the
+  conclusion is non-conformant from OBI-01 alone; nothing is left
+  inconclusive. A validator that has not decided OBI-01 and fails a check
   it could make exactly concludes non-conformant (§10).
-- **A check made while OBI-D-01 is undecided** (the same entry). Go's
+- **A check made while OBI-01 is undecided** (the same entry). Go's
   `Document.Validate` cannot write a host object beyond the SDK's own
-  limits, so it leaves OBI-D-01 undecided, and it decides OBI-D-09 on the
+  limits, so it leaves OBI-01 undecided, and it decides OBI-03 on the
   declared version, which it holds exactly. A failed check is recorded as
-  OBI-D-09 violated and concludes non-conformant, as §10 permits, though
-  the check establishes only that OBI-D-01 or OBI-D-09 is violated, not
+  OBI-03 violated and concludes non-conformant, as §10 permits, though
+  the check establishes only that OBI-01 or OBI-03 is violated, not
   which. This attribution is accepted as Go's; TypeScript makes the same
   one, so the two SDKs report the same rule-level evidence for such a
   value.
 - **Plain names by the grammar** (Changed, "Only a grammatical anchor
   declares a plain name"). Only an `$anchor` or `$dynamicAnchor` whose
   value matches JSON Schema Core §8.2.2's grammar as a whole declares a
-  name, for OBI-D-12's lookup, OBI-D-13's count, and reference resolution
-  everywhere (`#1bad` never targets `"$anchor": "1bad"`); OBI-D-10 still
+  name, for OBI-12's lookup, OBI-13's count, and reference resolution
+  everywhere (`#1bad` never targets `"$anchor": "1bad"`); OBI-10 still
   reports the value.
 - **Dialects by resource** (Changed, "A schema resource without `$schema`
   inherits its dialect"). A schema is read under its resource's dialect:
   the document resource's is 2020-12 whatever `$schema` it holds, an `$id`
   resource takes its root's `$schema` or its enclosing resource's, and a
   misplaced `$schema` selects nothing. A foreign `$schema` still violates
-  OBI-D-06; value validation gives no verdict only where the resource's
+  OBI-09; value validation gives no verdict only where the resource's
   dialect is one the tool lacks.
 - **Malformed strings are no references** (Changed, "A malformed reference
   string is not a reference"). A `$ref` or `$dynamicRef` string that is not
-  a well-formed URI-reference is not a reference of any form: OBI-D-05
-  reports it in the document resource, OBI-D-12 does not govern it, a value
+  a well-formed URI-reference is not a reference of any form: OBI-11
+  reports it in the document resource, OBI-12 does not govern it, a value
   whose evaluation depends on it gets no verdict, and the schema-reference
   listing omits it.
 - **Ambiguous dynamic capture** (no spec change: JSON Schema Core §8.2.2,
@@ -152,13 +152,13 @@ behavior and recognizable names, not identical signatures:
   and an incomplete reference index; never a conformance conclusion or a
   value verdict, and disjoint from them whatever an evaluator or a value's
   own encoding says. A document declaring no valid version gets its
-  established OBI-D-09 violation from the reference index and value-contract
+  established OBI-03 violation from the reference index and value-contract
   resolution, as from validation. Value input that is not JSON gets an error
   of no category: there is no value, so nothing is undecided.
 - **Schema references.** Every `$ref` and `$dynamicRef` in the schemas a
   document contains whose value is a well-formed URI-reference, with
   location, keyword, value, base, initial target or why there is none, by
-  the same lookup as OBI-D-12 and value validation;
+  the same lookup as OBI-12 and value validation;
   the same whole-call refusals; an incomplete index returned with the
   inconclusive category.
 - **Concluding from evidence.** The conclusion is reached from the document
@@ -166,7 +166,7 @@ behavior and recognizable names, not identical signatures:
   nothing, and a document rule missing from the evidence is inconclusive, so
   empty evidence concludes undetermined. The concluded evidence holds exactly
   the document rules.
-- **Locating unknown members.** OBI-D-02 reports each member the document
+- **Locating unknown members.** OBI-02 reports each member the document
   schema does not allow at the member, one finding each.
 - **Writing a document.** Typed members in field order, then kept members in
   name order.

@@ -142,12 +142,12 @@ func Example_cliValidate() {
 	// exit 0
 	// broken.obi.json: non-conformant
 	//   checked against OpenBindings 0.2.0 (working draft, spec revision 1d5f08c): 13 of 13 rules decided
-	//   broken.obi.json:7:23: OBI-D-02: does not validate against the document schema: minLength: got 0, want 1
-	//   broken.obi.json:5:12: OBI-D-07: references unknown operation key "gone"
+	//   broken.obi.json:7:23: OBI-02: does not validate against the document schema: minLength: got 0, want 1
+	//   broken.obi.json:5:12: OBI-06: references unknown operation key "gone"
 	// exit 1
 	// surrogate.obi.json: conformance-undetermined
 	//   checked against OpenBindings 0.2.0 (working draft, spec revision 1d5f08c): 2 of 13 rules decided
-	//   11 checks undecided, the first OBI-D-02 at "": a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry, so this rule was not checked
+	//   11 checks undecided, the first OBI-02 at "": a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry, so this rule was not checked
 	// exit 4
 	// next.obi.json: refused, not judged: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)
 	// exit 3
@@ -193,7 +193,7 @@ func Example_cliRead() {
 	// Output:
 	// 0 read
 	// 3 refused: declares 0.2.0-rc.1
-	// 1 non-conformant at 1:41: OBI-D-02
+	// 1 non-conformant at 1:41: OBI-02
 	// 4 no verdict: openbindings: inconclusive: a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry
 	// 4 no verdict: openbindings: inconclusive: the input is nested deeper than the decoder reads (10000 levels), so it is not decoded
 }
@@ -202,7 +202,7 @@ func Example_cliRead() {
 // nothing, so it makes the version decision itself before interpreting the
 // document. CheckVersion returns the refusal ParseDocument would return, or
 // nil: a text declaring no version ("0.2" is not SemVer, nor is "") is never
-// refused, and OBI-D-09 reports it instead.
+// refused, and OBI-03 reports it instead.
 func Example_cliVersionDecision() {
 	fmt.Println("this ob interprets OpenBindings", openbindings.SupportedVersions)
 	for _, declared := range []string{`"0.2.0"`, `"0.2.7"`, `"0.2.0+build.5"`, `"0.3.0"`, `"0.2.0-rc.1"`, `"0.2"`, `""`} {
@@ -340,7 +340,7 @@ func Example_cliEdit() {
 	fmt.Println(bytes.Contains(unescaped.Bytes(), []byte(`"a<b"`)), bytes.Contains(unescaped.Bytes(), []byte(escaped)))
 	// Output:
 	// <nil> [openbindings name version schemas operations dependencies sources bindings]
-	// refused: the change would add OBI-D-10 at /operations/x/input/type
+	// refused: the change would add OBI-10 at /operations/x/input/type
 	// refused: the edit declares a version this ob does not interpret: openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)
 	// refused: the edited document cannot be written: openbindings: encode document: json: error calling MarshalJSON for type openbindings.Document: member "x-owner": unexpected end of JSON input
 	// <nil> [openbindings name version schemas operations dependencies sources bindings x-owner]
@@ -548,7 +548,7 @@ func Example_producer() {
 }
 
 // deeplyNested is an input schema nesting subschemas 300 levels deep, where
-// OBI-D-10's check meets this SDK's limit and stays inconclusive.
+// OBI-10's check meets this SDK's limit and stays inconclusive.
 var deeplyNested = strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 300)
 
 // amendRule is the whole amendment workflow, under the invariants
@@ -598,7 +598,7 @@ func amendRule(report openbindings.ValidationReport, rule string, status openbin
 	return amended, nil
 }
 
-// A tool that decides a rule this SDK leaves inconclusive (here OBI-D-10,
+// A tool that decides a rule this SDK leaves inconclusive (here OBI-10,
 // with a meta-schema check of its own that has no depth limit) amends the
 // report.
 func Example_producerAmendReport() {
@@ -613,36 +613,36 @@ func Example_producerAmendReport() {
 	fmt.Printf("bare: %s, release %q, %d findings\n", bare.Conclusion, bare.Release, len(bare.Findings))
 	// Evidence that leaves out a document rule leaves it inconclusive
 	// (OBI-T-08): no evidence concludes nothing.
-	partial := openbindings.ConcludeConformance(map[string]openbindings.RuleEvidenceStatus{"OBI-D-01": openbindings.EvidenceSatisfied})
+	partial := openbindings.ConcludeConformance(map[string]openbindings.RuleEvidenceStatus{"OBI-01": openbindings.EvidenceSatisfied})
 	fmt.Println("one rule satisfied:", partial.Conclusion, len(partial.Inconclusive), "inconclusive")
 
-	amended, err := amendRule(report, "OBI-D-10", openbindings.EvidenceSatisfied)
+	amended, err := amendRule(report, "OBI-10", openbindings.EvidenceSatisfied)
 	fmt.Println(err, amended.Conclusion, amended.Release, amended.Revision[:7], len(amended.Findings), "findings")
 
 	// With a violation elsewhere, the other rule's findings stay.
 	violating := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":` + deeplyNested + `}},
 	  "bindings":{"b":{"operation":"gone","source":"s"}},"sources":{"s":{"kind":"k"}}}`)
 	_, report, _ = openbindings.ValidateDocument(violating)
-	amended, err = amendRule(report, "OBI-D-10", openbindings.EvidenceSatisfied)
+	amended, err = amendRule(report, "OBI-10", openbindings.EvidenceSatisfied)
 	fmt.Println(err, amended.Conclusion, amended.Violated, amended.Inconclusive, amended.Findings[0].Rule, amended.Findings[0].Path)
 
 	// The tool's own violation replaces the rule's undecided finding.
-	amended, err = amendRule(report, "OBI-D-10", openbindings.EvidenceViolated, openbindings.Finding{
-		Rule: "OBI-D-10", Status: openbindings.EvidenceViolated, Path: "/operations/op/input", Message: "found by the tool's own check",
+	amended, err = amendRule(report, "OBI-10", openbindings.EvidenceViolated, openbindings.Finding{
+		Rule: "OBI-10", Status: openbindings.EvidenceViolated, Path: "/operations/op/input", Message: "found by the tool's own check",
 	})
 	fmt.Println(err, amended.Violated, len(amended.Violations()), "violations")
 
 	// An amendment that leaves the rule undecided is refused.
-	_, err = amendRule(report, "OBI-D-10", openbindings.EvidenceInconclusive)
+	_, err = amendRule(report, "OBI-10", openbindings.EvidenceInconclusive)
 	fmt.Println(err)
 	// Output:
-	// conformance-undetermined [OBI-D-10] 1 findings
+	// conformance-undetermined [OBI-10] 1 findings
 	// bare: conformance-undetermined, release "", 0 findings
 	// one rule satisfied: conformance-undetermined 12 inconclusive
 	// <nil> conformant 0.2.0 1d5f08c 0 findings
-	// <nil> non-conformant [OBI-D-07] [] OBI-D-07 /bindings/b/operation
-	// <nil> [OBI-D-07 OBI-D-10] 2 violations
-	// OBI-D-10 inconclusive decides nothing
+	// <nil> non-conformant [OBI-06] [] OBI-06 /bindings/b/operation
+	// <nil> [OBI-06 OBI-10] 2 violations
+	// OBI-10 inconclusive decides nothing
 }
 
 // naiveReferrers is the first answer a CLI writes for `ob schema list`
@@ -717,7 +717,7 @@ func Example_cliSchemaReferrers() {
 	}
 	fmt.Println("References:", referrers)
 	// `ob schema remove` acting on the naive answer: the edit gate catches
-	// the missed reference only as a new OBI-D-12 violation.
+	// the missed reference only as a new OBI-12 violation.
 	delete(doc.Schemas, "Task")
 	after, _ := doc.Validate()
 	for _, f := range after.Violations() {
@@ -727,8 +727,8 @@ func Example_cliSchemaReferrers() {
 	// conformant
 	// naive: [/schemas/Wrapped /operations/b/output]
 	// References: [/operations/a/output/$ref /operations/b/output/$ref]
-	// OBI-D-12 /operations/a/output/$ref
-	// OBI-D-12 /operations/b/output/$ref
+	// OBI-12 /operations/a/output/$ref
+	// OBI-12 /operations/b/output/$ref
 }
 
 // `ob fetch` and `ob show <url>` ask for an OBI by its media type (§11),
@@ -923,7 +923,7 @@ func Example_producerSchemaEdit() {
 
 	// The any-typed member's own hazard: absence is a nil interface, so a
 	// typed nil held there (a nil json.RawMessage or a nil map) is a present
-	// null, which OBI-D-02 and OBI-D-10 then report.
+	// null, which OBI-02 and OBI-10 then report.
 	for _, held := range []openbindings.JSONSchema{nil, json.RawMessage(nil), map[string]any(nil)} {
 		built := openbindings.Document{OpenBindings: openbindings.AuthoringVersion, Operations: map[string]openbindings.Operation{"o": {Input: held}}}
 		out, _ := json.Marshal(built)
@@ -1197,7 +1197,7 @@ func Example_cliReferenceLookup() {
 
 // The lookup against the rest of the SDK: every reference of the spec's §7.5
 // table, and the boundary and duplicate-name cases, each as an operation's
-// input reference. The validator's answer is OBI-D-12 and OBI-D-05 for a
+// input reference. The validator's answer is OBI-11 and OBI-12 for a
 // reference in the document resource, and the value contract otherwise: an
 // undefined result or an unresolvable reference means the lookup identifies
 // nothing.
@@ -1246,7 +1246,7 @@ func Example_cliReferenceParity() {
 		at := "/operations/op/input/$ref"
 		validator := "resolves"
 		for _, finding := range report.Violations() {
-			if (finding.Rule == "OBI-D-12" || finding.Rule == "OBI-D-05") && finding.Path == at {
+			if (finding.Rule == "OBI-12" || finding.Rule == "OBI-11") && finding.Path == at {
 				validator = "fails " + finding.Rule
 			}
 		}
@@ -1289,25 +1289,25 @@ func Example_cliReferenceParity() {
 	}
 	fmt.Println("agree:", agreed, "of", len(cases))
 	// Output:
-	// #                                                            fails OBI-D-12           no target
+	// #                                                            fails OBI-12             no target
 	// #/schemas/Task                                               resolves                 resolves
 	// #/schemas/Task/properties/my%20type                          resolves                 resolves
-	// #/schemas/Task/properties/my type                            fails OBI-D-05           not a reference
-	// #/schemas/Task/properties/my%2520type                        fails OBI-D-12           no target
+	// #/schemas/Task/properties/my type                            fails OBI-11             not a reference
+	// #/schemas/Task/properties/my%2520type                        fails OBI-12             no target
 	// #%2Fschemas%2FTask                                           resolves                 resolves
-	// #/schemas/Task/type                                          fails OBI-D-12           no target
-	// #/operations                                                 fails OBI-D-12           no target
-	// #/schemas/Missing                                            fails OBI-D-12           no target
-	// #/schemas/~2                                                 fails OBI-D-12           no target
+	// #/schemas/Task/type                                          fails OBI-12             no target
+	// #/operations                                                 fails OBI-12             no target
+	// #/schemas/Missing                                            fails OBI-12             no target
+	// #/schemas/~2                                                 fails OBI-12             no target
 	// #/schemas/Tree                                               resolves                 resolves
-	// #/schemas/Tree/properties/children                           fails OBI-D-12           no target
+	// #/schemas/Tree/properties/children                           fails OBI-12             no target
 	// #task                                                        resolves                 resolves
 	// #t%61sk                                                      resolves                 resolves
-	// #tree                                                        fails OBI-D-12           no target
-	// #%FF                                                         fails OBI-D-12           no target
-	// tree.json#/properties/children                               fails OBI-D-05           no target
+	// #tree                                                        fails OBI-12             no target
+	// #%FF                                                         fails OBI-12             no target
+	// tree.json#/properties/children                               fails OBI-11             no target
 	// https://example.com/schemas/tree.json#/properties/children   resolves                 resolves
-	// #/schemas/A/properties/x                                     fails OBI-D-12           no target
+	// #/schemas/A/properties/x                                     fails OBI-12             no target
 	// https://ex.test/a#/properties/x/properties/y                 resolves                 resolves
 	// https://ex.test/a#n                                          no target (undefined)    no target
 	// #n                                                           no target (undefined)    no target
@@ -1510,7 +1510,7 @@ func Example_cliReferenceFailures() {
 	report("nil document", nil)
 	// Output:
 	// next version: refused, version 0.3.0
-	// no version: non-conformant, OBI-D-09
+	// no version: non-conformant, OBI-03
 	// unencodable: openbindings: encode document: json: error calling MarshalJSON for type openbindings.Document: json: error calling MarshalJSON for type openbindings.Operation: json: unsupported value: NaN
 	// deep: 1 references found, inconclusive: openbindings: inconclusive: the schemas at /operations/op/input nest subschemas deeper than 256 levels, which this SDK does not index, so the references there are not all listed
 	// no references: 0 references, complete

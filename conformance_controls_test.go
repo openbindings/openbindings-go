@@ -112,7 +112,7 @@ func TestJudgeNamingControls(t *testing.T) {
 // for a conformant one.
 func TestNoDocument(t *testing.T) {
 	cause := errors.New("cause")
-	if j := noDocument([]string{"OBI-D-02"}, cause); j.Category != corpus.Fail || !strings.Contains(j.Detail, "continues with every non-conformant document") {
+	if j := noDocument([]string{"OBI-02"}, cause); j.Category != corpus.Fail || !strings.Contains(j.Detail, "continues with every non-conformant document") {
 		t.Errorf("a non-conformant case: %+v", j)
 	}
 	if j := noDocument(nil, cause); j.Category != corpus.Fail || !strings.Contains(j.Detail, "conformant document") {
@@ -125,7 +125,7 @@ func TestNoDocument(t *testing.T) {
 func TestJudgeConcludeControls(t *testing.T) {
 	satisfied := allRules(EvidenceSatisfied)
 	partial := allRules(EvidenceSatisfied)
-	delete(partial, "OBI-D-12")
+	delete(partial, "OBI-12")
 	scenario := func(evidence map[string]RuleEvidenceStatus, expected string) corpus.Case {
 		raw, _ := json.Marshal(map[string]any{"given": map[string]any{"evidence": evidence}, "expected": map[string]any{"conclusion": expected}})
 		return corpus.Case{ID: "SYNTHETIC-01", Format: corpus.FormatV2, Action: "conclude-conformance", Raw: raw}

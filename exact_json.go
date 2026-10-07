@@ -15,12 +15,12 @@ import (
 )
 
 // jsonNestingLimit is how deeply encoding/json nests the values it decodes.
-// Input nesting deeper is read in full for OBI-D-01, but the document model
+// Input nesting deeper is read in full for OBI-01, but the document model
 // and the generic view cannot be decoded from it.
 const jsonNestingLimit = 10000
 
 // errNestingLimit is the error for input nested deeper than jsonNestingLimit:
-// a resource limit met, which is no evidence about any rule but OBI-D-01
+// a resource limit met, which is no evidence about any rule but OBI-01
 // (§10.4).
 var errNestingLimit = fmt.Errorf("nested deeper than the decoder reads (%d levels)", jsonNestingLimit)
 
@@ -48,7 +48,7 @@ func (e *loneSurrogateError) Error() string {
 }
 
 // duplicateNameError reports an object that repeats a member name, which
-// OBI-D-01 refuses.
+// OBI-01 refuses.
 type duplicateNameError struct {
 	// location is the JSON Pointer of the object, and at the byte offset of
 	// the repeated name.
@@ -67,12 +67,12 @@ var byteOrderMark = []byte("\xef\xbb\xbf")
 // verifyExactJSON checks what decoding JSON into Go values would otherwise
 // lose without error: that the input is one valid UTF-8 JSON value with no
 // leading byte-order mark, and that no object in it repeats a member name,
-// which OBI-D-01 requires; and that no string escapes a lone UTF-16
+// which OBI-01 requires; and that no string escapes a lone UTF-16
 // surrogate, which the document model cannot carry. encoding/json replaces
 // invalid UTF-8 and lone surrogates and keeps only the last of repeated names.
 // A syntax error is reported before a repeated name, which is reported before
 // a lone surrogate, and all before nesting deeper than the decoder reads: the
-// first two break OBI-D-01, the others only exceed what the SDK can carry.
+// first two break OBI-01, the others only exceed what the SDK can carry.
 func verifyExactJSON(b []byte) error {
 	if !utf8.Valid(b) {
 		return errors.New("not valid UTF-8")
@@ -105,7 +105,7 @@ func verifyExactJSON(b []byte) error {
 // member's string leaves the decision unchanged and one in the version or in
 // the member's name leaves the input declaring no version. It reads input of
 // any depth, and input that repeats a member name elsewhere or holds a lone
-// surrogate; OBI-D-01 judges those, under a supported version.
+// surrogate; OBI-01 judges those, under a supported version.
 func declaredVersion(data []byte) (string, bool) {
 	raw, declared := versionMember(data)
 	if !declared || raw[0] != '"' {

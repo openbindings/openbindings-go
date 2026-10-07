@@ -36,7 +36,7 @@ func decidedRules(report ValidationReport) []string {
 // the same whether it arrives as bytes or in memory, where core finds it in
 // the text the document encodes to or in a member the model carries as raw
 // JSON: in memory, Validate reports conformance undetermined, deciding
-// OBI-D-09 alone, and References and Resolve return an error matching
+// OBI-03 alone, and References and Resolve return an error matching
 // ErrInconclusive, as ParseDocument does for the bytes. Raw JSON a schema
 // holds that encoding/json itself refuses, past its depth, is an encoding
 // failure instead (TestModelLimits_Boundary).
@@ -72,14 +72,14 @@ func TestModelLimits_InMemory(t *testing.T) {
 		},
 	} {
 		report, err := build("0.2.0").Validate()
-		if err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
+		if err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-03"}) {
 			t.Errorf("%s: %s deciding %v, %v", name, report.Conclusion, decidedRules(report), err)
 		}
-		// OBI-D-01 is undecided here, and a failed check of the declared
-		// version, which the model holds exactly, establishes that OBI-D-01
-		// or OBI-D-09 is violated, so non-conformance (§10).
+		// OBI-01 is undecided here, and a failed check of the declared
+		// version, which the model holds exactly, establishes that OBI-01
+		// or OBI-03 is violated, so non-conformance (§10).
 		report, err = build("0.2").Validate()
-		if !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant || !slices.Equal(report.Violated, []string{"OBI-D-09"}) {
+		if !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant || !slices.Equal(report.Violated, []string{"OBI-03"}) {
 			t.Errorf("%s, no valid version: %s, violated %v, %v", name, report.Conclusion, report.Violated, err)
 		}
 		if _, err := build("0.3.0").Validate(); !errors.As(err, new(*VersionRefusalError)) {

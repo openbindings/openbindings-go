@@ -1,6 +1,6 @@
 // Package schemacompiler is core's private use of the JSON Schema library
 // santhosh-tekuri/jsonschema/v6, for the document rules that evaluate fixed
-// schemas (OBI-D-02 against the derived schema, OBI-D-10 against the 2020-12
+// schemas (OBI-02 against the derived schema, OBI-10 against the 2020-12
 // meta-schemas): the compiler they start from, the projection of the
 // library's results onto a rule's evidence, and the resource limits it is
 // not handed work beyond. It also holds the ECMA-262 pattern grammar core
@@ -30,7 +30,7 @@ import (
 // Patterns are read by the library's Go regexp engine. The fixed schemas the
 // document rules evaluate hold only anchored patterns over ASCII classes,
 // which mean the same under Go's syntax as under ECMA-262 with the u flag,
-// the dialect OBI-D-02 and OBI-D-10 read them in (JSON Schema Core §6.4);
+// the dialect OBI-02 and OBI-10 read them in (JSON Schema Core §6.4);
 // TestFixedSchemaPatterns pins them.
 //
 // format never rejects a value: OBI-T-07 makes it an annotation where the

@@ -128,7 +128,7 @@ func (p *prepared) prepareSchema(object map[string]any) {
 		switch {
 		case !ok:
 			// Not a non-negative integer, which core never hands over
-			// (OBI-D-10): left for the library.
+			// (OBI-10): left for the library.
 			continue
 		case !past:
 			// Spelled as the library reads it, whatever its spelling in

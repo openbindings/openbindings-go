@@ -6,9 +6,9 @@ import "slices"
 //
 // An operation's identifiers are its key plus its Aliases; together they form
 // one flat namespace in which key and alias matches are equally authoritative.
-// OBI-D-04 makes that namespace document-unique, so in a conformant document
+// OBI-05 makes that namespace document-unique, so in a conformant document
 // a name resolves to at most one operation. A name that several operations
-// carry, in a document that violates OBI-D-04, names no one operation and does
+// carry, in a document that violates OBI-05, names no one operation and does
 // not resolve: no match is privileged over another. Matching is exact: no
 // trimming, case-folding, or approximation.
 //

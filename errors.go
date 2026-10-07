@@ -8,7 +8,7 @@ import (
 // ValidationError lists the document-rule violations validation established,
 // in the order the report's Findings hold them (ValidationReport.Findings),
 // each a Finding that names its rule and locates it. Document.Validate and ValidateDocument return it beside their
-// report, and ParseDocument returns it for violations of OBI-D-01 and the
+// report, and ParseDocument returns it for violations of OBI-01 and the
 // document schema.
 type ValidationError struct {
 	Findings []Finding
@@ -42,13 +42,13 @@ var (
 	// model does not write (Document.Validate states which documents those
 	// are); and by Document.References' error for an index it could not
 	// complete. A document declaring no valid version is not one of these:
-	// its OBI-D-09 violation is established, so those calls return it as a
+	// its OBI-03 violation is established, so those calls return it as a
 	// *ValidationError. Nor is value input that is not one JSON value, which
 	// leaves nothing to decide.
 	ErrInconclusive = errors.New("openbindings: inconclusive")
 
 	// ErrOperationNotFound is wrapped by the errors returned for a name that
 	// resolves to no one operation (OBI-T-06): no operation carries it, or,
-	// in a document violating OBI-D-04, several do.
+	// in a document violating OBI-05, several do.
 	ErrOperationNotFound = errors.New("openbindings: no one operation is named")
 )

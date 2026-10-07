@@ -17,9 +17,9 @@ Changed and Removed.
   project's JSON Schema evaluator for value validation, and the optional
   `httpdiscovery`, the HTTP Discovery companion.
 - **Document validation.** `ParseDocument(data)` checks the input bytes
-  (OBI-D-01), refuses a version outside `SupportedVersions`, applies the document
-  schema (OBI-D-02), and decodes. `ValidateDocument(data)` and
-  `Document.Validate()` decide every document rule, OBI-D-01 through OBI-D-13
+  (OBI-01), refuses a version outside `SupportedVersions`, applies the document
+  schema (OBI-02), and decodes. `ValidateDocument(data)` and
+  `Document.Validate()` decide every document rule, OBI-01 through OBI-13
   (`DocumentRules()`), and return a `ValidationReport`: per-rule `Evidence`,
   the `Violated` and `Inconclusive` rules, `Findings` located by JSON Pointer
   and, from input bytes, by `Position` (offset, line, column), and a
@@ -36,7 +36,7 @@ Changed and Removed.
   is beyond the SDK's own limits, such as nesting deeper than it reads. It is
   neither a conformance conclusion nor a value verdict. A document declaring
   no valid version is not inconclusive: `Document.References` and
-  `ValueContractCompiler.Resolve` return its OBI-D-09 violation as a
+  `ValueContractCompiler.Resolve` return its OBI-03 violation as a
   `*ValidationError`.
 - **Operation resolution and binding lookup.** `Document.ResolveOperation(name)`
   resolves an operation's key or alias (OBI-T-06), and
@@ -86,7 +86,7 @@ Changed and Removed.
   version outside `0.2.x`, gets a `*VersionRefusalError`.
   `MinSupportedVersion`, `MaxTestedVersion`, `SupportedRange`, and
   `IsSupportedVersion` are replaced by `SupportedVersions`,
-  `AuthoringVersion`, and `CheckVersion`. OBI-D-09 checks the declared
+  `AuthoringVersion`, and `CheckVersion`. OBI-03 checks the declared
   version against the SemVer 2.0.0 grammar, where 0.1.0 accepted only
   `MAJOR.MINOR.PATCH` digits.
 - **Types follow the 0.2 document model.**
@@ -124,11 +124,11 @@ Changed and Removed.
   them; 0.1.0 always escaped them.
 - **`Validate` decides the document rules.**
   `Interface.Validate(opts ...ValidateOption) error`, a shape check, is
-  `Document.Validate() (ValidationReport, error)`, which decides OBI-D-01
-  through OBI-D-13 and takes no options. A nil error means no violation was established, not
+  `Document.Validate() (ValidationReport, error)`, which decides OBI-01
+  through OBI-13 and takes no options. A nil error means no violation was established, not
   conformance: `ValidationReport.Conclusion` carries the conclusion. A member
   the model does not define whose name does not begin with `x-` is an
-  OBI-D-02 violation; 0.1.0 accepted one unless `WithRejectUnknownTypedFields`
+  OBI-02 violation; 0.1.0 accepted one unless `WithRejectUnknownTypedFields`
   was set.
 - **`ValidationError`** carries `Findings []Finding` in place of
   `Problems []string`.
@@ -138,7 +138,7 @@ Changed and Removed.
 - **Go version and dependencies.** The root module requires Go 1.25.12, not
   Go 1.22, and depends on `github.com/santhosh-tekuri/jsonschema/v6` and
   `golang.org/x/text`, used privately to check the embedded document schema
-  and the JSON Schema 2020-12 meta-schemas (OBI-D-02, OBI-D-10). 0.1.0 had
+  and the JSON Schema 2020-12 meta-schemas (OBI-02, OBI-10). 0.1.0 had
   no dependencies.
 
 ### Removed

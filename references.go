@@ -50,7 +50,7 @@ type Reference struct {
 // contains (§7), sorted by Location, each with the
 // schema its initial lookup identifies, or why it identifies none. Each is
 // looked up as this SDK resolves references everywhere: a same-document
-// reference in the document resource by OBI-D-12's own lookup (§7.2, §7.3),
+// reference in the document resource by OBI-12's own lookup (§7.2, §7.3),
 // and any other by JSON Schema 2020-12 resolution among the document's own
 // schema resources, whose identifiers are compared character for character
 // (§7.4). A reference naming an identifier that more than one resource
@@ -65,10 +65,10 @@ type Reference struct {
 // definitions and dependencies included. A $ref-shaped member anywhere else
 // (source or binding content, an example, an x- member) is data, not a
 // reference, and is not listed; neither is a $ref or $dynamicRef whose value
-// is not a string, which OBI-D-10 reports, and OBI-D-05 too in the document
+// is not a string, which OBI-10 reports, and OBI-11 too in the document
 // resource; nor one whose value is a string that is not a well-formed
-// URI-reference, which is not a reference of any form (§7.1): OBI-D-05
-// reports it in the document resource, OBI-D-12 does not govern it, and a
+// URI-reference, which is not a reference of any form (§7.1): OBI-11
+// reports it in the document resource, OBI-12 does not govern it, and a
 // value whose evaluation depends on it has an undefined result.
 //
 // What a caller may conclude, given a nil error: every reference keyword in
@@ -89,7 +89,7 @@ type Reference struct {
 // The whole call fails, listing no reference, for a document declaring a
 // well-formed version outside the supported set (a *VersionRefusalError,
 // CheckVersion); for one declaring no valid version (the *ValidationError
-// naming its OBI-D-09 violation); for one beyond this SDK's own limits (an
+// naming its OBI-03 violation); for one beyond this SDK's own limits (an
 // error matching ErrInconclusive); and for one that fails to encode (an
 // error matching no category). Document.Validate states which documents are
 // beyond this SDK's limits and which fail to encode. Where a schema nests
