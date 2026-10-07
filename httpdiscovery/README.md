@@ -1,10 +1,10 @@
 # HTTP discovery
 
 An optional Go module implementing the client and server contracts of
-[OpenBindings HTTP Discovery v0.1.0](https://github.com/openbindings/spec/blob/8e68955ea124915ee83fdc21be5f2358b9b4d62e/http-discovery.md).
+[OpenBindings HTTP Discovery v0.1.0](https://github.com/openbindings/spec/blob/1d5f08c2c2f2bf9822536ac5e6083edfd0831944/http-discovery.md).
 This companion versions independently of core. The implementation applies the
 text at that revision (SHA-256
-`9f91b2c2bb56ed9d5cbc77b3f1b3d7ff53fd74e5c55ab57a3bb17fbf3c43a71b`).
+`d64febfabe79b5c27f567158c9945f1029c9c3a44812639fa942c9d53d56e92e`).
 
 The module is under development on `release/0.2`; it is not yet tagged. Its
 module path is `github.com/openbindings/openbindings-go/httpdiscovery`. During
@@ -125,11 +125,16 @@ servers. The rule coverage is:
 | DISC-C-01 | Both media types, parameters, exact request Accept header |
 | DISC-C-02 | All five redirects, changed HTTPS origin, requested/final URLs, application refusal, stopped redirects and redirect limit |
 | DISC-C-03 | 404 alone is absence; gated and other statuses remain explicit; core violations and inconclusive reports stay distinct |
-| DISC-C-04 | Older, newer, and prerelease version refusals, including unfamiliar document members and media type |
 | DISC-S-01 | Exact immutable conformant snapshot, absent/unrelated Accept, refused invalid/undetermined publication |
 | DISC-S-02 | OBI response media type |
 | DISC-S-03 | Deployment tests with an absent route and authentication middleware, then authenticated retrieval |
 | DISC-S-04 | Explicit public, restricted-origin, and no-CORS configurations |
+
+A document declaring a version core does not apply returns core's
+`*VersionRefusalError`, never `ErrNotFound`: the document exists, and the
+refusal is the one diagnostic a user can act on. This is the client's choice,
+not a companion rule; tests cover older, newer, and prerelease versions,
+including unfamiliar document members and media types.
 
 Additional tests cover context cancellation, response closure, configurable and
 decompressed size bounds, invalid CORS configuration, bounded error-body cleanup

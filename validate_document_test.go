@@ -42,7 +42,7 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 }
 
 // A report names the release whose text it applies and, while that release
-// is a working draft, the source-control revision of the text (OBI-T-09),
+// is a working draft, the source-control revision of the text (OBI-T-08),
 // from Document.Validate and ValidateDocument alike.
 func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{}}`
@@ -224,7 +224,7 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesD01(t *testing.T) {
 }
 
 // Value validation reaches a verdict only where the document's own schemas
-// decide it (OBI-T-08): a graph reaching a resource the document does not
+// decide it (OBI-T-07): a graph reaching a resource the document does not
 // embed, or a reference that resolves nowhere, reaches none.
 func TestInputContract_Scope(t *testing.T) {
 	for name, tc := range map[string]struct{ document, want string }{
@@ -548,9 +548,9 @@ func TestValidateDocument_DialectRulesReachEverySchema(t *testing.T) {
 	}
 }
 
-// Reference cycles terminate in every walk (OBI-T-06): a recursive type is
+// Reference cycles terminate in every walk (OBI-T-05): a recursive type is
 // evaluated, and a cycle that never advances into the value reaches no
-// verdict rather than hanging (OBI-T-08).
+// verdict rather than hanging (OBI-T-07).
 func TestValidateDocument_ReferenceCyclesTerminate(t *testing.T) {
 	recursive := `{"openbindings":"0.2.0",
 		"schemas":{"Node":{"type":"object","properties":{"next":{"$ref":"#/schemas/Node"}}}},
@@ -938,7 +938,8 @@ func TestParseDocument_ChecksNumbersBeyondTheLimits(t *testing.T) {
 // OBI-D-01, a token at a time, but cannot be decoded: every rule but OBI-D-09
 // meets a resource limit and is inconclusive (§10.4). Its declared version is
 // read however deep the input and wherever the member lies, so an unsupported
-// one is refused (OBI-T-04) and a missing or malformed one violates OBI-D-09.
+// one is refused (CheckVersion) and a missing or malformed one violates
+// OBI-D-09.
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 	nested := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
 	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + nested + `}`
@@ -980,7 +981,7 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 
 // The version is read from exactly one JSON value, with no byte-order mark,
 // whose root object has one openbindings member holding a string, at any
-// depth (OBI-T-04).
+// depth (§8.1, Version declaration).
 func FuzzDeclaredVersion(f *testing.F) {
 	for _, seed := range []string{`{"openbindings":"0.9.0"}`, `{"openbindings":"0.9.0","openbindings":"0.9.0"}`, `{"a":[{"openbindings":"0.9.0"}],"openbindings":"1.0.0"}`,
 		`{"openbindings":"0.9.0"} {}`, `{"openbindings":"0.9.0",}`, `{"\u006fpenbindings":"0.9.0"}`, `[{"openbindings":"0.9.0"}]`, `{"openbindings":{"a":1}}`, `{"openbindings":"0.9.0"`} {
@@ -1095,7 +1096,7 @@ func TestValidateDocument_DuplicateNamesAreLocated(t *testing.T) {
 }
 
 // A leading byte-order mark is named as what OBI-D-01 refuses, and a text
-// beginning with one declares no version (OBI-T-04), so it is never refused.
+// beginning with one declares no version (§8.1), so it is never refused.
 func TestValidateDocument_ByteOrderMarkIsNamed(t *testing.T) {
 	for _, version := range []string{"0.2.0", "9.0.0"} {
 		input := append([]byte{0xef, 0xbb, 0xbf}, `{"openbindings":"`+version+`","operations":{}}`...)

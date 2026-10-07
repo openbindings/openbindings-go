@@ -57,9 +57,7 @@ type Case struct {
 
 // Gates are a case's version gates.
 type Gates struct {
-	RequiresSupports     string `json:"requiresSupports"`
-	RequiresUnsupported  string `json:"requiresUnsupported"`
-	RequiresMinSupported string `json:"requiresMinSupported"`
+	RequiresSupports string `json:"requiresSupports"`
 }
 
 // Corpus is a loaded corpus.
@@ -246,7 +244,7 @@ var designations = map[string]struct{ module, reason string }{
 	"check-dependency-kind":     {ModuleRoot, ""},
 	"validate-operation-values": {ModuleSchemaeval, "value validation runs in the schemaeval module, under the project's ECMA-262 evaluator"},
 	"check-examples":            {ModuleSchemaeval, "example checking composes value validation, which runs in the schemaeval module"},
-	"derive-form":               {ModuleNone, "this SDK derives no forms from a schema (OBI-T-05 has no executor here)"},
+	"derive-form":               {ModuleNone, "this SDK derives no forms from a schema (OBI-T-04 has no executor here)"},
 }
 
 // Designate names the module that executes a case, and the reason the other
@@ -280,47 +278,11 @@ func (d Declaration) Supports(v string) bool {
 	return slices.Contains(d.Lines, m[1]+"."+m[2])
 }
 
-// Lowest is the first release of the lowest declared line.
-func (d Declaration) Lowest() string {
-	lowest := ""
-	for _, line := range d.Lines {
-		v := line + ".0"
-		if lowest == "" || compareRelease(v, lowest) < 0 {
-			lowest = v
-		}
-	}
-	return lowest
-}
-
-// compareRelease orders major.minor.patch as digit strings, never machine
-// integers, so versions of any length compare exactly.
-func compareRelease(a, b string) int {
-	pa, pb := semverRE.FindStringSubmatch(a), semverRE.FindStringSubmatch(b)
-	if pa == nil || pb == nil {
-		return strings.Compare(a, b)
-	}
-	for i := 1; i <= 3; i++ {
-		if c := len(pa[i]) - len(pb[i]); c != 0 {
-			return c
-		}
-		if c := strings.Compare(pa[i], pb[i]); c != 0 {
-			return c
-		}
-	}
-	return 0
-}
-
 // Gate reports whether a case's gates exclude it for a tool with declaration
 // d, and why.
 func Gate(g Gates, d Declaration) (reason string, skip bool) {
 	if v := g.RequiresSupports; v != "" && !d.Supports(v) {
-		return "gate: requires a tool declaring support for " + v, true
-	}
-	if v := g.RequiresUnsupported; v != "" && d.Supports(v) {
-		return "gate: requires a tool not declaring support for " + v, true
-	}
-	if v := g.RequiresMinSupported; v != "" && compareRelease(d.Lowest(), v) < 0 {
-		return "gate: requires a lowest supported version of at least " + v, true
+		return "gate: requires a tool applying the text of " + v, true
 	}
 	return "", false
 }
@@ -355,11 +317,10 @@ type Observed struct {
 }
 
 // JudgeValues judges a value case's observed answers against its expected
-// object. refused and exclusive say whether the answer was a version refusal
-// and whether it came with nothing else.
-func JudgeValues(expected json.RawMessage, refused, exclusive bool, observed []Observed, p Profile) Judgment {
+// object. refused says whether the answer was a version refusal, which fails
+// every value case: each declares the 0.2 line or no version.
+func JudgeValues(expected json.RawMessage, refused bool, observed []Observed, p Profile) Judgment {
 	var e struct {
-		Outcome       string            `json:"outcome"`
 		Results       []json.RawMessage `json:"results"`
 		DependsOn     []string          `json:"dependsOn"`
 		ForbidReasons []string          `json:"forbidReasons"`
@@ -367,15 +328,8 @@ func JudgeValues(expected json.RawMessage, refused, exclusive bool, observed []O
 	if err := json.Unmarshal(expected, &e); err != nil {
 		return Judgment{Fail, "unreadable expectation: " + err.Error()}
 	}
-	switch {
-	case refused && !exclusive:
-		return Judgment{Fail, "a version refusal came with a result"}
-	case refused && e.Outcome == "version-refusal":
-		return Judgment{Pass, "version-refusal"}
-	case refused:
+	if refused {
 		return Judgment{Fail, "version-refusal; expected value results"}
-	case e.Outcome != "":
-		return Judgment{Fail, fmt.Sprintf("the document was interpreted; expected %s", e.Outcome)}
 	}
 	if len(observed) != len(e.Results) {
 		return Judgment{Fail, fmt.Sprintf("%d results for %d expected", len(observed), len(e.Results))}

@@ -36,7 +36,7 @@ type sentinelFormat struct {
 
 // Keywords the library evaluates though JSON Schema 2020-12 does not define
 // them, or reads as schemas: dropped, so the library evaluates the bundle as
-// strict 2020-12 does. format is an annotation (OBI-T-08), so dropping it
+// strict 2020-12 does. format is an annotation (OBI-T-07), so dropping it
 // changes no verdict; the library would otherwise assert "regex" once format
 // assertion is on for the sentinels.
 var dropped = []string{"format", "dependencies", "definitions", "$recursiveRef", "$recursiveAnchor", "additionalItems"}

@@ -96,16 +96,16 @@ func verifyExactJSON(b []byte) error {
 }
 
 // declaredVersion reads the version a document declares from its bytes,
-// before any other rule is decided (OBI-T-04): the value of the root object's
-// openbindings member, when the input has no byte-order mark and is one JSON
-// value whose root object has exactly one such member, holding a string. The
-// input is read as OBI-T-04 decodes it: a byte outside a well-formed UTF-8
-// sequence is a syntax error between tokens and within an escape, and
-// changes only the string that holds it, so one in another member's string
-// leaves the decision unchanged and one in the version or in the member's
-// name leaves the input declaring no version. It reads input of any depth,
-// and input that repeats a member name elsewhere or holds a lone surrogate;
-// OBI-D-01 judges those, under a supported version.
+// before any other rule is decided (§8.1, Version declaration): the value of
+// the root object's openbindings member, when the input has no byte-order
+// mark and is one JSON value whose root object has exactly one such member,
+// holding a string. The input is read as §8.1 decodes it: a byte outside a
+// well-formed UTF-8 sequence is a syntax error between tokens and within an
+// escape, and changes only the string that holds it, so one in another
+// member's string leaves the decision unchanged and one in the version or in
+// the member's name leaves the input declaring no version. It reads input of
+// any depth, and input that repeats a member name elsewhere or holds a lone
+// surrogate; OBI-D-01 judges those, under a supported version.
 func declaredVersion(data []byte) (string, bool) {
 	raw, declared := versionMember(data)
 	if !declared || raw[0] != '"' {

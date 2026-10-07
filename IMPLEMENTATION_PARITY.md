@@ -49,9 +49,9 @@ Go first; TypeScript alignment is pending for each of these:
 - **Host objects.** Validating a document in memory decides OBI-D-01 on its
   serialization (§10), so it can conclude conformant.
 - **Version decision.** A text beginning with a byte-order mark declares no
-  version (OBI-T-04). A report names the release whose text it applies
-  (OBI-T-09).
-- **Value contracts.** Validating a value (OBI-T-08) takes a schema
+  version (§8.1). A report names the release whose text it applies
+  (OBI-T-08).
+- **Value contracts.** Validating a value (OBI-T-07) takes a schema
   evaluator the application supplies; the core has none of its own. The core
   resolves the document's schemas and the supplied resources (§7), refuses
   before evaluation, located and labeled, what the specification leaves
@@ -64,7 +64,7 @@ Go first; TypeScript alignment is pending for each of these:
 
 Document validation reports the core's §10.4 conformance conclusion in Go:
 `Document.Validate()` and `ValidateDocument(data)` return a
-`ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-09 to caller evidence through
+`ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-08 to caller evidence through
 `concludeConformance`, but `validateInterface` still returns violations
 alone; TypeScript alignment is pending.
 
@@ -115,7 +115,7 @@ each with the spec CHANGELOG entry (0.2.0 working draft) that states it:
   The revised text's corpus holds scenarios in format
   `openbindings.core-tool-scenarios@2` alone; `resolve-schema-cycle`, the
   old outcome tokens (`graph-unavailable`, `resolver-error`), and the
-  validity fixtures that listed OBI-T-04 as a version refusal are gone. A
+  version-refusal outcome are gone. A
   corpus runner reads @2's actions and expectations: value results as
   `valid`, `instance-mismatch`, or `no-verdict` (bare or in object form
   with `orNoVerdict` and `dependsOn`), `notViolated` beside `violates`,
@@ -134,13 +134,13 @@ behavior and recognizable names, not identical signatures:
   names them; a dependency's kind check is "accepts" (`AcceptsKind`).
 - **Lookups on the document.** Resolving a name to an operation against its
   key and its aliases, with equal standing, where a name several operations
-  carry resolves to none (OBI-T-07); and finding an operation's bindings by
+  carry resolves to none (OBI-T-06); and finding an operation's bindings by
   its key alone, sorted for presentation, where an alias or a key no
   operation has finds nothing. Neither finds anything in a missing document.
 - **The version decision as a refusal.** A check that returns the same
   refusal the refusing entry points return (parsing, validating bytes or a
   document in memory, listing references, and resolving value contracts),
-  or none; no refusal for a text that declares no version (OBI-T-04). The
+  or none; no refusal for a text that declares no version (§8.1). The
   operation lookups refuse nothing. No exported SemVer validity predicate.
 - **Inconclusive, distinctly.** One category for a call that decided
   nothing because the input is beyond the SDK's own limits: a parse that
@@ -192,15 +192,15 @@ each of these observable behaviors:
 | Concept | Go | TypeScript |
 |---|---|---|
 | validate a document, with its conformance conclusion | `Document.Validate()` / `ValidateDocument(data)` | `validateInterface(...)` (report pending) |
-| apply OBI-T-09 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
+| apply OBI-T-08 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
 | compare a dependency's declared kind constraint | `Dependency.AcceptsKind(...)` | pending |
 | resolve an operation name, and find its bindings by key | `Document.ResolveOperation(...)`, `Document.OperationBindings(...)` | pending |
-| decide a declared version (OBI-T-04) | `CheckVersion(...)` | pending |
+| decide a declared version (the SDK's policy, §8.1) | `CheckVersion(...)` | pending |
 | list a document's schema references | `Document.References()` | pending |
 | mark what decided nothing | `ErrInconclusive` | pending |
 | validate a value against a value contract, with the application's evaluator | `NewValueContractCompiler(...)`, `Resolve`, `CompileInput` / `CompileOutput`, `ValueContract.Validate` | pending |
 | check an evaluator against the evaluator contract | `openbindingstest.TestSchemaEvaluator(...)` | pending |
-| name the specification text a conclusion applied, with its revision while a working draft (OBI-T-09) | `ValidationReport.Release` and `ValidationReport.Revision` | pending |
+| name the specification text a conclusion applied, with its revision while a working draft (OBI-T-08) | `ValidationReport.Release` and `ValidationReport.Revision` | pending |
 | position a finding in the input bytes | `Finding.Position` | pending |
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |

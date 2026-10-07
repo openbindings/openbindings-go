@@ -6,16 +6,16 @@ import (
 )
 
 var (
-	// ErrMismatch marks an instance mismatch (OBI-T-08): the value does not
+	// ErrMismatch marks an instance mismatch (OBI-T-07): the value does not
 	// satisfy its value contract.
 	ErrMismatch = errors.New("openbindings: the value does not satisfy its value contract")
 	// ErrNoVerdict marks a validation that reached no verdict: not a
 	// rejection of the value.
 	ErrNoVerdict = errors.New("openbindings: no verdict")
 	// ErrNoValueContract marks a value checked where the operation states no
-	// value contract (§5.1, OBI-T-08).
+	// value contract (§5.1, OBI-T-07).
 	ErrNoValueContract = errors.New("openbindings: the operation states no value contract there")
-	// ErrUndefined marks a no-verdict on an undefined result (OBI-T-08): one
+	// ErrUndefined marks a no-verdict on an undefined result (OBI-T-07): one
 	// JSON Schema leaves undefined, or one that depends on a keyword value the
 	// rule's readings make invalid. It withholds a verdict from every
 	// conforming tool, so no evaluator lifts it; a missing reference or

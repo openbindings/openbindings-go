@@ -12,7 +12,7 @@ through bindings and named dependencies whose implementations are supplied by
 its environment, independently of protocol. See the
 [spec](https://github.com/openbindings/spec) for details.
 
-**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.CheckVersion(version)` makes the version decision (OBI-T-04) for a caller holding a document it decoded itself: it returns the `*VersionRefusalError` that `ParseDocument`, `ValidateDocument`, `Document.Validate`, `Document.References`, and `ValueContractCompiler.Resolve` return for a well-formed version outside the supported set, and nil otherwise. Nil means only that there is no refusal: a malformed version declares no version, which is an OBI-D-09 violation, never a refusal. `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
+**Spec version:** implements OpenBindings 0.2. `openbindings.SupportedVersions` states the versions this SDK supports (§8.1): every release of the 0.2 line (`0.2.x`), and no prerelease. `openbindings.CheckVersion(version)` makes this SDK's version decision for a caller holding a document it decoded itself: it returns the `*VersionRefusalError` that `ParseDocument`, `ValidateDocument`, `Document.Validate`, `Document.References`, and `ValueContractCompiler.Resolve` return for a well-formed version outside the supported set, and nil otherwise. Nil means only that there is no refusal: a malformed version declares no version, which is an OBI-D-09 violation, never a refusal. `openbindings.AuthoringVersion` (`0.2.0`) is the version a document written with this SDK declares: the lowest version sufficient for everything the document model carries, as §8.1 asks of documents.
 
 > **Draft status:** this branch implements the unreleased 0.2 working draft.
 > The install command below describes the released package path; it does not
@@ -50,7 +50,8 @@ report records them as not applicable (§10). `ValidateDocument` and
 `Document.Validate` return a `*ValidationError` beside the
 report exactly when a violation is established, so the error is the gate
 before acting on a document; a nil error is not a conformance claim.
-A version outside the supported set is refused, not concluded (OBI-T-04).
+A version outside the supported set is refused, not concluded: refusing is this
+SDK's policy, which the specification leaves to each tool (§10.3).
 `ParseDocument` returns a `*VersionRefusalError`, a `*ValidationError`, or,
 when it cannot read the document in full, an error matching
 `ErrInconclusive`, which is no conformance conclusion either way.
@@ -59,7 +60,7 @@ JSON Schema 2020-12 meta-schemas, embedded at build time) with a private use
 of [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema).
 No document rule evaluates a value against the document's schemas: an
 example is an author claim, which a tool can check against its value
-contract. Validating values (OBI-T-08) takes a JSON Schema evaluator the
+contract. Validating values (OBI-T-07) takes a JSON Schema evaluator the
 application supplies; see [Validate a value against a value
 contract](#validate-a-value-against-a-value-contract). To exercise the core
 conformance corpus, check out the
@@ -85,7 +86,7 @@ application validating large or untrusted values bounds them itself.
 for one below the value's top level. An inconclusive rule or a value
 without a verdict is never reported as success or unqualified conformance.
 
-**Declared capability limits:** OBI-T-08 lets a tool give no verdict where it
+**Declared capability limits:** OBI-T-07 lets a tool give no verdict where it
 lacks a capability, and these are this SDK's. Each is a no-verdict, never a
 wrong verdict. A value contract is decided as a whole, so what core or the
 evaluator refuses withholds a verdict from every value, even one whose
@@ -168,7 +169,7 @@ go get github.com/openbindings/openbindings-go
   URI-reference (a string that is not one is no reference of any form,
   §7.1), with the schema each one's initial lookup identifies, looked up as
   OBI-D-12 and value validation look them up
-- **Value-contract validation** of values against an operation's input or output contract (§3, OBI-T-08), with a JSON Schema evaluator the application supplies: core resolves the document's schemas (§7), refuses what the specification leaves undefined, and hands the evaluator a closed JSON Schema 2020-12 bundle per value contract; the evaluator evaluates. [`schemaeval`](schemaeval) is the project's evaluator, and [`openbindingstest`](openbindingstest) checks any evaluator against the contract
+- **Value-contract validation** of values against an operation's input or output contract (§3, OBI-T-07), with a JSON Schema evaluator the application supplies: core resolves the document's schemas (§7), refuses what the specification leaves undefined, and hands the evaluator a closed JSON Schema 2020-12 bundle per value contract; the evaluator evaluates. [`schemaeval`](schemaeval) is the project's evaluator, and [`openbindingstest`](openbindingstest) checks any evaluator against the contract
 
 ## Quick start
 
@@ -182,7 +183,7 @@ import (
 
 // ParseDocument is the front door for untrusted or wire bytes: beyond the
 // exact decoding json.Unmarshal also performs (OBI-D-01's checks included), it
-// refuses an unsupported version (OBI-T-04) and applies the document schema
+// refuses a version this SDK does not apply (CheckVersion) and applies the document schema
 // (OBI-D-02).
 doc, err := openbindings.ParseDocument(data)
 if err != nil {
@@ -201,7 +202,7 @@ for name, op := range doc.Operations {
 ```
 
 A name resolves to an operation by its key or an alias, and the operation's
-bindings are found by the key it resolves to (OBI-T-07):
+bindings are found by the key it resolves to (OBI-T-06):
 
 ```go
 key, _, found := doc.ResolveOperation("tasks.create")
@@ -310,7 +311,7 @@ directly, checks problem paths, the evaluator's errors, and invariants
 verdict.
 
 What an evaluator must do has three sources (see `SchemaEvaluator`), and
-only the first is the specification's: OBI-T-08's semantics and its
+only the first is the specification's: OBI-T-07's semantics and its
 no-verdict rule; the limits of the library it adapts (regular-expression
 dialect, arithmetic, loader, error shape), each a no-verdict where evaluation
 reaches it; and this SDK's diagnostic contract for problem locations, which

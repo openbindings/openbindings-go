@@ -101,7 +101,7 @@ func TestCheckVersion(t *testing.T) {
 		{name: "higher minor pre-1", version: "0.3.0", refused: true},
 		{name: "a prerelease of a supported release", version: "0.2.0-rc.1", refused: true},
 		{name: "a prerelease of a later patch", version: "0.2.1-rc.1", refused: true},
-		// A text declaring no version is never refused (OBI-T-04).
+		// A text declaring no version is never refused (§8.1).
 		{name: "invalid empty", version: ""},
 		{name: "invalid 1.0", version: "1.0"},
 		{name: "invalid 0.2", version: "0.2"},
@@ -338,7 +338,7 @@ func TestVersionNumbersAreUnbounded(t *testing.T) {
 		}
 	}
 	if _, _, err := ValidateDocument([]byte(`{"openbindings":"` + huge + `.0.0","operations":{}}`)); !errors.As(err, new(*VersionRefusalError)) {
-		t.Fatalf("an oversized major must be refused (OBI-T-04), got %v", err)
+		t.Fatalf("an oversized major must be refused, got %v", err)
 	}
 	a, _ := parseSemverStrict("1.0.0-" + huge)
 	b, _ := parseSemverStrict("1.0.0-" + huge + "0")

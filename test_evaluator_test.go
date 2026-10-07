@@ -80,7 +80,7 @@ func contractsFor(t *testing.T, iface *Document, resources ...Resource) *ValueCo
 	return contracts
 }
 
-// verdictOf names what a value contract's answer is, as OBI-T-08 tells
+// verdictOf names what a value contract's answer is, as OBI-T-07 tells
 // them apart: "valid", "mismatch", or "no verdict".
 func verdictOf(t *testing.T, err error) string {
 	t.Helper()

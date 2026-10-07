@@ -48,7 +48,7 @@ var (
 	ErrInconclusive = errors.New("openbindings: inconclusive")
 
 	// ErrOperationNotFound is wrapped by the errors returned for a name that
-	// resolves to no one operation (OBI-T-07): no operation carries it, or,
+	// resolves to no one operation (OBI-T-06): no operation carries it, or,
 	// in a document violating OBI-D-04, several do.
 	ErrOperationNotFound = errors.New("openbindings: no one operation is named")
 )

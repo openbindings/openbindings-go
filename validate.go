@@ -40,7 +40,7 @@ import (
 // meta-schema check meets a resource limit (§10.4).
 //
 // A document declaring a version outside the supported set is not interpreted:
-// Validate returns a *VersionRefusalError and no report (OBI-T-04).
+// Validate returns a *VersionRefusalError and no report (CheckVersion).
 //
 // Encoding a host document either fails or writes text, and this is the
 // boundary between this SDK's own limits and an encoding failure, for
@@ -128,7 +128,7 @@ func (d Document) Validate() (ValidationReport, error) {
 // Its results take five shapes:
 //   - The document declares a well-formed version outside the supported set:
 //     no document, the zero report, and a *VersionRefusalError. The document
-//     is not interpreted (OBI-T-04).
+//     is not interpreted (CheckVersion).
 //   - OBI-D-01 refuses the input (not JSON, not UTF-8, beginning with a
 //     byte-order mark, or repeating a member name): no document, a report
 //     with OBI-D-01 violated and every other rule not applicable, and a
@@ -314,10 +314,10 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 	}
 }
 
-// inputVersionRefusal applies OBI-T-04 to the version input declares, read
-// from its bytes (see declaredVersion), for input OBI-D-01 refuses or the
-// decoder cannot read: the version decision precedes interpreting a document
-// under this version's rules, OBI-D-01 included (§10.1).
+// inputVersionRefusal applies this SDK's version policy to the version input
+// declares (§8.1), read from its bytes (see declaredVersion), for input
+// OBI-D-01 refuses or the decoder cannot read: the version decision precedes
+// interpreting a document under this version's rules, OBI-D-01 included.
 func inputVersionRefusal(data []byte) *VersionRefusalError {
 	version, declared := declaredVersion(data)
 	if !declared {
@@ -326,11 +326,11 @@ func inputVersionRefusal(data []byte) *VersionRefusalError {
 	return versionRefusalOf(version)
 }
 
-// declaredVersionRefusal applies OBI-T-04 to the version a document's generic
-// view declares. The decision precedes interpretation under this version's
-// semantics, the embedded document schema included. A missing or malformed
-// version is OBI-D-09's concern, decided with the other rules, so it is not a
-// refusal.
+// declaredVersionRefusal applies this SDK's version policy to the version a
+// document's generic view declares. The decision precedes interpretation
+// under this version's semantics, the embedded document schema included. A
+// missing or malformed version is OBI-D-09's concern, decided with the other
+// rules, so it is not a refusal.
 func declaredVersionRefusal(view any) *VersionRefusalError {
 	object, _ := view.(map[string]any)
 	version, ok := object["openbindings"].(string)
@@ -342,7 +342,7 @@ func declaredVersionRefusal(view any) *VersionRefusalError {
 
 // interpretable applies the version decision an entry point that interprets
 // a Document in memory makes first: a *VersionRefusalError for a well-formed
-// version outside the supported set (OBI-T-04), and for no valid version the
+// version outside the supported set (CheckVersion), and for no valid version the
 // *ValidationError naming the OBI-D-09 violation Document.Validate also
 // establishes, neither of which it interprets; nil otherwise.
 func interpretable(version string) error {
@@ -357,9 +357,9 @@ func interpretable(version string) error {
 	return nil
 }
 
-// versionRefusalOf applies OBI-T-04 to a declared version. It returns nil for
-// an accepted version and for a malformed one, which is OBI-D-09's concern
-// rather than a refusal.
+// versionRefusalOf applies this SDK's version policy to a declared version.
+// It returns nil for an accepted version and for a malformed one, which is
+// OBI-D-09's concern rather than a refusal.
 func versionRefusalOf(version string) *VersionRefusalError {
 	if !isValidSemver(version) {
 		return nil
@@ -381,7 +381,7 @@ func versionRefusalOf(version string) *VersionRefusalError {
 // operation reference that is a number names no operation key. Where the
 // document schema requires a member or a type, OBI-D-02 also reports it. No
 // rule evaluates a value against the document's schemas: an example is an
-// author claim, which no document rule checks (OBI-T-10).
+// author claim, which no document rule checks (OBI-T-09).
 func checkDocument(c *ruleChecks, view any) {
 	checkDeclaredVersion(c, view)
 	validateAgainstOBISchema(c, view)

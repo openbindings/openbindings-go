@@ -15,7 +15,7 @@ func allRules(status RuleEvidenceStatus) map[string]RuleEvidenceStatus {
 	return evidence
 }
 
-// OBI-T-09: conformance is claimed only when every document rule has been
+// OBI-T-08: conformance is claimed only when every document rule has been
 // established with no violation, so a document rule missing from the
 // evidence is inconclusive, and an empty map concludes undetermined.
 func TestConcludeConformance(t *testing.T) {
@@ -49,7 +49,7 @@ func TestConcludeConformance(t *testing.T) {
 		// Evidence under an identifier that is not a document rule decides
 		// nothing (§10.4 concludes from the document rules alone).
 		{"complete evidence and a foreign violation", with(satisfied, "X-01", EvidenceViolated), ConclusionConformant, nil, nil},
-		{"complete evidence and a foreign inconclusive", with(satisfied, "OBI-T-09", EvidenceInconclusive), ConclusionConformant, nil, nil},
+		{"complete evidence and a foreign inconclusive", with(satisfied, "OBI-T-08", EvidenceInconclusive), ConclusionConformant, nil, nil},
 		{"incomplete evidence and a foreign satisfied", with(without(satisfied, "OBI-D-07"), "X-01", EvidenceSatisfied), ConclusionConformanceUndetermined, nil, []string{"OBI-D-07"}},
 		{"incomplete evidence and a foreign violation", with(without(satisfied, "OBI-D-07"), "X-01", EvidenceViolated), ConclusionConformanceUndetermined, nil, []string{"OBI-D-07"}},
 		// A typo leaves its rule missing, so inconclusive: never a false

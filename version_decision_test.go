@@ -8,11 +8,11 @@ import (
 
 // A text declares a version exactly when it has no byte-order mark and, read
 // with each byte outside a well-formed UTF-8 sequence replaced, parses as JSON
-// with one openbindings member holding a SemVer string (OBI-T-04). A byte in
+// with one openbindings member holding a SemVer string (§8.1). A byte in
 // another member's string changes nothing; one in the version, in the
 // member's name, within an escape, or between tokens leaves the text declaring
 // none, and no version is refused.
-func TestVersionDecision_ReadsTheTextAsOBI_T04Decodes(t *testing.T) {
+func TestVersionDecision_ReadsTheTextAsTheVersionDeclarationDecodes(t *testing.T) {
 	utf16le := func(s string) []byte {
 		var out []byte
 		for _, unit := range utf16.Encode([]rune(s)) {

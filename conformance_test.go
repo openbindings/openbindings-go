@@ -41,15 +41,14 @@ type conformanceFixture struct {
 }
 
 type conformanceTest struct {
-	Description          string          `json:"description"`
-	Document             json.RawMessage `json:"document"`
-	DocumentText         *string         `json:"documentText,omitempty"`
-	DocumentBase64       string          `json:"documentBase64,omitempty"`
-	Valid                bool            `json:"valid"`
-	Violates             []string        `json:"violates,omitempty"`
-	NotViolated          []string        `json:"notViolated,omitempty"`
-	RequiresMinSupported string          `json:"requiresMinSupported,omitempty"`
-	RequiresSupports     string          `json:"requiresSupports,omitempty"`
+	Description      string          `json:"description"`
+	Document         json.RawMessage `json:"document"`
+	DocumentText     *string         `json:"documentText,omitempty"`
+	DocumentBase64   string          `json:"documentBase64,omitempty"`
+	Valid            bool            `json:"valid"`
+	Violates         []string        `json:"violates,omitempty"`
+	NotViolated      []string        `json:"notViolated,omitempty"`
+	RequiresSupports string          `json:"requiresSupports,omitempty"`
 }
 
 // findConformanceCorpus locates the spec repo's conformance/ root: the
@@ -68,9 +67,9 @@ func sdkDeclaration() corpus.Declaration {
 // appliedTextRevision and appliedTextSHA256 bind the text this SDK applies:
 // the revision of github.com/openbindings/spec it pins, which must be
 // appliedRevision, and the sha256 of that revision's openbindings.md.
-const appliedTextRevision = "8e68955ea124915ee83fdc21be5f2358b9b4d62e"
+const appliedTextRevision = "1d5f08c2c2f2bf9822536ac5e6083edfd0831944"
 
-const appliedTextSHA256 = "da03a06e6248bc1413eb59605cc297cf07fa78fea568cb59c44ffb9222b82877"
+const appliedTextSHA256 = "b1ce701f53acdbc79b2526e0257de3a54c1eed0e143b15c1e72a1e0825ece9e8"
 
 // appliedTextVerified verifies the text this SDK names against the bytes it
 // pins (verifyAppliedText), for the history of the specification repository
@@ -88,14 +87,14 @@ var fullRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // its schema must be the one this SDK embeds. Both are read from the history,
 // never from its checkout or index, so the text beside the corpus plays no
 // part and an unrelated specification commit cannot change the result. A
-// release named alone (OBI-T-09/c3a) is not verified: no verification against
+// release named alone (OBI-T-08/c3a) is not verified: no verification against
 // a release snapshot exists.
 func verifyAppliedText(corpusDir, release, revision, pinnedRevision, pinnedSHA256 string, schema []byte) (bool, string) {
 	switch {
 	case !isValidSemver(release):
 		return false, fmt.Sprintf("appliedRelease %q is not a SemVer 2.0.0 version", release)
 	case revision == "":
-		return false, "a release named alone (OBI-T-09/c3a) is not verified: no verification against a release snapshot exists"
+		return false, "a release named alone (OBI-T-08/c3a) is not verified: no verification against a release snapshot exists"
 	case !fullRevision.MatchString(revision):
 		return false, fmt.Sprintf("appliedRevision %q is not a full 40-hex commit", revision)
 	case pinnedRevision != revision:
@@ -373,17 +372,16 @@ func (g documentCarriage) bytes() ([]byte, error) {
 }
 
 // judgeDocument executes validate-document through ValidateDocument, reading
-// its whole response: a refusal is exclusive, at every entry point that
-// refuses; a conclusion agrees with its error; and a conclusion names the
-// text this SDK applies.
+// its whole response: every case declares the 0.2 line or no version, so a
+// refusal fails it; a conclusion agrees with its error; and a conclusion
+// names the text this SDK applies.
 func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 	var s struct {
 		Given    documentCarriage `json:"given"`
 		Expected struct {
-			Outcome          string            `json:"outcome"`
-			Violates         []string          `json:"violates"`
-			NamesAppliedText bool              `json:"namesAppliedText"`
-			DuplicateBlind   map[string]string `json:"duplicateBlind"`
+			Outcome          string   `json:"outcome"`
+			Violates         []string `json:"violates"`
+			NamesAppliedText bool     `json:"namesAppliedText"`
 		} `json:"expected"`
 	}
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
@@ -393,30 +391,9 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 	if err != nil {
 		return fail("%v", err)
 	}
-	// This SDK detects repeated member names, so duplicateBlind, which
-	// states what a tool that cannot detect them must do, does not apply.
-	doc, report, err := ValidateDocument(data)
+	_, report, err := ValidateDocument(data)
 	if isRefusal(err) {
-		if residue := refusalResidue(doc, report, err); len(residue) > 0 {
-			return fail("ValidateDocument's version refusal came with %s", strings.Join(residue, ", "))
-		}
-		if s.Expected.Outcome != "version-refusal" {
-			return fail("version-refusal; expected %s", s.Expected.Outcome)
-		}
-		// Every entry point that refuses refuses exclusively.
-		if parsed, perr := ParseDocument(data); !isRefusal(perr) || parsed != nil || errors.As(perr, new(*ValidationError)) {
-			return fail("ParseDocument does not refuse exclusively: document %v, error %v", parsed != nil, perr)
-		}
-		var model Document
-		if json.Unmarshal(data, &model) == nil {
-			if mreport, merr := model.Validate(); !isRefusal(merr) || !reflect.DeepEqual(mreport, ValidationReport{}) || errors.As(merr, new(*ValidationError)) {
-				return fail("Document.Validate does not refuse exclusively: report %+v, error %v", mreport, merr)
-			}
-		}
-		return pass("version-refusal")
-	}
-	if s.Expected.Outcome == "version-refusal" {
-		return fail("concluded %s; expected version-refusal", report.Conclusion)
+		return fail("version-refusal; expected %s", s.Expected.Outcome)
 	}
 	var violation *ValidationError
 	if err != nil && !errors.As(err, &violation) {
@@ -442,10 +419,10 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 	if s.Expected.NamesAppliedText {
 		if declared, ok := declaredVersion(data); ok && includedPrerelease(declared) {
 			// A conclusion on a document declaring an explicitly included
-			// prerelease names that prerelease (OBI-T-09). The corpus holds
+			// prerelease names that prerelease (OBI-T-08). The corpus holds
 			// no text for a draft, so there is no text to verify.
 			if named, err := parseSemverStrict(report.Release); err != nil || compareSemver(named, mustSemver(declared)) != 0 {
-				return fail("names %q; a conclusion on a document declaring the included prerelease %q names that prerelease", report.Release, declared)
+				return fail("names %q; a conclusion on a document declaring the prerelease %q names that prerelease", report.Release, declared)
 			}
 			return pass(string(report.Conclusion))
 		}
@@ -532,18 +509,9 @@ func judgeResolve(cs corpus.Case) corpus.Judgment {
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
 		return fail("unreadable scenario: %v", err)
 	}
-	doc, report, err := ValidateDocument(s.Given.Document)
+	doc, _, err := ValidateDocument(s.Given.Document)
 	if isRefusal(err) {
-		if residue := refusalResidue(doc, report, err); len(residue) > 0 {
-			return fail("the version refusal came with %s", strings.Join(residue, ", "))
-		}
-		if s.Expected.Outcome == "version-refusal" {
-			return pass("version-refusal")
-		}
 		return fail("version-refusal; expected %s", s.Expected.Outcome)
-	}
-	if s.Expected.Outcome == "version-refusal" {
-		return fail("interpreted; expected version-refusal")
 	}
 	if doc == nil {
 		return noDocument(s.Given.NonConformant, err)

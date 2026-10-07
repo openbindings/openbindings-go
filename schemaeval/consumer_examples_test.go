@@ -283,7 +283,7 @@ func Example_valueContractSnapshot() {
 }
 
 // `ob validate <obi> --examples` checks every example value against its
-// operation's contract (OBI-T-11: a mismatch is a false claim, never an
+// operation's contract (OBI-T-10: a mismatch is a false claim, never an
 // exception to the schema). An absent example member is not checked; a
 // present null is a value like any other.
 func Example_cliValidateExamples() {

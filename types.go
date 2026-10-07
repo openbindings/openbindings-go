@@ -93,7 +93,7 @@ func Value[T any](member *T) T {
 // OperationExample is a named, author-supplied sample of an operation's
 // caller-facing values (§5.1). Each is an author claim that the value
 // validates against the operation's corresponding schema; no document rule
-// checks it (OBI-T-10, OBI-T-11). Input and Output are the example values as
+// checks it (OBI-T-09, OBI-T-10). Input and Output are the example values as
 // JSON: nil when the member is absent, and the bytes `null` when the example
 // supplies the JSON value null, a value like any other. An empty, non-nil
 // json.RawMessage holds no value and encodes as absent.
@@ -127,7 +127,7 @@ type Operation struct {
 	Tags        []string `json:"tags,omitzero"`
 	// Aliases are additional names for this operation, equal in standing to its
 	// key. The key plus aliases form one flat, document-unique namespace; every
-	// name resolves to this operation (see ResolveOperation / OBI-T-07).
+	// name resolves to this operation (see ResolveOperation / OBI-T-06).
 	Aliases []string `json:"aliases,omitzero"`
 
 	Input  JSONSchema `json:"input,omitempty"`
@@ -198,7 +198,7 @@ type Binding struct {
 	// in context differing at most in ways the effects do not depend on, adds
 	// no intended operation-level effects after the first; false claims some
 	// valid repetition can; nil claims neither. No document rule checks it
-	// (OBI-T-10), and it alone never makes a retry safe.
+	// (OBI-T-09), and it alone never makes a retry safe.
 	Idempotent *bool `json:"idempotent,omitempty"`
 	// Preference is the author's signed integer preference among bindings of
 	// the same operation, nil when absent (no preference, not zero).
