@@ -193,7 +193,7 @@ func ExampleDocument_OperationBindings() {
 	}
 
 	// Resolve the name a caller gave, then find the bindings by the key it
-	// resolves to (OBI-T-07): an alias finds no binding itself.
+	// resolves to (OBI-T-06): an alias finds no binding itself.
 	key, _, found := doc.ResolveOperation("tasks.create")
 	fmt.Println(key, found)
 	for _, binding := range doc.OperationBindings(key) {

@@ -88,7 +88,7 @@ type Reference struct {
 //
 // The whole call fails, listing no reference, for a document declaring a
 // well-formed version outside the supported set (a *VersionRefusalError,
-// OBI-T-04); for one declaring no valid version (the *ValidationError
+// CheckVersion); for one declaring no valid version (the *ValidationError
 // naming its OBI-D-09 violation); for one beyond this SDK's own limits (an
 // error matching ErrInconclusive); and for one that fails to encode (an
 // error matching no category). Document.Validate states which documents are

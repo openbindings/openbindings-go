@@ -6,7 +6,7 @@ import (
 )
 
 // SchemaEvaluator compiles JSON Schema 2020-12 for validating values against
-// value contracts (OBI-T-08). An application supplies one; the SDK has none
+// value contracts (OBI-T-07). An application supplies one; the SDK has none
 // of its own. The openbindings-go/schemaeval module is the project's, and
 // openbindingstest checks any evaluator against this contract.
 //
@@ -74,7 +74,7 @@ import (
 //
 // What an evaluator must do has three sources, and only the first is the
 // specification's:
-//   - OBI-T-08 requires evaluation under JSON Schema 2020-12, numbers by
+//   - OBI-T-07 requires evaluation under JSON Schema 2020-12, numbers by
 //     their exact values and patterns as ECMA-262 regular expressions with
 //     the u flag, and no verdict that depends on a reference or capability
 //     the evaluator lacks (a pattern it cannot match as ECMA-262 does, a

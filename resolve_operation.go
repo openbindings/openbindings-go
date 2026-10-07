@@ -2,7 +2,7 @@ package openbindings
 
 import "slices"
 
-// ResolveOperation resolves a name to an operation, per OBI-T-07.
+// ResolveOperation resolves a name to an operation, per OBI-T-06.
 //
 // An operation's identifiers are its key plus its Aliases; together they form
 // one flat namespace in which key and alias matches are equally authoritative.
@@ -19,7 +19,7 @@ import "slices"
 //
 // It reads the model as it is and does not check the declared version: a
 // caller interpreting a document it has not validated or parsed refuses an
-// unsupported version itself (CheckVersion, OBI-T-04), as ParseDocument,
+// unsupported version itself (CheckVersion), as ParseDocument,
 // Validate, and ValueContractCompiler.Resolve do.
 func (d *Document) ResolveOperation(name string) (string, Operation, bool) {
 	if d == nil {
@@ -38,7 +38,7 @@ func (d *Document) ResolveOperation(name string) (string, Operation, bool) {
 }
 
 // OperationBindings returns the keys of an operation's bindings: the bindings
-// whose Operation is key, the operation's key (OBI-T-07), sorted. The order is
+// whose Operation is key, the operation's key (OBI-T-06), sorted. The order is
 // for presentation only; it is not the author's preference
 // (Binding.Preference), and choosing among the bindings is the caller's.
 //

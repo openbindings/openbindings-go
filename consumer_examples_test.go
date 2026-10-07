@@ -84,14 +84,14 @@ const tasksOBI = `{
 // ---------------------------------------------------------------- the CLI
 
 // cliValidate is `ob validate <obi>`: the conclusion, the specification text
-// applied (OBI-T-09), each finding located in the file, and the exit status
+// applied (OBI-T-08), each finding located in the file, and the exit status
 // the lab's table gives (0 conformant, 1 non-conformant, 3 refused, 4 no
 // verdict).
 func cliValidate(name string, data []byte) (exit int) {
 	_, report, err := openbindings.ValidateDocument(data)
 	var refusal *openbindings.VersionRefusalError
 	if errors.As(err, &refusal) {
-		// OBI-T-04: reported instead of a conclusion.
+		// This SDK's version policy: reported instead of a conclusion.
 		fmt.Printf("%s: refused, not judged: %s\n", name, refusal.Reason)
 		return 3
 	}
@@ -138,15 +138,15 @@ func Example_cliValidate() {
 	}
 	// Output:
 	// tasks.obi.json: conformant
-	//   checked against OpenBindings 0.2.0 (working draft, spec revision 8e68955): 13 of 13 rules decided
+	//   checked against OpenBindings 0.2.0 (working draft, spec revision 1d5f08c): 13 of 13 rules decided
 	// exit 0
 	// broken.obi.json: non-conformant
-	//   checked against OpenBindings 0.2.0 (working draft, spec revision 8e68955): 13 of 13 rules decided
+	//   checked against OpenBindings 0.2.0 (working draft, spec revision 1d5f08c): 13 of 13 rules decided
 	//   broken.obi.json:7:23: OBI-D-02: does not validate against the document schema: minLength: got 0, want 1
 	//   broken.obi.json:5:12: OBI-D-07: references unknown operation key "gone"
 	// exit 1
 	// surrogate.obi.json: conformance-undetermined
-	//   checked against OpenBindings 0.2.0 (working draft, spec revision 8e68955): 2 of 13 rules decided
+	//   checked against OpenBindings 0.2.0 (working draft, spec revision 1d5f08c): 2 of 13 rules decided
 	//   11 checks undecided, the first OBI-D-02 at "": a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry, so this rule was not checked
 	// exit 4
 	// next.obi.json: refused, not judged: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)
@@ -163,7 +163,7 @@ func cliRead(data []byte) (*openbindings.Document, int, string) {
 	case err == nil:
 		return doc, 0, "read"
 	case errors.As(err, &refusal):
-		return nil, 3, "refused (OBI-T-04): declares " + refusal.Version
+		return nil, 3, "refused: declares " + refusal.Version
 	case errors.As(err, &violation):
 		first := violation.Findings[0]
 		return nil, 1, fmt.Sprintf("non-conformant at %s: %s", first.Position, first.Rule)
@@ -192,14 +192,14 @@ func Example_cliRead() {
 	}
 	// Output:
 	// 0 read
-	// 3 refused (OBI-T-04): declares 0.2.0-rc.1
+	// 3 refused: declares 0.2.0-rc.1
 	// 1 non-conformant at 1:41: OBI-D-02
 	// 4 no verdict: openbindings: inconclusive: a string at "/x-note" holds an escape of a lone UTF-16 surrogate, which this SDK does not carry
 	// 4 no verdict: openbindings: inconclusive: the input is nested deeper than the decoder reads (10000 levels), so it is not decoded
 }
 
 // An editor holds a document decoded with json.Unmarshal, which refuses
-// nothing, so it makes OBI-T-04's decision itself before interpreting the
+// nothing, so it makes the version decision itself before interpreting the
 // document. CheckVersion returns the refusal ParseDocument would return, or
 // nil: a text declaring no version ("0.2" is not SemVer, nor is "") is never
 // refused, and OBI-D-09 reports it instead.
@@ -221,8 +221,8 @@ func Example_cliVersionDecision() {
 	// "0.2.0"         not refused
 	// "0.2.7"         not refused
 	// "0.2.0+build.5" not refused
-	// "0.3.0"         openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)
-	// "0.2.0-rc.1"    openbindings: document declares version "0.2.0-rc.1", a pre-release this implementation does not support (OBI-T-04)
+	// "0.3.0"         openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)
+	// "0.2.0-rc.1"    openbindings: document declares version "0.2.0-rc.1", a pre-release this implementation does not support
 	// "0.2"           not refused
 	// ""              not refused
 }
@@ -341,7 +341,7 @@ func Example_cliEdit() {
 	// Output:
 	// <nil> [openbindings name version schemas operations dependencies sources bindings]
 	// refused: the change would add OBI-D-10 at /operations/x/input/type
-	// refused: the edit declares a version this ob does not interpret: openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)
+	// refused: the edit declares a version this ob does not interpret: openbindings: document declares version "0.3.0", newer than the release line this implementation supports (0.2.x)
 	// refused: the edited document cannot be written: openbindings: encode document: json: error calling MarshalJSON for type openbindings.Document: member "x-owner": unexpected end of JSON input
 	// <nil> [openbindings name version schemas operations dependencies sources bindings x-owner]
 	// false true
@@ -349,7 +349,7 @@ func Example_cliEdit() {
 }
 
 // cliInvokeChoice is how `ob invoke <obi> <operation> [--binding B]...`
-// chooses a binding: resolve the name (OBI-T-07), find the operation's
+// chooses a binding: resolve the name (OBI-T-06), find the operation's
 // bindings by its key, read each binding's source kind, and take the first
 // named binding ob can invoke, or the sole one; otherwise refuse, listing
 // the candidates with preference and deprecation, which are shown and never
@@ -562,7 +562,7 @@ var deeplyNested = strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 3
 //   - the conclusion and the derived lists are recomputed from the evidence
 //     (ConcludeConformance), never edited;
 //   - the provenance stays: the tool applied the same specification text,
-//     so Version and Revision still name it (OBI-T-09). A tool applying other
+//     so Version and Revision still name it (OBI-T-08). A tool applying other
 //     text has no business amending this report.
 func amendRule(report openbindings.ValidationReport, rule string, status openbindings.RuleEvidenceStatus, findings ...openbindings.Finding) (openbindings.ValidationReport, error) {
 	if _, considered := report.Evidence[rule]; !considered {
@@ -612,7 +612,7 @@ func Example_producerAmendReport() {
 	bare := openbindings.ConcludeConformance(maps.Clone(report.Evidence))
 	fmt.Printf("bare: %s, release %q, %d findings\n", bare.Conclusion, bare.Release, len(bare.Findings))
 	// Evidence that leaves out a document rule leaves it inconclusive
-	// (OBI-T-09): no evidence concludes nothing.
+	// (OBI-T-08): no evidence concludes nothing.
 	partial := openbindings.ConcludeConformance(map[string]openbindings.RuleEvidenceStatus{"OBI-D-01": openbindings.EvidenceSatisfied})
 	fmt.Println("one rule satisfied:", partial.Conclusion, len(partial.Inconclusive), "inconclusive")
 
@@ -639,7 +639,7 @@ func Example_producerAmendReport() {
 	// conformance-undetermined [OBI-D-10] 1 findings
 	// bare: conformance-undetermined, release "", 0 findings
 	// one rule satisfied: conformance-undetermined 12 inconclusive
-	// <nil> conformant 0.2.0 8e68955 0 findings
+	// <nil> conformant 0.2.0 1d5f08c 0 findings
 	// <nil> non-conformant [OBI-D-07] [] OBI-D-07 /bindings/b/operation
 	// <nil> [OBI-D-07 OBI-D-10] 2 violations
 	// OBI-D-10 inconclusive decides nothing

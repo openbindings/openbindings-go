@@ -21,17 +21,6 @@ func TestDeclarationMajorMinorLines(t *testing.T) {
 		if _, skipped := Gate(Gates{RequiresSupports: version}, d); skipped == want {
 			t.Errorf("support gate for %q skipped %v, want %v", version, skipped, !want)
 		}
-		if _, skipped := Gate(Gates{RequiresUnsupported: version}, d); skipped != want {
-			t.Errorf("unsupported gate for %q skipped %v, want %v", version, skipped, want)
-		}
-	}
-	if got := d.Lowest(); got != "1.10.0" {
-		t.Errorf("Lowest() = %q, want 1.10.0", got)
-	}
-	for minimum, skip := range map[string]bool{"1.9.0": false, "1.10.0": false, "1.10.1": true, "1.11.0": true, "2.0.0": true} {
-		if _, got := Gate(Gates{RequiresMinSupported: minimum}, d); got != skip {
-			t.Errorf("minimum %q skipped %v, want %v", minimum, got, skip)
-		}
 	}
 }
 
@@ -48,20 +37,11 @@ func TestDeclarationAndGates(t *testing.T) {
 	if got := (Declaration{Lines: []string{"1"}}).Supports("1.7.3"); got {
 		t.Error("a major version alone does not declare a release line")
 	}
-	if got := d.Lowest(); got != "0.2.0" {
-		t.Errorf("Lowest = %s", got)
-	}
 	for g, skip := range map[Gates]bool{
-		{RequiresSupports: "0.2.5"}:                                   false,
-		{RequiresSupports: "1.0.0"}:                                   true,
-		{RequiresUnsupported: "0.2.0-rc.1"}:                           false,
-		{RequiresUnsupported: "0.2.1"}:                                true,
-		{RequiresMinSupported: "0.2.0"}:                               false,
-		{RequiresMinSupported: "0.3.0"}:                               true,
-		{RequiresMinSupported: "0.99999999999999999999.0"}:            true,
-		{RequiresSupports: "0.2.0", RequiresUnsupported: "999.0.0"}:   false,
-		{RequiresMinSupported: "0.2.0", RequiresUnsupported: "0.1.0"}: false,
-		{RequiresSupports: "0.2.0", RequiresMinSupported: "0.2.1"}:    true,
+		{RequiresSupports: "0.2.5"}:      false,
+		{RequiresSupports: "1.0.0"}:      true,
+		{RequiresSupports: "0.3.0-rc.1"}: false,
+		{RequiresSupports: "0.2.0-rc.1"}: true,
 	} {
 		if _, got := Gate(g, d); got != skip {
 			t.Errorf("Gate(%+v) skip = %v, want %v", g, got, skip)
@@ -73,31 +53,28 @@ func TestJudgeValues(t *testing.T) {
 	p := Profile{Features: map[string]bool{"exact-numbers": true, "draft-07-dialect": false}}
 	v, m, n := Observed{Verdict: "valid"}, Observed{Verdict: "instance-mismatch"}, Observed{Verdict: "no-verdict"}
 	cases := []struct {
-		expected           string
-		refused, exclusive bool
-		observed           []Observed
-		want               string
+		expected string
+		refused  bool
+		observed []Observed
+		want     string
 	}{
-		{`{"results":["valid","instance-mismatch"]}`, false, false, []Observed{v, m}, Pass},
-		{`{"results":["valid"]}`, false, false, []Observed{m}, Fail},
-		{`{"results":["valid"]}`, false, false, []Observed{n}, Shortfall},
-		{`{"results":["no-verdict"]}`, false, false, []Observed{v}, Fail},
-		{`{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, false, []Observed{n}, Pass},
-		{`{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, false, []Observed{m}, Fail},
-		{`{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{n}, Pass},
-		{`{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{v}, Fail},
-		{`{"results":[{"verdict":"valid","dependsOn":[]}],"dependsOn":["draft-07-dialect"]}`, false, false, []Observed{v}, Pass},
-		{`{"results":["valid"],"dependsOn":["undeclared"]}`, false, false, []Observed{v}, Fail},
-		{`{"results":["no-verdict"],"forbidReasons":["no-contract"]}`, false, false, []Observed{{Verdict: "no-verdict", Reason: "no-contract"}}, Fail},
-		{`{"results":["valid"]}`, false, false, []Observed{{Verdict: "no-verdict", Reason: "resource-limit"}}, Omitted},
-		{`{"outcome":"version-refusal"}`, true, true, nil, Pass},
-		{`{"outcome":"version-refusal"}`, true, false, nil, Fail},
-		{`{"results":["valid"]}`, true, true, nil, Fail},
-		{`{"outcome":"version-refusal"}`, false, false, []Observed{v}, Fail},
-		{`{"results":["valid","valid"]}`, false, false, []Observed{v}, Fail},
+		{`{"results":["valid","instance-mismatch"]}`, false, []Observed{v, m}, Pass},
+		{`{"results":["valid"]}`, false, []Observed{m}, Fail},
+		{`{"results":["valid"]}`, false, []Observed{n}, Shortfall},
+		{`{"results":["no-verdict"]}`, false, []Observed{v}, Fail},
+		{`{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, []Observed{n}, Pass},
+		{`{"results":[{"verdict":"valid","orNoVerdict":true}]}`, false, []Observed{m}, Fail},
+		{`{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, []Observed{n}, Pass},
+		{`{"results":["valid"],"dependsOn":["draft-07-dialect"]}`, false, []Observed{v}, Fail},
+		{`{"results":[{"verdict":"valid","dependsOn":[]}],"dependsOn":["draft-07-dialect"]}`, false, []Observed{v}, Pass},
+		{`{"results":["valid"],"dependsOn":["undeclared"]}`, false, []Observed{v}, Fail},
+		{`{"results":["no-verdict"],"forbidReasons":["no-contract"]}`, false, []Observed{{Verdict: "no-verdict", Reason: "no-contract"}}, Fail},
+		{`{"results":["valid"]}`, false, []Observed{{Verdict: "no-verdict", Reason: "resource-limit"}}, Omitted},
+		{`{"results":["valid"]}`, true, nil, Fail},
+		{`{"results":["valid","valid"]}`, false, []Observed{v}, Fail},
 	}
 	for i, c := range cases {
-		if got := JudgeValues(json.RawMessage(c.expected), c.refused, c.exclusive, c.observed, p); got.Category != c.want {
+		if got := JudgeValues(json.RawMessage(c.expected), c.refused, c.observed, p); got.Category != c.want {
 			t.Errorf("case %d (%s): %s (%s), want %s", i, c.expected, got.Category, got.Detail, c.want)
 		}
 	}
@@ -132,9 +109,9 @@ func TestLoad_ReadsFormatV2Alone(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(dir, "scenarios"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		scenarios := `{"format": "` + format + `", "rule": "OBI-T-09", "scenarios": [{"id": "T09-S-01", "action": "conclude-conformance", "given": {"evidence": {}}, "expected": {"conclusion": "conformance-undetermined"}}]}`
-		manifest := `{"files": [], "scenarioFiles": [{"path": "scenarios/OBI-T-09.json", "scenarios": 1}]}`
-		for name, content := range map[string]string{"scenarios/OBI-T-09.json": scenarios, "manifest.json": manifest} {
+		scenarios := `{"format": "` + format + `", "rule": "OBI-T-08", "scenarios": [{"id": "T08-S-01", "action": "conclude-conformance", "given": {"evidence": {}}, "expected": {"conclusion": "conformance-undetermined"}}]}`
+		manifest := `{"files": [], "scenarioFiles": [{"path": "scenarios/OBI-T-08.json", "scenarios": 1}]}`
+		for name, content := range map[string]string{"scenarios/OBI-T-08.json": scenarios, "manifest.json": manifest} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 				t.Fatal(err)
 			}

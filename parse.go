@@ -6,9 +6,9 @@ import (
 )
 
 // ParseDocument decodes a document for use: it checks the exact input bytes
-// (OBI-D-01), refuses an unsupported version (OBI-T-04), checks the embedded
-// document schema (OBI-D-02), and decodes the model. It is not a conformance
-// check; ValidateDocument reports every document rule.
+// (OBI-D-01), refuses a version this SDK does not apply (CheckVersion),
+// checks the embedded document schema (OBI-D-02), and decodes the model. It
+// is not a conformance check; ValidateDocument reports every document rule.
 //
 // The version decision comes first because the embedded schema is this
 // version's: a document declaring an unsupported version is refused, not

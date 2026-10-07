@@ -2,7 +2,7 @@
 // document model ([Document]), which carries a document exactly, the
 // document rules and their conformance report, operation resolution and
 // binding lookup, the document's schema references, validation of values
-// against value contracts (OBI-T-08), and the Core-defined constants
+// against value contracts (OBI-T-07), and the Core-defined constants
 // (versions and media type).
 //
 // The package covers what the core OpenBindings specification defines, and
@@ -20,11 +20,11 @@
 //	}
 //
 // (json.Unmarshal into a Document also decodes a document exactly;
-// ParseDocument additionally refuses an unsupported version (OBI-T-04) and
-// applies the document schema (OBI-D-02).) A Document models the document's
-// meaning, not the text it was read from: re-encoding it keeps every member,
-// but not the text's member order or whitespace, nor every escape and number
-// spelling (see Document).
+// ParseDocument additionally refuses a version this SDK does not apply
+// (CheckVersion) and applies the document schema (OBI-D-02).) A Document
+// models the document's meaning, not the text it was read from: re-encoding
+// it keeps every member, but not the text's member order or whitespace, nor
+// every escape and number spelling (see Document).
 //
 // The document rules judge the JSON a document is: ValidateDocument judges
 // the bytes, and Validate the encoding of a host object, which is what a claim
@@ -49,7 +49,8 @@
 // every release of the 0.2 line, is interpreted. [ParseDocument],
 // [ValidateDocument], [Document.Validate], [Document.References], and
 // [ValueContractCompiler.Resolve] refuse one declaring another well-formed
-// version (OBI-T-04). [Document.ResolveOperation] and
+// version, as this SDK's policy: the specification leaves that to each tool
+// (§10.3). [Document.ResolveOperation] and
 // [Document.OperationBindings] read the model as it is and refuse nothing,
 // so a caller holding a document it decoded itself makes the decision with
 // [CheckVersion]. A document written with this SDK declares
@@ -58,7 +59,7 @@
 // # Operations, Bindings, and References
 //
 // A name resolves to an operation by its key or an alias, and the
-// operation's bindings are found by its key (OBI-T-07):
+// operation's bindings are found by its key (OBI-T-06):
 //
 //	key, operation, found := doc.ResolveOperation("tasks.create")
 //	bindings := doc.OperationBindings(key) // binding keys, sorted
@@ -74,7 +75,7 @@
 // # Value Contracts
 //
 // An operation's input and output contracts (§3) govern each caller-facing
-// value. Validating a value against one (OBI-T-08) takes a [SchemaEvaluator]
+// value. Validating a value against one (OBI-T-07) takes a [SchemaEvaluator]
 // the application supplies; the SDK has none of its own, and the
 // openbindings-go/schemaeval module is the project's:
 //
@@ -97,7 +98,7 @@
 // contracts it serves at startup, and one compiling on demand.
 //
 // Where this SDK gives no verdict that a tool with more capability could
-// give, OBI-T-08 permits it, and these are its declared capability limits.
+// give, OBI-T-07 permits it, and these are its declared capability limits.
 // Each is a no-verdict, never a wrong verdict:
 //   - A value contract is decided as a whole: what core or the evaluator
 //     refuses withholds a verdict from every value, even one whose

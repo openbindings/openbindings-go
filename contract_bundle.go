@@ -115,7 +115,7 @@ func checkUnit(unit unitKey) []unitProblem {
 			case errors.Is(err, schemacompiler.ErrPatternNesting):
 				out = append(out, problem(missingCapability, location, location, fmt.Sprintf("its pattern %q meets %v", pattern, err), true))
 			case err != nil:
-				out = append(out, problem(undefinedResult, location, location, fmt.Sprintf("its pattern %q is not an ECMA-262 regular expression with the u flag (OBI-T-08): %v", pattern, err), false))
+				out = append(out, problem(undefinedResult, location, location, fmt.Sprintf("its pattern %q is not an ECMA-262 regular expression with the u flag (OBI-T-07): %v", pattern, err), false))
 			}
 		}
 	}

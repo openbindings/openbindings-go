@@ -139,7 +139,9 @@ func TestDISC_C03InconclusiveIsNotAbsence(t *testing.T) {
 	})
 }
 
-func TestDISC_C04VersionRefusal(t *testing.T) {
+// A refusal is not absence: the client reports core's version refusal for a
+// document declaring a version core does not apply, never ErrNotFound.
+func TestVersionRefusalIsNotAbsence(t *testing.T) {
 	for _, version := range []string{"0.1.0", "0.3.0", "1.0.0", "0.2.0-rc.1"} {
 		t.Run(version, func(t *testing.T) {
 			// An unusual media type and unfamiliar members must not obscure a
@@ -262,8 +264,8 @@ func TestCompanionAuthority(t *testing.T) {
 	// CI checks out this revision for core's existing corpus gate. These
 	// companion cases run independently; this check binds them to the named
 	// companion text instead of silently following an edited draft.
-	const revision = "8e68955ea124915ee83fdc21be5f2358b9b4d62e"
-	const digest = "9f91b2c2bb56ed9d5cbc77b3f1b3d7ff53fd74e5c55ab57a3bb17fbf3c43a71b"
+	const revision = "1d5f08c2c2f2bf9822536ac5e6083edfd0831944"
+	const digest = "d64febfabe79b5c27f567158c9945f1029c9c3a44812639fa942c9d53d56e92e"
 	corpus := os.Getenv("OB_SPEC_CORPUS")
 	if corpus == "" {
 		if os.Getenv("OB_CORPUS_REQUIRED") == "1" {

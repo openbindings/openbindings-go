@@ -548,7 +548,7 @@ func TestCompile_NoValueContract(t *testing.T) {
 	}
 }
 
-// A name two operations carry resolves to neither (OBI-T-07).
+// A name two operations carry resolves to neither (OBI-T-06).
 func TestCompile_AmbiguousName(t *testing.T) {
 	contracts := contractsFor(t, mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"aliases":["x"]},"b":{"aliases":["x"]}}}`))
 	if _, err := contracts.CompileInput(context.Background(), "x"); !errors.Is(err, ErrOperationNotFound) {
@@ -621,10 +621,6 @@ func TestBundle_NamespaceAvoidsTheDocument(t *testing.T) {
 	}
 }
 
-// Resolve interprets only a document whose declared version it supports: it
-// refuses an unsupported version (OBI-T-04), and does not interpret a
-// document declaring no valid version (OBI-D-09), which is inconclusive, not
-// a refusal.
 // isVersionViolation reports whether err is the *ValidationError naming the
 // OBI-D-09 violation Document.Validate establishes for doc, and nothing else:
 // no other finding, no refusal, and not ErrInconclusive.
@@ -644,6 +640,9 @@ func isVersionViolation(err error, doc *Document) bool {
 	return false
 }
 
+// Resolve interprets only a document whose declared version it supports: it
+// refuses one outside SupportedVersions (CheckVersion), and for a document
+// declaring no valid version returns its OBI-D-09 violation, not a refusal.
 func TestResolve_DeclaredVersion(t *testing.T) {
 	compiler, err := NewValueContractCompiler(testEvaluator{})
 	if err != nil {

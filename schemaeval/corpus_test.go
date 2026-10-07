@@ -18,7 +18,7 @@ import (
 // This file is the schemaeval module's corpus adapter. It executes the
 // corpus's value actions, validate-operation-values and check-examples, with
 // the core's value contracts under this module's evaluator, which reads patterns as ECMA-262 regular
-// expressions with Unicode semantics (OBI-T-08). The core module's adapter
+// expressions with Unicode semantics (OBI-T-07). The core module's adapter
 // executes every other action; core's tests cannot import this module.
 
 // valueProfile is the capability profile the core with this evaluator
@@ -36,7 +36,7 @@ var valueProfile = corpus.Profile{Features: map[string]bool{
 	"exact-numbers":                    true,
 }}
 
-// caseBound bounds one case: OBI-T-06 leaves termination strategy to the
+// caseBound bounds one case: OBI-T-05 leaves termination strategy to the
 // tool, and the corpus's recursive cases are finite.
 const caseBound = 10 * time.Second
 
@@ -67,7 +67,7 @@ func TestConformanceCorpusValues(t *testing.T) {
 			case corpus.Fail:
 				t.Error(j.Detail)
 			case corpus.Shortfall:
-				// OBI-T-08 permits declining, but valueProfile is this
+				// OBI-T-07 permits declining, but valueProfile is this
 				// executor's own declaration: no verdict where it declares
 				// every feature the case depends on supported is its defect.
 				t.Errorf("SHORTFALL against this executor's declared profile: %s", j.Detail)
@@ -185,8 +185,7 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 		// silent omission.
 		return fail("the model does not carry this non-conformant document: %v", err)
 	case errors.As(err, new(*openbindings.VersionRefusalError)):
-		exclusive := contracts == nil && !errors.As(err, new(*openbindings.ValidationError))
-		return corpus.JudgeValues(s.Expected, true, exclusive, nil, valueProfile)
+		return corpus.JudgeValues(s.Expected, true, nil, valueProfile)
 	case err != nil:
 		return fail("Resolve: %v", err)
 	}
@@ -208,7 +207,7 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 		}
 		observed = append(observed, o)
 	}
-	return corpus.JudgeValues(s.Expected, false, false, observed, valueProfile)
+	return corpus.JudgeValues(s.Expected, false, observed, valueProfile)
 }
 
 // judgeExamples checks an operation's examples by composing value

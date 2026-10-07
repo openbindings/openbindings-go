@@ -61,7 +61,7 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 }
 
 // A name that several operations carry, in a document that violates
-// OBI-D-04, resolves to none of them: no match is privileged (OBI-T-07).
+// OBI-D-04, resolves to none of them: no match is privileged (OBI-T-06).
 func TestResolveOperation_AmbiguousNamesDoNotResolve(t *testing.T) {
 	iface := &Document{Operations: map[string]Operation{
 		"a": {Aliases: []string{"shared"}},
@@ -87,7 +87,7 @@ func TestResolveOperation_NilDocument(t *testing.T) {
 }
 
 // OperationBindings finds an operation's bindings by its key alone
-// (OBI-T-07), sorted for presentation.
+// (OBI-T-06), sorted for presentation.
 func TestOperationBindings(t *testing.T) {
 	doc := &Document{
 		Operations: map[string]Operation{

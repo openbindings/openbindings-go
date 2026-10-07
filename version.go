@@ -20,7 +20,7 @@ const SupportedVersions = "0.2.x"
 const AuthoringVersion = "0.2.0"
 
 // appliedRelease is the release of the specification whose text this SDK
-// applies, which a validation report names (OBI-T-09): 0.2.0, as its working
+// applies, which a validation report names (OBI-T-08): 0.2.0, as its working
 // draft until that version is released. A document declaring any release of
 // the 0.2 line is judged under it, since the patch number a document declares
 // carries no meaning (§8.1).
@@ -28,10 +28,10 @@ const appliedRelease = "0.2.0"
 
 // appliedRevision is the source-control revision of the specification text
 // this SDK applies while appliedRelease names a working draft, which a
-// validation report names with it (OBI-T-09): a commit of
+// validation report names with it (OBI-T-08): a commit of
 // github.com/openbindings/spec. It is "" once appliedRelease is released,
 // when the release alone names the text.
-const appliedRevision = "8e68955ea124915ee83fdc21be5f2358b9b4d62e"
+const appliedRevision = "1d5f08c2c2f2bf9822536ac5e6083edfd0831944"
 
 // supportedPrereleases lists the prerelease versions this SDK supports, each
 // named explicitly: a prerelease is a draft, and supporting its release does
@@ -70,20 +70,21 @@ func parseReleaseLine(declaration string) (semver, bool) {
 	return semver{major: parsed.major, minor: parsed.minor}, true
 }
 
-// CheckVersion applies OBI-T-04's version decision to a declared version v,
-// the one ParseDocument, ValidateDocument, Document.Validate,
+// CheckVersion applies this SDK's version policy to a declared version v, the
+// decision ParseDocument, ValidateDocument, Document.Validate,
 // Document.References, and ValueContractCompiler.Resolve make before
 // interpreting a document: it returns the *VersionRefusalError they return
-// when v is a well-formed version outside SupportedVersions, and nil
-// otherwise. A release of the supported line is supported whatever its patch
-// version, a prerelease only when it is named explicitly, and build metadata
-// is ignored (§8.1).
+// when v is a well-formed version outside SupportedVersions, whose text this
+// SDK does not apply, and nil otherwise. A release of the supported line is
+// supported whatever its patch version, a prerelease only when it is named
+// explicitly, and build metadata is ignored (§8.1).
 //
 // A nil error means only that there is no version refusal. It does not mean
 // that v is a valid version: a v that is not SemVer 2.0.0 ("0.2", or "" for
-// a document that declares none) declares no version, and OBI-T-04 forbids
-// refusing a text that declares no version. Such a document is OBI-D-09's
-// violation, which validation reports with the other rules.
+// a document that declares none) declares no version (§8.1), so this SDK
+// judges the document under the 0.2 line, where it violates OBI-D-09, which
+// validation reports with the other rules. Refusing a version is this SDK's
+// policy; the specification leaves it to each tool (§10.3).
 func CheckVersion(v string) error {
 	if refusal := versionRefusalOf(v); refusal != nil {
 		return refusal
@@ -91,11 +92,11 @@ func CheckVersion(v string) error {
 	return nil
 }
 
-// versionRefusal is the single OBI-T-04 decision that CheckVersion and every
+// versionRefusal is the single decision that CheckVersion and every
 // refusing entry point share. When this SDK refuses a document
 // declaring version v it returns (msg, true, nil), where msg is the
-// diagnostic core to which callers add the "openbindings:" prefix and
-// "(OBI-T-04)" suffix; when it supports v it returns ("", false, nil). An
+// diagnostic core to which callers add the "openbindings:" prefix; when it
+// supports v it returns ("", false, nil). An
 // unparseable v yields a non-nil error.
 func versionRefusal(v string) (msg string, refused bool, err error) {
 	parsed, err := parseSemverStrict(v)

@@ -5,7 +5,7 @@
 Implements the 0.2 line of the OpenBindings core specification, applying the
 0.2.0 working draft at the spec revision `appliedRevision` in `version.go`
 names. Validation reports name that text in `ValidationReport.Release` and
-`ValidationReport.Revision` (OBI-T-09). The root module is rebuilt as the
+`ValidationReport.Revision` (OBI-T-08). The root module is rebuilt as the
 core alone, so code written against 0.1.0 needs the changes listed under
 Changed and Removed.
 
@@ -17,7 +17,7 @@ Changed and Removed.
   project's JSON Schema evaluator for value validation, and the optional
   `httpdiscovery`, the HTTP Discovery companion.
 - **Document validation.** `ParseDocument(data)` checks the input bytes
-  (OBI-D-01), refuses an unsupported version (OBI-T-04), applies the document
+  (OBI-D-01), refuses a version outside `SupportedVersions`, applies the document
   schema (OBI-D-02), and decodes. `ValidateDocument(data)` and
   `Document.Validate()` decide every document rule, OBI-D-01 through OBI-D-13
   (`DocumentRules()`), and return a `ValidationReport`: per-rule `Evidence`,
@@ -27,7 +27,7 @@ Changed and Removed.
   `ConcludeConformance(evidence)` concludes from evidence a caller supplies.
 - **Version support.** `SupportedVersions` (`"0.2.x"`) states the versions
   the SDK supports, and `AuthoringVersion` (`"0.2.0"`) the version a document
-  written with it declares. `CheckVersion(v)` makes the OBI-T-04 decision and
+  written with it declares. `CheckVersion(v)` makes the SDK's version decision and
   returns a `*VersionRefusalError` for a well-formed version outside the
   supported set, the refusal that `ParseDocument`, `ValidateDocument`,
   `Document.Validate`, `Document.References`, and
@@ -39,7 +39,7 @@ Changed and Removed.
   `ValueContractCompiler.Resolve` return its OBI-D-09 violation as a
   `*ValidationError`.
 - **Operation resolution and binding lookup.** `Document.ResolveOperation(name)`
-  resolves an operation's key or alias (OBI-T-07), and
+  resolves an operation's key or alias (OBI-T-06), and
   `Document.OperationBindings(key)` returns the keys of its bindings, sorted.
 - **Schema references.** `Document.References()` lists every `$ref` and
   `$dynamicRef` in the schemas a document contains, each a `Reference` with
@@ -48,7 +48,7 @@ Changed and Removed.
   (`Dependency`, §5.5). `Dependency.Kinds` is an optional any-of kind
   constraint, which `Dependency.AcceptsKind(kind)` applies by exact string
   comparison (OBI-T-01).
-- **Value contracts (OBI-T-08).**
+- **Value contracts (OBI-T-07).**
   `NewValueContractCompiler(evaluator, resources...)` takes a
   `SchemaEvaluator` the application supplies, and its
   `Resolve(ctx, doc)` resolves a document's schemas into `ValueContracts`,
@@ -131,7 +131,7 @@ Changed and Removed.
 - **`ValidationError`** carries `Findings []Finding` in place of
   `Problems []string`.
 - **`ErrOperationNotFound`** marks a name that resolves to no one operation
-  (OBI-T-07). `ValueContracts.CompileInput` and `CompileOutput` return
+  (OBI-T-06). `ValueContracts.CompileInput` and `CompileOutput` return
   errors matching it.
 - **Go version and dependencies.** The root module requires Go 1.25.12, not
   Go 1.22, and depends on `github.com/santhosh-tekuri/jsonschema/v6` and

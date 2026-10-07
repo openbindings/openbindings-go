@@ -46,8 +46,8 @@ func TestParseDocumentRejectsDuplicateObjectKeys(t *testing.T) {
 	}
 }
 
-func TestDocumentValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
-	// OBI-T-04: a higher major is outside the declared supported line.
+func TestDocumentValidate_RefusesHigherMajorVersion(t *testing.T) {
+	// This SDK's policy: a higher major is outside SupportedVersions.
 	i := Document{
 		OpenBindings: "1.0.0",
 		Operations:   map[string]Operation{},
@@ -57,13 +57,13 @@ func TestDocumentValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 		t.Fatalf("expected error for higher-major version")
 	}
 	var refusal *VersionRefusalError
-	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "1.0.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)` {
-		t.Fatalf("expected an OBI-T-04 version refusal, got %v", err)
+	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "1.0.0", newer than the release line this implementation supports (0.2.x)` {
+		t.Fatalf("expected a version refusal, got %v", err)
 	}
 }
 
-func TestDocumentValidate_RefusesHigherMinor_OBI_T_04(t *testing.T) {
-	// OBI-T-04: a higher minor is also a different specification line.
+func TestDocumentValidate_RefusesHigherMinor(t *testing.T) {
+	// A higher minor is also a different specification line.
 	i := Document{
 		OpenBindings: "0.99.0",
 		Operations:   map[string]Operation{},
@@ -73,8 +73,8 @@ func TestDocumentValidate_RefusesHigherMinor_OBI_T_04(t *testing.T) {
 		t.Fatalf("expected error for higher-minor version")
 	}
 	var refusal *VersionRefusalError
-	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "0.99.0", newer than the release line this implementation supports (0.2.x) (OBI-T-04)` {
-		t.Fatalf("expected an OBI-T-04 version refusal, got %v", err)
+	if !errors.As(err, &refusal) || err.Error() != `openbindings: document declares version "0.99.0", newer than the release line this implementation supports (0.2.x)` {
+		t.Fatalf("expected a version refusal, got %v", err)
 	}
 }
 
@@ -491,7 +491,7 @@ func newDocumentWithExamples(inputSchema, outputSchema JSONSchema, examples map[
 
 // Examples are author claims (§5.1): an example that does not validate
 // against its operation's schema is a false claim, which no document rule
-// checks (OBI-T-10, OBI-T-11).
+// checks (OBI-T-09, OBI-T-10).
 func TestDocumentValidate_ExamplesAreAuthorClaims(t *testing.T) {
 	i := newDocumentWithExamples(
 		map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
@@ -512,7 +512,7 @@ func TestDocumentValidate_ExamplesAreAuthorClaims(t *testing.T) {
 }
 
 // Value validation reads same-document references from the OBI document
-// root (OBI-T-08, §7.2), however the operation reaches its schemas.
+// root (OBI-T-07, §7.2), however the operation reaches its schemas.
 func TestInputContract_ResolvesFromTheDocumentRoot(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.2.0",
@@ -583,7 +583,7 @@ func TestParseDocument_RejectsInvalidUTF8_OBI_D_01(t *testing.T) {
 }
 
 // A null value is a value like any other (§5.1), and a graph reaching a
-// resource the document does not embed reaches no verdict (OBI-T-08).
+// resource the document does not embed reaches no verdict (OBI-T-07).
 func TestInputContract_NullAndExternalReferences(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.2.0",
@@ -606,7 +606,7 @@ func TestInputContract_NullAndExternalReferences(t *testing.T) {
 	}
 }
 
-// OBI-T-04's refusal runs downward too: support for one major.minor line
+// This SDK's refusal runs downward too: support for one major.minor line
 // does not imply support for an earlier line.
 func TestDocumentValidate_RefusesEarlierLine(t *testing.T) {
 	iface := Document{
@@ -618,8 +618,8 @@ func TestDocumentValidate_RefusesEarlierLine(t *testing.T) {
 		t.Fatal("a document below the supported release line must refuse")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "older than the release line this implementation supports (0.2.x)") || !strings.Contains(msg, "OBI-T-04") {
-		t.Errorf("refusal must cite the floor and the rule, got: %s", msg)
+	if !strings.Contains(msg, "older than the release line this implementation supports (0.2.x)") {
+		t.Errorf("refusal must cite the floor, got: %s", msg)
 	}
 }
 
