@@ -29,8 +29,8 @@ through its revision today, so before `appliedRevision` is set to `""`:
    published snapshot (the spec's `versions/X.Y.Z/` and its tag), with that
    snapshot's hash pinned beside it. Without one, a release named alone is
    reported unverified, which `OB_CORPUS_REQUIRED` (set in CI) turns into a
-   failure of the scenarios that check the text a conclusion names:
-   T08-S-06, T08-S-07, T08-S-08, and T08-S-10.
+   failure of `TestAppliedText_IsVerified` and of the scenarios that check
+   the text a conclusion names: T08-S-06, T08-S-07, T08-S-08, and T08-S-10.
 2. Give the spec repository's reference-runner job the same path for its
    declared-text check. Its `./declared` prints only `-applied RELEASE` for
    a release named alone, so the job, which requires `-applied` and

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/openbindings/openbindings-go/internal/corpus"
 )
 
 // The declaration and the version this SDK writes agree: documents built
@@ -345,5 +347,32 @@ func TestVersionNumbersAreUnbounded(t *testing.T) {
 	b, _ := parseSemverStrict("1.0.0-" + huge + "0")
 	if compareSemver(a, b) >= 0 {
 		t.Fatal("numeric pre-release identifiers compare numerically at any size")
+	}
+}
+
+// The SDK checks its own record of the specification text it applies, apart
+// from any corpus case: appliedRelease and appliedRevision name the text a
+// report names, appliedTextSHA256 pins that revision's openbindings.md, and
+// the embedded document schema must be that revision's (verifyAppliedText).
+// The history checked is that of the specification repository holding the
+// corpus. As the corpus tests do, it fails under OB_CORPUS_REQUIRED (set in
+// CI) and skips otherwise when there is no corpus, or the record cannot be
+// verified against it.
+func TestAppliedText_IsVerified(t *testing.T) {
+	dir := findConformanceCorpus()
+	if dir == "" {
+		if corpus.Required() {
+			t.Fatal("spec conformance corpus not found (OB_CORPUS_REQUIRED is set; set OB_SPEC_CORPUS to the spec repo's conformance dir)")
+		}
+		t.Skip("spec conformance corpus not found")
+	}
+	verified, why := appliedTextVerified(dir)
+	switch {
+	case verified:
+		t.Logf("the applied text %s at %s is verified against %s", appliedRelease, appliedRevision, dir)
+	case corpus.Required():
+		t.Fatalf("the applied text is not verified (OB_CORPUS_REQUIRED is set): %s", why)
+	default:
+		t.Skipf("the applied text is not verified: %s", why)
 	}
 }
