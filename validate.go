@@ -315,7 +315,9 @@ func checkDeclaredVersion(c *ruleChecks, view any) {
 // inputVersionRefusal applies this SDK's version policy to the version input
 // declares (§8.1), read from its bytes (see declaredVersion), for input
 // OBI-01 refuses or the decoder cannot read: the version decision precedes
-// interpreting a document under this version's rules, OBI-01 included.
+// interpreting a document under this version's rules, OBI-01 included. Input
+// that declares no version, such as input holding an ill-formed byte, is
+// governed by this line's rules (§10), so it is never refused.
 func inputVersionRefusal(data []byte) *VersionRefusalError {
 	version, declared := declaredVersion(data)
 	if !declared {
@@ -325,7 +327,9 @@ func inputVersionRefusal(data []byte) *VersionRefusalError {
 }
 
 // declaredVersionRefusal applies this SDK's version policy to the version a
-// document's generic view declares. The decision precedes interpretation
+// document's generic view declares. The view is of a text that meets OBI-01,
+// so its root object's openbindings member, when a SemVer string, is the
+// version the text declares (§8.1). The decision precedes interpretation
 // under this version's semantics, the embedded document schema included. A
 // missing or malformed version is OBI-03's concern, decided with the other
 // rules, so it is not a refusal.

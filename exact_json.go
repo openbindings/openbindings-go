@@ -95,28 +95,35 @@ func verifyExactJSON(b []byte) error {
 	return nil
 }
 
-// declaredVersion reads the version a document declares from its bytes,
-// before any other rule is decided (§8.1, Version declaration): the value of
-// the root object's openbindings member, when the input has no byte-order
-// mark and is one JSON value whose root object has exactly one such member,
-// holding a string. The input is read as §8.1 decodes it: a byte outside a
-// well-formed UTF-8 sequence is a syntax error between tokens and within an
-// escape, and changes only the string that holds it, so one in another
-// member's string leaves the decision unchanged and one in the version or in
-// the member's name leaves the input declaring no version. It reads input of
-// any depth, and input that repeats a member name elsewhere or holds a lone
-// surrogate; OBI-01 judges those, under a supported version.
+// declaredVersion returns the version a text declares, which this SDK reads
+// before any rule is decided (§8.1, Version declaration): a text declares a
+// version exactly when it is UTF-8 with no leading byte-order mark and parses
+// under the JSON grammar as an object with exactly one openbindings member
+// whose value is a string that is a SemVer version; that value is the
+// version. Repeated names elsewhere do not stop a declaration, nor does a
+// string escaping a lone UTF-16 surrogate, which the grammar admits: under a
+// supported version, OBI-01 judges the first, and the second is beyond what
+// this SDK carries. Any other text declares no version, an ill-formed byte
+// anywhere in it included. The text is read at any depth.
 func declaredVersion(data []byte) (string, bool) {
-	raw, declared := versionMember(data)
-	if !declared || raw[0] != '"' {
+	if !utf8.Valid(data) || bytes.HasPrefix(data, byteOrderMark) {
+		return "", false
+	}
+	raw, found := versionMember(data)
+	if !found || raw[0] != '"' {
 		return "", false
 	}
 	version, _ := exactString(raw)
+	if !isValidSemver(version) {
+		return "", false
+	}
 	return version, true
 }
 
 // versionMember returns the raw value of the root object's openbindings
-// member, read as declaredVersion reads it, whatever its type.
+// member, whatever its type, when data parses under the JSON grammar as an
+// object with exactly one such member, member names compared after
+// unescaping (§5). It does not check that data is UTF-8.
 func versionMember(data []byte) ([]byte, bool) {
 	scan := exactScan{b: data, readVersion: true}
 	if scan.run() != nil || len(scan.versions) != 1 {

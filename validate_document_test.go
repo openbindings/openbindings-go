@@ -984,9 +984,9 @@ func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 	}
 }
 
-// The version is read from exactly one JSON value, with no byte-order mark,
-// whose root object has one openbindings member holding a string, at any
-// depth (§8.1, Version declaration).
+// A text declares a version exactly when it is UTF-8 with no byte-order
+// mark and parses as one JSON value whose root object has one openbindings
+// member holding a SemVer string, at any depth (§8.1, Version declaration).
 func FuzzDeclaredVersion(f *testing.F) {
 	for _, seed := range []string{`{"openbindings":"0.9.0"}`, `{"openbindings":"0.9.0","openbindings":"0.9.0"}`, `{"a":[{"openbindings":"0.9.0"}],"openbindings":"1.0.0"}`,
 		`{"openbindings":"0.9.0"} {}`, `{"openbindings":"0.9.0",}`, `{"\u006fpenbindings":"0.9.0"}`, `[{"openbindings":"0.9.0"}]`, `{"openbindings":{"a":1}}`, `{"openbindings":"0.9.0"`} {
@@ -998,7 +998,10 @@ func FuzzDeclaredVersion(f *testing.F) {
 		}
 		got, gotDeclared := declaredVersion(data)
 		want, wantDeclared := "", false
-		if json.Valid(data) { // splitObject reads valid JSON only; a byte-order mark is not JSON
+		// json.Valid admits ill-formed UTF-8 inside a string, so the UTF-8
+		// check is the reference's own; splitObject reads valid JSON only,
+		// and a byte-order mark is not JSON.
+		if utf8.Valid(data) && json.Valid(data) {
 			if entries, err := splitObject(data); err == nil {
 				var declared []json.RawMessage
 				for _, entry := range entries {
@@ -1007,8 +1010,9 @@ func FuzzDeclaredVersion(f *testing.F) {
 					}
 				}
 				if len(declared) == 1 && declared[0][0] == '"' {
-					want, _ = exactString(declared[0])
-					wantDeclared = true
+					if version, _ := exactString(declared[0]); isValidSemver(version) {
+						want, wantDeclared = version, true
+					}
 				}
 			}
 		}

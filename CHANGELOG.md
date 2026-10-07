@@ -34,6 +34,11 @@ Changed and Removed.
   supported set, the refusal that `ParseDocument`, `ValidateDocument`,
   `Document.Validate`, `Document.References`, and
   `ValueContractCompiler.Resolve` return instead of interpreting a document.
+  A text declares a version exactly when it is UTF-8 with no byte-order mark
+  and parses as a JSON object with exactly one `openbindings` member holding
+  a SemVer string (§8.1); any other text, one holding an ill-formed byte
+  anywhere included, declares none and is judged under 0.2's rules, never
+  refused.
 - **`ErrInconclusive`** marks a call that decided nothing because the input
   is beyond the SDK's own limits, such as nesting deeper than it reads. It is
   neither a conformance conclusion nor a value verdict. A document declaring

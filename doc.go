@@ -46,15 +46,19 @@
 // conclusion: a document ParseDocument reads no further may conform or not.
 //
 // Every OBI declares its target spec version via the top-level openbindings
-// field. A document declaring a version [SupportedVersions] states, which is
-// every release of the 0.2 line, is interpreted. [ParseDocument],
-// [ValidateDocument], [Document.Validate], [Document.References], and
-// [ValueContractCompiler.Resolve] refuse one declaring another well-formed
-// version, as this SDK's policy (Reports and Verdicts): such a document is
-// governed by its own line's text (§10), which this SDK does not apply.
-// [Document.ResolveOperation] and
-// [Document.OperationBindings] read the model as it is and refuse nothing,
-// so a caller holding a document it decoded itself makes the decision with
+// field. A text declares a version exactly when it is UTF-8 with no byte-order
+// mark and parses as a JSON object with exactly one openbindings member
+// holding a SemVer string (§8.1); any other text, one holding an ill-formed
+// byte anywhere included, declares none and is judged under the 0.2 line's
+// rules (§10), never refused. A document declaring a version
+// [SupportedVersions] states, which is every release of the 0.2 line, is
+// interpreted. [ParseDocument], [ValidateDocument], [Document.Validate],
+// [Document.References], and [ValueContractCompiler.Resolve] refuse one
+// declaring another well-formed version, as this SDK's policy (Reports and
+// Verdicts): such a document is governed by its own line's text (§10), which
+// this SDK does not apply. [Document.ResolveOperation] and
+// [Document.OperationBindings] read the model as it is and refuse nothing, so
+// a caller holding a document it decoded itself makes the decision with
 // [CheckVersion]. A document written with this SDK declares
 // [AuthoringVersion].
 //

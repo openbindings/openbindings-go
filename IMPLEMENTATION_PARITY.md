@@ -40,6 +40,13 @@ each of these:
   identifier order. The tool rules are gone: kind comparison is §6, an
   operation's identifiers and bindings §5.1, value contracts and undefined
   results §5.2, reference resolution §7, and what examples claim §5.1.
+- **Version declaration.** A text declares a version exactly when it is
+  UTF-8 with no leading byte-order mark and parses under the JSON grammar as
+  an object with exactly one `openbindings` member whose value is a SemVer
+  string (§8.1); repeated names elsewhere do not stop a declaration. An
+  ill-formed byte anywhere leaves the text declaring no version, so a
+  `0.3.0` text holding one is judged under 0.2's rules and violates OBI-01,
+  never refused.
 - **Report vocabulary.** The specification defines conformance (§10) and no
   report. The conclusions (conformant, non-conformant,
   conformance-undetermined) and evidence statuses (satisfied, violated,
