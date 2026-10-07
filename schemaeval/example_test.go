@@ -25,8 +25,10 @@ func mustDocument(document string) *openbindings.Document {
 	return doc
 }
 
-// A service compiles the value contracts it serves at startup and keeps
-// them: core keeps none.
+// A service over a small document can compile the value contracts it serves
+// at startup and keep them: core keeps none. Contracts share no compiled
+// work, so a service over a large document compiles on demand
+// (Example_onDemand).
 func Example_startup() {
 	ctx := context.Background()
 	compiler, err := openbindings.NewValueContractCompiler(schemaeval.New(schemaeval.Options{}))

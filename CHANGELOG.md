@@ -63,7 +63,9 @@ Changed and Removed.
   `schemaeval.New(schemaeval.Options{})`, built on
   `santhosh-tekuri/jsonschema/v6`, with patterns matched as ECMA-262 regular
   expressions by `dlclark/regexp2`. Its package documentation states where it
-  gives no verdict.
+  gives no verdict. Its `Validate` returns the ctx's error once the ctx ends,
+  without waiting; the library takes no context, so the abandoned evaluation
+  runs on until it finishes.
 - **`openbindingstest`**: `TestSchemaEvaluator(t, evaluator, Options)` checks
   any evaluator against the `SchemaEvaluator` contract, using the JSON Schema
   Test Suite's draft2020-12 tests and adversarial cases.
