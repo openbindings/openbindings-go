@@ -47,6 +47,23 @@ each of these:
   ill-formed byte anywhere leaves the text declaring no version, so a
   `0.3.0` text holding one is judged under 0.2's rules and violates OBI-01,
   never refused.
+- **Corpus format @3.** The core corpus holds validity fixtures in
+  `document/`, each file citing a rule or a section, and scenarios in format
+  `openbindings.core-scenarios@3` alone, with five actions:
+  `resolve-operation`, `validate-operation-values`, `check-dependency-kind`,
+  `check-examples`, and `validate-document`. Value results are `satisfies`,
+  `fails`, `undefined`, `external`, or `no-contract`, with object forms
+  carrying `orNoVerdict` or a per-value `dependsOn`; example claims are
+  `true`, `false`, `undefined`, `external`, or `no-claim`. A runner judges
+  each answer by the corpus's Judging table under the capability profile
+  the SDK declares: a decline passes where the result is undefined,
+  external, or no contract, where the value carries `orNoVerdict`, or under
+  a `dependsOn` feature declared unsupported, and is a SHORTFALL otherwise,
+  which Go's adapters fail. Version gates, retrieval sentinels,
+  `conclude-conformance`, `derive-form`, name collisions, and conclusions
+  naming the applied text are gone. Go's adapters read @3 only; the core
+  declares `exact-lone-surrogate-strings` unsupported, and checks the text
+  it names in a test of its own (`TestAppliedText_IsVerified`).
 - **Report vocabulary.** The specification defines conformance (§10) and no
   report. The conclusions (conformant, non-conformant,
   conformance-undetermined) and evidence statuses (satisfied, violated,
@@ -137,19 +154,6 @@ each with the spec CHANGELOG entry (0.2.0 working draft) that states it:
   beginning in the document resource, looks a `$dynamicRef`'s name up in
   the dynamic scope gets no verdict when the document resource declares
   that name more than once, by either keyword.
-- **Corpus format @2** (Added, "`openbindings.core-tool-scenarios@2`").
-  The revised text's corpus holds scenarios in format
-  `openbindings.core-tool-scenarios@2` alone; `resolve-schema-cycle`, the
-  old outcome tokens (`graph-unavailable`, `resolver-error`), and the
-  version-refusal outcome are gone. A
-  corpus runner reads @2's actions and expectations: value results as
-  `valid`, `instance-mismatch`, or `no-verdict` (bare or in object form
-  with `orNoVerdict` and `dependsOn`), `notViolated` beside `violates`,
-  validation outcomes where `conformant` admits `conformance-undetermined`
-  when the validator lacks evidence, and conclusions naming the applied
-  text, verified against the revision's pinned hash. The separate
-  `conclude-conformance` action requires the exact conclusion determined
-  by its supplied evidence (§10.4). Go's adapter reads @2 only.
 
 The Go core's exported API for 0.2 (2026-10-01) is established in Go first;
 TypeScript alignment is pending for each of these. Parity is in observable
