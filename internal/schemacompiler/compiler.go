@@ -21,11 +21,12 @@ import (
 // It never obtains a schema resource from outside what the caller registers.
 // The library's default loader reads file: URLs from local disk, which would
 // let a document-supplied $ref make validation read the validating machine's
-// files and would make a verdict depend on that machine. Core lets a tool
-// decline external resources (§7), and a graph that cannot be fully resolved
-// validates nothing (OBI-T-07), so every external reference, file: and
-// http(s) alike, is unavailable. The JSON Schema meta-schemas are built into
-// the library and resolve without a loader.
+// files and would make a verdict depend on that machine. Where validity
+// depends on a resource the document does not contain, the document alone
+// does not settle it (§5.2), and core obtains no such resource itself, so
+// every external reference, file: and http(s) alike, is unavailable. The
+// JSON Schema meta-schemas are built into the library and resolve without a
+// loader.
 //
 // Patterns are read by the library's Go regexp engine. The fixed schemas the
 // document rules evaluate hold only anchored patterns over ASCII classes,
@@ -33,11 +34,12 @@ import (
 // the dialect OBI-02 and OBI-10 read them in (JSON Schema Core §6.4);
 // TestFixedSchemaPatterns pins them.
 //
-// format never rejects a value: OBI-T-07 makes it an annotation where the
-// dialect leaves its assertion optional, and the library otherwise asserts it
-// under the drafts before 2019-09 (which a reference to their meta-schemas
-// reaches) with no option to stop. Every format the library checks is
-// registered to accept every value.
+// format never rejects a value: it is an annotation where JSON Schema leaves
+// its assertion optional (§5.2), as it is when OBI-10 applies the
+// meta-schemas, and the library otherwise asserts it under the drafts before
+// 2019-09 (which a reference to their meta-schemas reaches) with no option to
+// stop. Every format the library checks is registered to accept every
+// value.
 func New() *jsonschema.Compiler {
 	c := jsonschema.NewCompiler()
 	c.UseLoader(externalResourceRefusal{})

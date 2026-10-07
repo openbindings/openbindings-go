@@ -245,7 +245,7 @@ type failureKind int
 
 const (
 	// undefinedResult: the specification leaves the result undefined
-	// (OBI-T-07), so the refusal matches ErrUndefined.
+	// (§5.2), so the refusal matches ErrUndefined.
 	undefinedResult failureKind = iota
 	// missingCapability: core lacks a capability or meets its own limit.
 	missingCapability
@@ -303,8 +303,8 @@ func newSchemaSpace(view any, supplied *suppliedResources) *schemaSpace {
 	return s
 }
 
-// resolve resolves a reference a schema in holder holds, as §7 and JSON
-// Schema 2020-12 resolve it (OBI-T-05). In the document resource, a
+// resolve resolves a reference a schema in holder holds, as §7 defines,
+// incorporating JSON Schema 2020-12's resolution. In the document resource, a
 // same-document reference is looked up as OBI-12 looks it up (§7.2); any
 // other reference resolves against its resource's identifier and names the
 // resource carrying the result character for character, or a meta-schema

@@ -268,7 +268,7 @@ func TestDocumentValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
 
 func TestDocumentValidate_NestedIDScopeSkipsOBI12(t *testing.T) {
 	// A $ref inside a schema declaring its own $id resolves against that
-	// resource's base per §10 and is out of OBI-12's scope.
+	// resource's base (§7.2) and is out of OBI-12's scope.
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -312,10 +312,10 @@ func TestDocumentValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 }
 
 func TestDocumentValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) {
-	// §10 clause 2 / OBI-11: a nested $id inside a schema that already
-	// declares its own $id resolves against that resource's base per JSON
-	// Schema 2020-12 and MAY be relative — that resource's internal
-	// business, the same scope carve-out as $ref/$anchor/dynamic-pair.
+	// §7.2 / OBI-11: a nested $id inside a schema that already declares its
+	// own $id resolves against that resource's base per JSON Schema 2020-12
+	// and may be relative: that resource's internal business, the same
+	// scope carve-out as $ref/$anchor/dynamic-pair.
 	i := Document{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -489,9 +489,9 @@ func newDocumentWithExamples(inputSchema, outputSchema JSONSchema, examples map[
 	}
 }
 
-// Examples are author claims (§5.1): an example that does not validate
-// against its operation's schema is a false claim, which no document rule
-// checks (OBI-T-09, OBI-T-10).
+// Examples are author claims (§5.1, Examples): an example that fails its
+// operation's value contract makes the claim false, and a claim's truth is
+// outside conformance, so no document rule checks it (§5, Author claims).
 func TestDocumentValidate_ExamplesAreAuthorClaims(t *testing.T) {
 	i := newDocumentWithExamples(
 		map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
@@ -512,7 +512,7 @@ func TestDocumentValidate_ExamplesAreAuthorClaims(t *testing.T) {
 }
 
 // Value validation reads same-document references from the OBI document
-// root (OBI-T-07, §7.2), however the operation reaches its schemas.
+// root (§5.2, §7.2), however the operation reaches its schemas.
 func TestInputContract_ResolvesFromTheDocumentRoot(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.2.0",
@@ -583,7 +583,8 @@ func TestParseDocument_RejectsInvalidUTF8_OBI_D_01(t *testing.T) {
 }
 
 // A null value is a value like any other (§5.1), and a graph reaching a
-// resource the document does not embed reaches no verdict (OBI-T-07).
+// resource the document does not embed reaches no verdict: the document
+// alone does not settle it (§5.2).
 func TestInputContract_NullAndExternalReferences(t *testing.T) {
 	i := Document{
 		OpenBindings: "0.2.0",
@@ -624,7 +625,7 @@ func TestDocumentValidate_RefusesEarlierLine(t *testing.T) {
 }
 
 func TestDocumentValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
-	// OBI-10 / §5.2: boolean schemas are valid at every schema position —
+	// OBI-10 / §5.2: boolean schemas are valid at every schema position:
 	// operation input/output, schemas-map entries, and nested subschema
 	// positions.
 	i := Document{

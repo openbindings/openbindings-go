@@ -12,8 +12,9 @@ import (
 //
 // The version decision comes first because the embedded schema is this
 // version's: a document declaring an unsupported version is refused, not
-// judged against rules it does not claim (§10.1). OBI-01 and the declared
-// version are read however deep the input nests. An error is one of three:
+// judged against rules that do not govern it, since its own line's or
+// prerelease's text does (§10). OBI-01 and the declared version are read
+// however deep the input nests. An error is one of three:
 //   - a *VersionRefusalError, the refusal;
 //   - a *ValidationError listing violations of OBI-01 or of the document
 //     schema, as Document.Validate and ValidateDocument report them;

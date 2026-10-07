@@ -5,8 +5,9 @@ import (
 	"slices"
 )
 
-// RuleEvidenceStatus records a validator's evidence for one applicable or
-// considered OBI-D rule. The statuses mirror §10.4 of the core specification.
+// RuleEvidenceStatus records a validator's evidence for one document rule.
+// The statuses are this SDK's report vocabulary, defined in the package
+// documentation (Reports and Verdicts).
 type RuleEvidenceStatus string
 
 const (
@@ -16,8 +17,9 @@ const (
 	EvidenceNotApplicable RuleEvidenceStatus = "not-applicable"
 )
 
-// ConformanceConclusion is the portable conclusion a validator may report
-// after applying OBI-T-08 to its collected rule evidence.
+// ConformanceConclusion is the conclusion a report reaches from its rule
+// evidence (ConcludeConformance), as the package documentation defines it
+// (Reports and Verdicts).
 type ConformanceConclusion string
 
 const (
@@ -26,8 +28,8 @@ const (
 	ConclusionConformanceUndetermined ConformanceConclusion = "conformance-undetermined"
 )
 
-// documentRules is every document rule the core specification defines
-// (§10.2), in identifier order.
+// documentRules is every rule the core specification defines (§10), in
+// identifier order.
 var documentRules = []string{
 	"OBI-01", "OBI-02", "OBI-03", "OBI-04", "OBI-05", "OBI-06",
 	"OBI-07", "OBI-08", "OBI-09", "OBI-10", "OBI-11", "OBI-12",
@@ -64,8 +66,8 @@ type Finding struct {
 	Position Position
 }
 
-// ValidationReport is a validator's account of one document under the core
-// specification's §10.4 vocabulary.
+// ValidationReport is a validator's account of one document, in this SDK's
+// report vocabulary (the package documentation's Reports and Verdicts).
 //
 // Conclusion is conformant only when every document rule was decided and none
 // was violated; any established violation makes it non-conformant; otherwise
@@ -74,7 +76,7 @@ type Finding struct {
 // Conclusion, and must not present an undetermined result as conformant.
 type ValidationReport struct {
 	// Release is the release of the specification whose text the report
-	// applies, and to which its rule identifiers belong (§10, OBI-T-08):
+	// applies, and to which its rule identifiers belong (§10):
 	// 0.2.0, as its working draft until that version is released, whatever
 	// release of the 0.2 line the document declares, since the patch number
 	// a document declares carries no meaning (§8.1). A report
@@ -82,9 +84,10 @@ type ValidationReport struct {
 	Release string
 	// Revision is the source-control revision of the specification text the
 	// report applies, a commit of github.com/openbindings/spec, while Release
-	// names a working draft rather than a published release (OBI-T-08); it
-	// is empty when Release names a published release, and in a report
-	// ConcludeConformance builds from evidence alone.
+	// names a working draft rather than a published release: a working draft
+	// changes, and a later release of the line can correct the text a
+	// conclusion rests on (§8.1). It is empty when Release names a published
+	// release, and in a report ConcludeConformance builds from evidence alone.
 	Revision   string
 	Conclusion ConformanceConclusion
 	// Evidence holds one status per document rule (DocumentRules), the
@@ -137,10 +140,11 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 	return out
 }
 
-// ConcludeConformance applies OBI-T-08's truth conditions to rule evidence
-// and returns the report they conclude. It concludes from the document rules
-// alone (DocumentRules), since §10.4 defines each conclusion by the document
-// rules: evidence under any other identifier is dropped and decides nothing.
+// ConcludeConformance reaches the conclusion rule evidence supports, as the
+// package documentation defines each conclusion (Reports and Verdicts), and
+// returns the report. It concludes from the document rules alone
+// (DocumentRules), since a document conforms when it meets every rule
+// (§10): evidence under any other identifier is dropped and decides nothing.
 // Each document rule applies to every text that holds OBI-01; on a text
 // violating it, OBI-02 through OBI-13 are not applicable and the
 // OBI-01 violation alone establishes non-conformance (§10). Absence is no
@@ -174,8 +178,8 @@ func (r ValidationReport) findingsWith(status RuleEvidenceStatus) []Finding {
 //     by concluding again from the amended Evidence with ConcludeConformance,
 //     never edited.
 //   - Release and Revision are copied from the report: the amending caller
-//     applied the same specification text (OBI-T-08). A caller that applied
-//     other text does not amend this report.
+//     applied the same specification text, which the report names. A caller
+//     that applied other text does not amend this report.
 func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationReport {
 	report := ValidationReport{Evidence: make(map[string]RuleEvidenceStatus, len(documentRules))}
 	// documentRules is in identifier order, so the lists built here are too.
@@ -207,11 +211,12 @@ func ConcludeConformance(evidence map[string]RuleEvidenceStatus) ValidationRepor
 }
 
 // VersionRefusalError reports this SDK's version refusal: the document
-// declares a well-formed version (§8.1) outside SupportedVersions, whose text
+// declares a version (§8.1) outside SupportedVersions, whose text
 // this SDK does not apply, so it does not interpret the document at all.
-// Refusing is this SDK's policy; the specification leaves it to each tool
-// (§10.3). A refusal is not a conformance conclusion; validation returns it
-// instead of a report.
+// A text declaring another line or a prerelease is governed by that text
+// (§10); refusing to interpret it is this SDK's policy (CheckVersion). A
+// refusal is not a conformance conclusion; validation returns it instead of
+// a report.
 type VersionRefusalError struct {
 	// Version is the document's declared openbindings value.
 	Version string

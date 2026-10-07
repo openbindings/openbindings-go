@@ -29,13 +29,32 @@ support. Go accepts unknown kinds while validating a document and gives
 source and binding content no Core interpretation. The former
 `bindingSpec`/`bindingSpecs` names are unknown fields, not aliases.
 
+The document-model specification (2026-10-07), which specifies the document
+model only, is established in Go first; TypeScript alignment is pending for
+each of these:
+
+- **Rule identifiers.** The rules are OBI-01 to OBI-13, the earlier
+  OBI-D-01 to OBI-D-13 renamed and ordered by subject (old 01, 02, 09, 03,
+  04, 07, 08, 11, 06, 10, 05, 12, 13 become 01 to 13, in that order).
+  Findings, evidence, and a report's rule lists carry them, the lists in
+  identifier order. The tool rules are gone: kind comparison is §6, an
+  operation's identifiers and bindings §5.1, value contracts and undefined
+  results §5.2, reference resolution §7, and what examples claim §5.1.
+- **Report vocabulary.** The specification defines conformance (§10) and no
+  report. The conclusions (conformant, non-conformant,
+  conformance-undetermined) and evidence statuses (satisfied, violated,
+  inconclusive, not applicable) are the SDK's own, which Go defines in its
+  package documentation (Reports and Verdicts); parity is TypeScript
+  defining the same vocabulary in its own documentation.
+
 The core alignment with the spec draft of openbindings/spec#129 (2026-09-29) is established in
 Go first; TypeScript alignment is pending for each of these:
 
 - **Model.** `idempotent` is a binding member; a dependency carries an
   optional `description`.
-- **Rule numbering.** OBI-01 through OBI-13 as the draft numbers them; no
-  `$vocabulary` rule and no example validity (examples are author claims).
+- **Rules.** Thirteen document rules, now numbered as the item above
+  states; no `$vocabulary` rule and no example validity (examples are
+  author claims).
 - **References.** OBI-11 admits plain names and the dynamic pair in the
   document resource; OBI-12 decodes a fragment once, then reads a pointer or
   a plain name the document resource declares, and leaves absolute references
@@ -46,12 +65,12 @@ Go first; TypeScript alignment is pending for each of these:
 - **Resource boundaries.** A schema with an `$id` member is a boundary
   whatever the member's value; a pointer from the document resource reaches
   nothing inside one, for OBI-12 and value validation alike.
-- **Host objects.** Validating a document in memory decides OBI-01 on its
-  serialization (§10), so it can conclude conformant.
+- **Host objects.** Validating a document in memory decides OBI-01 on the
+  text the model writes for it (Reports and Verdicts), so it can conclude
+  conformant.
 - **Version decision.** A text beginning with a byte-order mark declares no
-  version (§8.1). A report names the release whose text it applies
-  (OBI-T-08).
-- **Value contracts.** Validating a value (OBI-T-07) takes a schema
+  version (§8.1). A report names the release whose text it applies.
+- **Value contracts.** Validating a value (§5.2) takes a schema
   evaluator the application supplies; the core has none of its own. The core
   resolves the document's schemas and the supplied resources (§7), refuses
   before evaluation, located and labeled, what the specification leaves
@@ -62,29 +81,29 @@ Go first; TypeScript alignment is pending for each of these:
   Schema Test Suite and adversarial cases through any evaluator
   (`openbindingstest/testdata/json-schema-test-suite/README.md`).
 
-Document validation reports the core's §10.4 conformance conclusion in Go:
+Document validation reports a conformance conclusion in Go:
 `Document.Validate()` and `ValidateDocument(data)` return a
-`ValidationReport` with per-rule evidence and findings. TypeScript applies OBI-T-08 to caller evidence through
-`concludeConformance`, but `validateInterface` still returns violations
-alone; TypeScript alignment is pending.
+`ValidationReport` with per-rule evidence and findings. TypeScript concludes
+from caller evidence through `concludeConformance`, but `validateInterface`
+still returns violations alone; TypeScript alignment is pending.
 
 The revised 0.2 working draft (spec `cbc17a6`, adopted 2026-10-01) is
 established in Go first; TypeScript alignment is pending for each of these,
 each with the spec CHANGELOG entry (0.2.0 working draft) that states it:
 
 - **OBI-01 decides alone** (Changed, "What the other document rules say
-  about a text OBI-01 rejects"). On a text violating OBI-01, OBI-02
+  about a text OBI-D-01 rejects"). On a text violating OBI-01, OBI-02
   through OBI-13 are not applicable, recorded so with no finding, and the
   conclusion is non-conformant from OBI-01 alone; nothing is left
   inconclusive. A validator that has not decided OBI-01 and fails a check
-  it could make exactly concludes non-conformant (§10).
+  it could make exactly concludes non-conformant (Reports and Verdicts).
 - **A check made while OBI-01 is undecided** (the same entry). Go's
   `Document.Validate` cannot write a host object beyond the SDK's own
   limits, so it leaves OBI-01 undecided, and it decides OBI-03 on the
   declared version, which it holds exactly. A failed check is recorded as
-  OBI-03 violated and concludes non-conformant, as §10 permits, though
-  the check establishes only that OBI-01 or OBI-03 is violated, not
-  which. This attribution is accepted as Go's; TypeScript makes the same
+  OBI-03 violated and concludes non-conformant, since either violation
+  makes the document non-conformant, though the check establishes only
+  that OBI-01 or OBI-03 is violated, not which. This attribution is accepted as Go's; TypeScript makes the same
   one, so the two SDKs report the same rule-level evidence for such a
   value.
 - **Plain names by the grammar** (Changed, "Only a grammatical anchor
@@ -134,7 +153,7 @@ behavior and recognizable names, not identical signatures:
   names them; a dependency's kind check is "accepts" (`AcceptsKind`).
 - **Lookups on the document.** Resolving a name to an operation against its
   key and its aliases, with equal standing, where a name several operations
-  carry resolves to none (OBI-T-06); and finding an operation's bindings by
+  carry resolves to none (§5.1, Aliases); and finding an operation's bindings by
   its key alone, sorted for presentation, where an alias or a key no
   operation has finds nothing. Neither finds anything in a missing document.
 - **The version decision as a refusal.** A check that returns the same
@@ -192,7 +211,7 @@ each of these observable behaviors:
 | Concept | Go | TypeScript |
 |---|---|---|
 | validate a document, with its conformance conclusion | `Document.Validate()` / `ValidateDocument(data)` | `validateInterface(...)` (report pending) |
-| apply OBI-T-08 to rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
+| conclude from rule evidence | `ConcludeConformance(...)` | `concludeConformance(...)` |
 | compare a dependency's declared kind constraint | `Dependency.AcceptsKind(...)` | pending |
 | resolve an operation name, and find its bindings by key | `Document.ResolveOperation(...)`, `Document.OperationBindings(...)` | pending |
 | decide a declared version (the SDK's policy, §8.1) | `CheckVersion(...)` | pending |
@@ -200,7 +219,7 @@ each of these observable behaviors:
 | mark what decided nothing | `ErrInconclusive` | pending |
 | validate a value against a value contract, with the application's evaluator | `NewValueContractCompiler(...)`, `Resolve`, `CompileInput` / `CompileOutput`, `ValueContract.Validate` | pending |
 | check an evaluator against the evaluator contract | `openbindingstest.TestSchemaEvaluator(...)` | pending |
-| name the specification text a conclusion applied, with its revision while a working draft (OBI-T-08) | `ValidationReport.Release` and `ValidationReport.Revision` | pending |
+| name the specification text a conclusion applied, with its revision while a working draft | `ValidationReport.Release` and `ValidationReport.Revision` | pending |
 | position a finding in the input bytes | `Finding.Position` | pending |
 | exact named dependency lookup | removed 2026-09-23 (two map lookups) | `lookupDependency(...)` (removal pending) |
 | immutable semantic OBI snapshot | removed 2026-09-23 (no Core role) | `prepareInterface(...)` (removal pending) |

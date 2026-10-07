@@ -207,7 +207,7 @@ func declaresDynamicAnchor(target schemaTarget, name string) bool {
 
 // findCycles refuses a reached cycle of in-place applications, which never
 // advances into the value. Where every evaluation must enter it (certainLoop),
-// the result is undefined (OBI-T-07, §7.4); otherwise an evaluator may never
+// the result is undefined (§5.2, §7.4); otherwise an evaluator may never
 // enter it for some values, and the refusal is conservative: core does not
 // decide which values' evaluations do.
 func (r *contractReach) findCycles() {

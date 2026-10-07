@@ -28,9 +28,10 @@ func (e *ValidationError) Error() string {
 var (
 	// ErrInconclusive marks a call that decided nothing: this SDK could not
 	// read or interpret its input in full, so the call answers neither way.
-	// It is not a conformance conclusion (§10.4): a document ParseDocument
-	// reads no further may conform or not, and ValidateDocument reports the
-	// rules it can decide about it. Nor is it a value verdict: a value
+	// It is not a conformance conclusion (Reports and Verdicts, in the
+	// package documentation): a document ParseDocument reads no further may
+	// conform or not, and ValidateDocument reports the rules it can decide
+	// about it. Nor is it a value verdict: a value
 	// contract's no-verdicts are a *NoVerdictError (ErrNoVerdict), which no
 	// error matching ErrInconclusive is.
 	//
@@ -48,7 +49,7 @@ var (
 	ErrInconclusive = errors.New("openbindings: inconclusive")
 
 	// ErrOperationNotFound is wrapped by the errors returned for a name that
-	// resolves to no one operation (OBI-T-06): no operation carries it, or,
-	// in a document violating OBI-05, several do.
+	// identifies no one operation (§5.1, Aliases): no operation carries it,
+	// or, in a document violating OBI-05, several do.
 	ErrOperationNotFound = errors.New("openbindings: no one operation is named")
 )

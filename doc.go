@@ -2,7 +2,7 @@
 // document model ([Document]), which carries a document exactly, the
 // document rules and their conformance report, operation resolution and
 // binding lookup, the document's schema references, validation of values
-// against value contracts (OBI-T-07), and the Core-defined constants
+// against value contracts (§5.2), and the Core-defined constants
 // (versions and media type).
 //
 // The package covers what the core OpenBindings specification defines, and
@@ -27,18 +27,19 @@
 // every escape and number spelling (see Document).
 //
 // The document rules judge the JSON a document is: ValidateDocument judges
-// the bytes, and Validate the encoding of a host object, which is what a claim
-// about a value in memory is about (§10), so for the same document both reach
-// the same evidence. Validate returns a *ValidationError listing every
+// the bytes, and Validate the text the model writes for a host object (see
+// Reports and Verdicts, below), so for the same document both reach the same
+// evidence. Validate returns a *ValidationError listing every
 // violation it establishes, which makes it a gate. A nil error is not
 // conformance: a rule this SDK cannot decide is inconclusive, not violated.
 // The report beside the error carries the conclusion:
 //
 //	doc, report, err := openbindings.ValidateDocument(data)
 //	// report.Conclusion is conformant, non-conformant, or
-//	// conformance-undetermined (§10.4); err is a *ValidationError when a
-//	// violation was established, and a *VersionRefusalError when the declared
-//	// version is outside the supported set.
+//	// conformance-undetermined (Reports and Verdicts); err is a
+//	// *ValidationError when a violation was established, and a
+//	// *VersionRefusalError when the declared version is outside the
+//	// supported set.
 //
 // [ErrInconclusive] marks a call that decided nothing because this SDK could
 // not read or interpret its input in full. It is not a conformance
@@ -49,8 +50,9 @@
 // every release of the 0.2 line, is interpreted. [ParseDocument],
 // [ValidateDocument], [Document.Validate], [Document.References], and
 // [ValueContractCompiler.Resolve] refuse one declaring another well-formed
-// version, as this SDK's policy: the specification leaves that to each tool
-// (§10.3). [Document.ResolveOperation] and
+// version, as this SDK's policy (Reports and Verdicts): such a document is
+// governed by its own line's text (§10), which this SDK does not apply.
+// [Document.ResolveOperation] and
 // [Document.OperationBindings] read the model as it is and refuse nothing,
 // so a caller holding a document it decoded itself makes the decision with
 // [CheckVersion]. A document written with this SDK declares
@@ -58,8 +60,9 @@
 //
 // # Operations, Bindings, and References
 //
-// A name resolves to an operation by its key or an alias, and the
-// operation's bindings are found by its key (OBI-T-06):
+// A name identifies an operation exactly when it equals the operation's key
+// or one of its aliases, and the operation's bindings are those whose
+// operation holds its key (§5.1, Aliases):
 //
 //	key, operation, found := doc.ResolveOperation("tasks.create")
 //	bindings := doc.OperationBindings(key) // binding keys, sorted
@@ -75,7 +78,7 @@
 // # Value Contracts
 //
 // An operation's input and output contracts (§3) govern each caller-facing
-// value. Validating a value against one (OBI-T-07) takes a [SchemaEvaluator]
+// value. Validating a value against one (§5.2) takes a [SchemaEvaluator]
 // the application supplies; the SDK has none of its own, and the
 // openbindings-go/schemaeval module is the project's:
 //
@@ -99,9 +102,9 @@
 // openbindings-go/schemaeval module's examples show that, and a small
 // document's contracts compiled at startup.
 //
-// Where this SDK gives no verdict that a tool with more capability could
-// give, OBI-T-07 permits it, and these are its declared capability limits.
-// Each is a no-verdict, never a wrong verdict:
+// Where this SDK gives no verdict that an implementation with more
+// capability could give, these are its declared capability limits (see
+// Reports and Verdicts). Each is a no-verdict, never a wrong verdict:
 //   - A value contract is decided as a whole: what core or the evaluator
 //     refuses withholds a verdict from every value, even one whose
 //     evaluation would never reach it, such as a reference to a resource
@@ -114,6 +117,73 @@
 //   - Core evaluates JSON Schema 2020-12 alone: a value contract copying a
 //     schema whose resource names another dialect, by its root's $schema or
 //     by inheriting it (§5.2), gets no verdict.
+//
+// # Reports and Verdicts
+//
+// The specification defines when a document conforms (§10: a text its rules
+// govern conforms when it meets every rule) and when a value satisfies or
+// fails a value contract (§5.2). It defines no report. The words this SDK
+// reports in are its own, defined here, and the other documentation in this
+// module uses them in these senses.
+//
+// A [ValidationReport] holds, for each rule [DocumentRules] lists, the
+// evidence this SDK established, a [RuleEvidenceStatus]:
+//   - satisfied: the rule was established to hold. A rule with nothing to
+//     govern in the document holds vacuously, and is satisfied.
+//   - violated: the rule was established not to hold. A finding locates each
+//     violation.
+//   - inconclusive: neither was established, because the check met one of
+//     this SDK's own limits, such as a resource limit, or needs a capability
+//     it lacks. A finding says why. A limit met, a capability lacked, or a
+//     resource unavailable is no evidence of a violation.
+//   - not applicable: the rule imposes nothing on the text. OBI-02 to OBI-13
+//     apply only to the JSON value of a text that meets OBI-01 (§10), so on
+//     a text violating OBI-01 they are not applicable, with no finding, and
+//     the OBI-01 violation alone makes the text non-conformant.
+//
+// From that evidence alone ([ConcludeConformance]) a report reaches a
+// [ConformanceConclusion]:
+//   - conformant: every rule was decided and none was violated, which
+//     establishes that the document conforms.
+//   - non-conformant: a violation was established, whatever remains
+//     inconclusive, which establishes that the document does not conform.
+//   - conformance-undetermined: no violation was established, but a rule
+//     remains inconclusive. It establishes neither, and never stands for
+//     conformance.
+//
+// One check is made with OBI-01 undecided: for a host object beyond this
+// SDK's own limits, which the model does not write, Document.Validate still
+// checks the declared version, a Go string it holds exactly. A failed check
+// establishes that OBI-01 or OBI-03 is violated, so the document does not
+// conform, and the report records it as OBI-03 violated, though the check
+// does not establish which.
+//
+// A report names the specification text it applied, by Release and, while
+// that release is a working draft, by Revision: its rule identifiers are
+// that text's (§10), and a later release of the line can correct the text a
+// conclusion rests on (§8.1).
+//
+// The rules govern a text (§10). Document.Validate judges a host object by
+// the text the model writes for it: UTF-8 JSON with no byte-order mark, each
+// number written at its exact value. So for the same document it reaches the
+// evidence ValidateDocument reaches from those bytes.
+//
+// A document declaring a version outside [SupportedVersions] gets no report
+// and no verdict: a text declaring another line or a prerelease is governed
+// by that line's or prerelease's text (§10), which this SDK does not apply,
+// so it refuses the document with a [*VersionRefusalError] rather than
+// interpret it. Refusing is this SDK's policy, which [CheckVersion] states.
+//
+// A value's verdict against a value contract ([ValueContract.Validate]) is
+// valid (nil) when the value satisfies the contract and a mismatch
+// ([ErrMismatch]) when it fails it (§5.2). Otherwise it is no verdict
+// ([ErrNoVerdict]), which is never a rejection: where the operation states
+// no value contract ([ErrNoValueContract]); where whether the value
+// satisfies it is undefined ([ErrUndefined]); where it depends on a resource
+// the document does not contain and the application did not supply; where
+// core or the evaluator lacks a capability the evaluation needs, which are
+// the declared capability limits under Value Contracts, or refuses by
+// conservative policy; and where the ctx ends.
 //
 // # An Exact Document Model
 //

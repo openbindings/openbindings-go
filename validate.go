@@ -17,14 +17,14 @@ import (
 
 // Validate checks a document already in memory against every document rule
 // this SDK can decide. It reports the per-rule evidence, the located findings,
-// and the §10.4 conformance conclusion.
+// and the conformance conclusion (Reports and Verdicts, in the package
+// documentation).
 //
-// The rules judge the document the host object encodes, exactly as
-// ValidateDocument judges bytes: a claim about a value in memory is a claim
-// about its serialization as UTF-8 JSON text with no byte-order mark, each
-// number written at its exact value (§10). That text is the encoding Validate
-// judges, which the model writes only when it decodes back unchanged, so
-// OBI-01 holds whenever the model writes it. The report is about the value,
+// The rules govern a text (§10), and Validate judges the text the host
+// object encodes to, exactly as ValidateDocument judges bytes: UTF-8 JSON
+// text with no byte-order mark, each number written at its exact value.
+// The model writes that text only when it decodes back unchanged, so OBI-01
+// holds whenever the model writes it. The report is about the value,
 // not about any bytes it was decoded from: to judge a file, pass its bytes to
 // ValidateDocument.
 //
@@ -37,7 +37,8 @@ import (
 // kind: a source's and a binding's content are the kind's, and no core rule
 // judges them. OBI-10 is inconclusive
 // for the subschemas a schema nests deeper than 256 levels, where the
-// meta-schema check meets a resource limit (§10.4).
+// meta-schema check meets a resource limit, which is no evidence of a
+// violation (Reports and Verdicts).
 //
 // A document declaring a version outside the supported set is not interpreted:
 // Validate returns a *VersionRefusalError and no report (CheckVersion).
@@ -55,16 +56,12 @@ import (
 //     Validate's report leaves OBI-01 inconclusive, decides OBI-03 on
 //     the declared version when that is valid UTF-8, and leaves every other
 //     rule inconclusive; References and Resolve return an error matching
-//     ErrInconclusive. Deciding OBI-03 with OBI-01 undecided follows
-//     §10: "A validator that has not decided OBI-01 may check the value it
-//     parsed, provided the data used by the check would be exact if
-//     OBI-01 held. A failed check then establishes that either OBI-01 is
-//     violated or the checked rule is violated, and therefore establishes
-//     non-conformance. It does not necessarily establish which rule is
-//     violated." The declared version is a Go string the model holds
-//     exactly, so the report records a failed check as OBI-03 violated
-//     and concludes non-conformant, which does not establish that OBI-01
-//     holds.
+//     ErrInconclusive. The declared version is a Go string the model holds
+//     exactly, so it is checked with OBI-01 undecided: a failed check
+//     establishes that OBI-01 or OBI-03 is violated, so the document does
+//     not conform, though not which. The report records it as OBI-03
+//     violated and concludes non-conformant, which does not establish that
+//     OBI-01 holds (Reports and Verdicts).
 //   - A failure to encode at all is an encoding failure: an error matching
 //     no category, and no report, whatever the error carries. It can come
 //     from a value encoding/json does not write as held (a NaN, a channel, a
@@ -132,10 +129,10 @@ func (d Document) Validate() (ValidationReport, error) {
 //   - OBI-01 refuses the input (not JSON, not UTF-8, beginning with a
 //     byte-order mark, or repeating a member name): no document, a report
 //     with OBI-01 violated and every other rule not applicable, and a
-//     *ValidationError. OBI-02 through OBI-13 govern the JSON value only
-//     when OBI-01 holds; on a text violating it they impose no further
-//     requirements and are not applicable in the vacuous sense of §10.4, and
-//     the OBI-01 violation alone establishes non-conformance (§10). The
+//     *ValidationError. OBI-02 through OBI-13 apply only to the JSON value
+//     of a text that meets OBI-01 (§10), so on a text violating it they are
+//     not applicable (Reports and Verdicts, in the package documentation),
+//     and the OBI-01 violation alone establishes non-conformance. The
 //     report has no finding for them.
 //   - The input holds a string escaping a lone UTF-16 surrogate, or nests
 //     deeper than encoding/json reads (10000 levels): no document, a report
@@ -164,7 +161,8 @@ func ValidateDocument(data []byte) (*Document, ValidationReport, error) {
 			// OBI-01 is decided on the input, which the exact scan reads at
 			// any depth, and so is OBI-03, on the member the scan reads the
 			// version from. The other rules read the decoded document, which
-			// meets a resource limit and is no evidence either way (§10.4).
+			// meets a resource limit and is no evidence either way
+			// (Reports and Verdicts).
 			c.inconclusiveExcept(fmt.Sprintf("the input is %v, so this rule was not checked", err), "OBI-01", "OBI-03")
 			checkDeclaredVersion(&c, versionView(data))
 		case errors.As(err, &lone):
@@ -237,8 +235,8 @@ func ownLimit(err error) string {
 
 // modelLimitError reports a document the model does not write because it
 // holds what this SDK cannot read or carry, which is no defect of the value
-// (§10.4): it nests deeper than encoding/json reads, or holds a string
-// escaping a lone UTF-16 surrogate. It matches ErrInconclusive.
+// (Reports and Verdicts): it nests deeper than encoding/json reads, or holds
+// a string escaping a lone UTF-16 surrogate. It matches ErrInconclusive.
 type modelLimitError struct {
 	// what says what the document holds, as "the document <what>".
 	what string
@@ -381,7 +379,7 @@ func versionRefusalOf(version string) *VersionRefusalError {
 // operation reference that is a number names no operation key. Where the
 // document schema requires a member or a type, OBI-02 also reports it. No
 // rule evaluates a value against the document's schemas: an example is an
-// author claim, which no document rule checks (OBI-T-09).
+// author claim, whose truth is outside conformance (§5, Author claims).
 func checkDocument(c *ruleChecks, view any) {
 	checkDeclaredVersion(c, view)
 	validateAgainstOBISchema(c, view)

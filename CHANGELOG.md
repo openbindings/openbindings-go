@@ -5,7 +5,7 @@
 Implements the 0.2 line of the OpenBindings core specification, applying the
 0.2.0 working draft at the spec revision `appliedRevision` in `version.go`
 names. Validation reports name that text in `ValidationReport.Release` and
-`ValidationReport.Revision` (OBI-T-08). The root module is rebuilt as the
+`ValidationReport.Revision`. The root module is rebuilt as the
 core alone, so code written against 0.1.0 needs the changes listed under
 Changed and Removed.
 
@@ -24,6 +24,8 @@ Changed and Removed.
   the `Violated` and `Inconclusive` rules, `Findings` located by JSON Pointer
   and, from input bytes, by `Position` (offset, line, column), and a
   `Conclusion` of conformant, non-conformant, or conformance-undetermined.
+  The package documentation defines these report terms (Reports and
+  Verdicts); the specification defines conformance and no report.
   `ConcludeConformance(evidence)` concludes from evidence a caller supplies.
 - **Version support.** `SupportedVersions` (`"0.2.x"`) states the versions
   the SDK supports, and `AuthoringVersion` (`"0.2.0"`) the version a document
@@ -39,7 +41,7 @@ Changed and Removed.
   `ValueContractCompiler.Resolve` return its OBI-03 violation as a
   `*ValidationError`.
 - **Operation resolution and binding lookup.** `Document.ResolveOperation(name)`
-  resolves an operation's key or alias (OBI-T-06), and
+  resolves an operation's key or alias (§5.1), and
   `Document.OperationBindings(key)` returns the keys of its bindings, sorted.
 - **Schema references.** `Document.References()` lists every `$ref` and
   `$dynamicRef` in the schemas a document contains, each a `Reference` with
@@ -47,8 +49,8 @@ Changed and Removed.
 - **Dependencies.** `Document.Dependencies` holds named consumption points
   (`Dependency`, §5.5). `Dependency.Kinds` is an optional any-of kind
   constraint, which `Dependency.AcceptsKind(kind)` applies by exact string
-  comparison (OBI-T-01).
-- **Value contracts (OBI-T-07).**
+  comparison (§6).
+- **Value contracts (§5.2).**
   `NewValueContractCompiler(evaluator, resources...)` takes a
   `SchemaEvaluator` the application supplies, and its
   `Resolve(ctx, doc)` resolves a document's schemas into `ValueContracts`,
@@ -93,7 +95,7 @@ Changed and Removed.
   - `Interface` is `Document`, and `BindingEntry` is `Binding`. `Document`
     adds `Dependencies` and drops `Roles`, `Security`, and `Transforms`.
   - `Source.Format`, a format token, is `Source.Kind`, an opaque string
-    compared exactly (§6, OBI-T-01). `Source.Location` and `Source.Priority`
+    compared exactly (§6). `Source.Location` and `Source.Priority`
     are removed, and `Source.Content` is a `json.RawMessage`.
   - `BindingEntry.Ref`, `InputTransform`, and `OutputTransform` give way to
     `Binding.Content`, a `json.RawMessage` read under the source's kind, to
@@ -133,7 +135,7 @@ Changed and Removed.
 - **`ValidationError`** carries `Findings []Finding` in place of
   `Problems []string`.
 - **`ErrOperationNotFound`** marks a name that resolves to no one operation
-  (OBI-T-06). `ValueContracts.CompileInput` and `CompileOutput` return
+  (§5.1). `ValueContracts.CompileInput` and `CompileOutput` return
   errors matching it.
 - **Go version and dependencies.** The root module requires Go 1.25.12, not
   Go 1.22, and depends on `github.com/santhosh-tekuri/jsonschema/v6` and

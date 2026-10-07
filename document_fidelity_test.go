@@ -395,9 +395,9 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 // the model cannot encode exactly is not validated: an escaped lone surrogate
 // the encoding would have replaced with U+FFFD no longer passes a const of
 // U+FFFD. A lone surrogate is valid JSON text a Go string cannot carry, a
-// capability limit of this SDK (§10.4), so the report is undetermined,
-// deciding OBI-03 alone, as ValidateDocument decides such bytes, and
-// Resolve's error matches ErrInconclusive.
+// capability limit of this SDK (Reports and Verdicts), so the report is
+// undetermined, deciding OBI-03 alone, as ValidateDocument decides such
+// bytes, and Resolve's error matches ErrInconclusive.
 func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 	iface := Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
 		Input:    map[string]any{"const": "\ufffd"},

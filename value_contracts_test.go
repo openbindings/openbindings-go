@@ -548,7 +548,8 @@ func TestCompile_NoValueContract(t *testing.T) {
 	}
 }
 
-// A name two operations carry resolves to neither (OBI-T-06).
+// A name two operations carry, in a document violating OBI-05, identifies no
+// one operation (§5.1, Aliases), so it resolves to neither.
 func TestCompile_AmbiguousName(t *testing.T) {
 	contracts := contractsFor(t, mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"aliases":["x"]},"b":{"aliases":["x"]}}}`))
 	if _, err := contracts.CompileInput(context.Background(), "x"); !errors.Is(err, ErrOperationNotFound) {

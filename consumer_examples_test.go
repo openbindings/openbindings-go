@@ -84,9 +84,9 @@ const tasksOBI = `{
 // ---------------------------------------------------------------- the CLI
 
 // cliValidate is `ob validate <obi>`: the conclusion, the specification text
-// applied (OBI-T-08), each finding located in the file, and the exit status
-// the lab's table gives (0 conformant, 1 non-conformant, 3 refused, 4 no
-// verdict).
+// applied (Release and Revision), each finding located in the file, and the
+// exit status the lab's table gives (0 conformant, 1 non-conformant, 3
+// refused, 4 no verdict).
 func cliValidate(name string, data []byte) (exit int) {
 	_, report, err := openbindings.ValidateDocument(data)
 	var refusal *openbindings.VersionRefusalError
@@ -349,7 +349,7 @@ func Example_cliEdit() {
 }
 
 // cliInvokeChoice is how `ob invoke <obi> <operation> [--binding B]...`
-// chooses a binding: resolve the name (OBI-T-06), find the operation's
+// chooses a binding: resolve the name (§5.1, Aliases), find the operation's
 // bindings by its key, read each binding's source kind, and take the first
 // named binding ob can invoke, or the sole one; otherwise refuse, listing
 // the candidates with preference and deprecation, which are shown and never
@@ -562,7 +562,7 @@ var deeplyNested = strings.Repeat(`{"not":`, 300) + `{}` + strings.Repeat(`}`, 3
 //   - the conclusion and the derived lists are recomputed from the evidence
 //     (ConcludeConformance), never edited;
 //   - the provenance stays: the tool applied the same specification text,
-//     so Version and Revision still name it (OBI-T-08). A tool applying other
+//     so Release and Revision still name it. A tool applying other
 //     text has no business amending this report.
 func amendRule(report openbindings.ValidationReport, rule string, status openbindings.RuleEvidenceStatus, findings ...openbindings.Finding) (openbindings.ValidationReport, error) {
 	if _, considered := report.Evidence[rule]; !considered {
@@ -612,7 +612,7 @@ func Example_producerAmendReport() {
 	bare := openbindings.ConcludeConformance(maps.Clone(report.Evidence))
 	fmt.Printf("bare: %s, release %q, %d findings\n", bare.Conclusion, bare.Release, len(bare.Findings))
 	// Evidence that leaves out a document rule leaves it inconclusive
-	// (OBI-T-08): no evidence concludes nothing.
+	// (Reports and Verdicts): no evidence concludes nothing.
 	partial := openbindings.ConcludeConformance(map[string]openbindings.RuleEvidenceStatus{"OBI-01": openbindings.EvidenceSatisfied})
 	fmt.Println("one rule satisfied:", partial.Conclusion, len(partial.Inconclusive), "inconclusive")
 
@@ -747,7 +747,8 @@ func Example_cliMediaType() {
 
 // sameJSON reports whether two JSON texts hold the same JSON value: objects
 // as unordered members, strings as they decode, arrays in order, and numbers
-// by exact decimal value (§10 reads numbers "by their exact decimal value").
+// by exact decimal value (§5, Strings and numbers: two numbers are equal
+// when their exact decimal values are).
 // It is the comparison `ob merge` needs to skip identical entries; neither
 // reflect.DeepEqual on the model nor comparing encodings gives it.
 func sameJSON(a, b []byte) (bool, error) {

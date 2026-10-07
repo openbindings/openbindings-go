@@ -66,8 +66,9 @@ func init() {
 // The meta-schema validator's work grows faster than linearly with a
 // schema's depth, so the subschemas a schema nests deeper than
 // schemaDepthLimit are not checked, which leaves the rule inconclusive there
-// (§10.4). The rest of the schema is checked all the same: the meta-schemas
-// judge each subschema by what it holds, whatever its subschemas hold.
+// (Reports and Verdicts, in the package documentation). The rest of the
+// schema is checked all the same: the meta-schemas judge each subschema by
+// what it holds, whatever its subschemas hold.
 func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
 	case bool:
@@ -205,7 +206,8 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 		var mismatch bool
 		if problems, mismatch = checked.Outcome(verr); !mismatch {
 			recordSchemaFindings(c, found)
-			// An exceeded resource limit is not evidence of violation (§10.4).
+			// An exceeded resource limit is not evidence of violation
+			// (Reports and Verdicts).
 			c.inconclusive("OBI-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
 			return
 		}

@@ -15,8 +15,8 @@ func allRules(status RuleEvidenceStatus) map[string]RuleEvidenceStatus {
 	return evidence
 }
 
-// OBI-T-08: conformance is claimed only when every document rule has been
-// established with no violation, so a document rule missing from the
+// A conformant conclusion needs every document rule established with no
+// violation (Reports and Verdicts), so a document rule missing from the
 // evidence is inconclusive, and an empty map concludes undetermined.
 func TestConcludeConformance(t *testing.T) {
 	without := func(evidence map[string]RuleEvidenceStatus, rules ...string) map[string]RuleEvidenceStatus {
@@ -47,16 +47,18 @@ func TestConcludeConformance(t *testing.T) {
 		{"a violation among missing rules", map[string]RuleEvidenceStatus{"OBI-11": EvidenceViolated}, ConclusionNonConformant, []string{"OBI-11"}, slices.DeleteFunc(DocumentRules(), func(rule string) bool { return rule == "OBI-11" })},
 		{"an unknown status", with(satisfied, "OBI-04", "maybe"), ConclusionConformanceUndetermined, nil, []string{"OBI-04"}},
 		// Evidence under an identifier that is not a document rule decides
-		// nothing (§10.4 concludes from the document rules alone).
+		// nothing: a conclusion is reached from the document rules alone.
+		// OBI-00 and OBI-14 are shaped like rule identifiers, but this text
+		// defines neither.
 		{"complete evidence and a foreign violation", with(satisfied, "X-01", EvidenceViolated), ConclusionConformant, nil, nil},
-		{"complete evidence and a foreign inconclusive", with(satisfied, "OBI-T-08", EvidenceInconclusive), ConclusionConformant, nil, nil},
+		{"complete evidence and a foreign inconclusive", with(satisfied, "OBI-14", EvidenceInconclusive), ConclusionConformant, nil, nil},
 		{"incomplete evidence and a foreign satisfied", with(without(satisfied, "OBI-06"), "X-01", EvidenceSatisfied), ConclusionConformanceUndetermined, nil, []string{"OBI-06"}},
 		{"incomplete evidence and a foreign violation", with(without(satisfied, "OBI-06"), "X-01", EvidenceViolated), ConclusionConformanceUndetermined, nil, []string{"OBI-06"}},
 		// A typo leaves its rule missing, so inconclusive: never a false
 		// conformant, and never a false non-conformant.
 		{"a satisfied typo", with(without(satisfied, "OBI-01"), "OBI-1", EvidenceSatisfied), ConclusionConformanceUndetermined, nil, []string{"OBI-01"}},
 		{"a violated typo", with(without(satisfied, "OBI-01"), "OBI-1", EvidenceViolated), ConclusionConformanceUndetermined, nil, []string{"OBI-01"}},
-		{"only foreign evidence", map[string]RuleEvidenceStatus{"X-01": EvidenceViolated, "OBI-T-04": EvidenceSatisfied}, ConclusionConformanceUndetermined, nil, DocumentRules()},
+		{"only foreign evidence", map[string]RuleEvidenceStatus{"X-01": EvidenceViolated, "OBI-00": EvidenceSatisfied}, ConclusionConformanceUndetermined, nil, DocumentRules()},
 	} {
 		report := ConcludeConformance(tc.evidence)
 		if report.Conclusion != tc.conclusion || !slices.Equal(report.Violated, tc.violated) || !slices.Equal(report.Inconclusive, tc.inconclusive) {

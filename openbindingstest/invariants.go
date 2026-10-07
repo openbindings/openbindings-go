@@ -165,7 +165,9 @@ func (k *kit) cancellation() {
 // unresolvable hands the evaluator bundles outside core's guarantees, each
 // holding a reference to a URI nothing in it names: whether the library fails
 // to compile or evaluates, no value whose evaluation reaches the reference
-// may get a verdict, valid or mismatch, under not too (OBI-T-07).
+// may get a verdict, valid or mismatch, under not too: the document alone
+// does not settle a value whose validity depends on a resource it does not
+// contain (§5.2).
 func (k *kit) unresolvable() {
 	// Each schema with values whose evaluation reaches the reference, in a
 	// fixed order, so the kit reports in the same order every run.

@@ -62,8 +62,8 @@ func exampleValue(v any) json.RawMessage {
 }
 
 // inputVerdict validates value against the input schema of an operation in a
-// document and names the outcome OBI-T-07 distinguishes: "valid", "mismatch",
-// or "no verdict".
+// document and names the outcome Reports and Verdicts distinguishes:
+// "valid", "mismatch", or "no verdict".
 func inputVerdict(t *testing.T, document, operation string, value any) string {
 	t.Helper()
 	return verdictOf(t, validateWithTestEvaluator(t, mustDecodeDocument(t, document), operation, "input", value))

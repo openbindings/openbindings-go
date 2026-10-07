@@ -20,15 +20,15 @@ const SupportedVersions = "0.2.x"
 const AuthoringVersion = "0.2.0"
 
 // appliedRelease is the release of the specification whose text this SDK
-// applies, which a validation report names (OBI-T-08): 0.2.0, as its working
-// draft until that version is released. A document declaring any release of
-// the 0.2 line is judged under it, since the patch number a document declares
-// carries no meaning (§8.1).
+// applies, which a validation report names (ValidationReport.Release):
+// 0.2.0, as its working draft until that version is released. A document
+// declaring any release of the 0.2 line is judged under it, since the patch
+// number a document declares carries no meaning (§8.1).
 const appliedRelease = "0.2.0"
 
 // appliedRevision is the source-control revision of the specification text
 // this SDK applies while appliedRelease names a working draft, which a
-// validation report names with it (OBI-T-08): a commit of
+// validation report names with it (ValidationReport.Revision): a commit of
 // github.com/openbindings/spec. It is "" once appliedRelease is released,
 // when the release alone names the text.
 const appliedRevision = "1d5f08c2c2f2bf9822536ac5e6083edfd0831944"
@@ -81,10 +81,12 @@ func parseReleaseLine(declaration string) (semver, bool) {
 //
 // A nil error means only that there is no version refusal. It does not mean
 // that v is a valid version: a v that is not SemVer 2.0.0 ("0.2", or "" for
-// a document that declares none) declares no version (§8.1), so this SDK
-// judges the document under the 0.2 line, where it violates OBI-03, which
-// validation reports with the other rules. Refusing a version is this SDK's
-// policy; the specification leaves it to each tool (§10.3).
+// a document that declares none) declares no version (§8.1). The 0.2 line's
+// rules govern a text that declares no version (§10), and under them it
+// violates OBI-03, which validation reports with the other rules. Refusing a
+// version is this SDK's policy: a text declaring another line or a
+// prerelease is governed by that text (§10), which this SDK does not apply,
+// so it does not interpret one.
 func CheckVersion(v string) error {
 	if refusal := versionRefusalOf(v); refusal != nil {
 		return refusal

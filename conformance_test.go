@@ -87,14 +87,14 @@ var fullRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // its schema must be the one this SDK embeds. Both are read from the history,
 // never from its checkout or index, so the text beside the corpus plays no
 // part and an unrelated specification commit cannot change the result. A
-// release named alone (OBI-T-08/c3a) is not verified: no verification against
-// a release snapshot exists.
+// release named alone, with no revision, is not verified: no verification
+// against a release snapshot exists.
 func verifyAppliedText(corpusDir, release, revision, pinnedRevision, pinnedSHA256 string, schema []byte) (bool, string) {
 	switch {
 	case !isValidSemver(release):
 		return false, fmt.Sprintf("appliedRelease %q is not a SemVer 2.0.0 version", release)
 	case revision == "":
-		return false, "a release named alone (OBI-T-08/c3a) is not verified: no verification against a release snapshot exists"
+		return false, "a release named alone, with no revision, is not verified: no verification against a release snapshot exists"
 	case !fullRevision.MatchString(revision):
 		return false, fmt.Sprintf("appliedRevision %q is not a full 40-hex commit", revision)
 	case pinnedRevision != revision:

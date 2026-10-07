@@ -101,7 +101,8 @@ func TestCheckVersion(t *testing.T) {
 		{name: "higher minor pre-1", version: "0.3.0", refused: true},
 		{name: "a prerelease of a supported release", version: "0.2.0-rc.1", refused: true},
 		{name: "a prerelease of a later patch", version: "0.2.1-rc.1", refused: true},
-		// A text declaring no version is never refused (§8.1).
+		// A text declaring no version is never refused: 0.2's rules govern
+		// it (§8.1, §10).
 		{name: "invalid empty", version: ""},
 		{name: "invalid 1.0", version: "1.0"},
 		{name: "invalid 0.2", version: "0.2"},

@@ -42,7 +42,8 @@ func TestValidateDocument_ConformantWhenEveryRuleIsDecided(t *testing.T) {
 }
 
 // A report names the release whose text it applies and, while that release
-// is a working draft, the source-control revision of the text (OBI-T-08),
+// is a working draft, the source-control revision of the text (Reports and
+// Verdicts),
 // from Document.Validate and ValidateDocument alike.
 func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{}}`
@@ -61,8 +62,9 @@ func TestValidationReport_NamesTheTextApplied(t *testing.T) {
 	}
 }
 
-// A claim about a value in memory is a claim about its serialization (§10),
-// which the model writes only when it decodes back unchanged, so a host
+// Validate judges a value in memory by the text the model writes for it
+// (Reports and Verdicts), which it writes only when it decodes back
+// unchanged, so a host
 // object decides OBI-01 and a well-formed one concludes conformant, whether
 // decoded or built in code.
 func TestDocumentValidate_DecidesOBI01OnTheSerialization(t *testing.T) {
@@ -153,7 +155,7 @@ func hostReport(t *testing.T, document string) (ValidationReport, error) {
 
 func TestValidateDocument_AViolationIsDecisiveAndInconclusiveRulesAreRetained(t *testing.T) {
 	// A schema nested past the meta-schema check's depth limit leaves
-	// OBI-10 inconclusive (§10.4).
+	// OBI-10 inconclusive (Reports and Verdicts).
 	deep := strings.Repeat(`{"not":`, schemaDepthLimit+1) + `{}` + strings.Repeat(`}`, schemaDepthLimit+1)
 	document := strings.Replace(documentWithBinding, `"operation": "tasks.create", "source"`, `"operation": "tasks.missing", "source"`, 1)
 	document = strings.Replace(document, `"operations": {"tasks.create": {}}`, `"operations": {"tasks.create": {}}, "schemas": {"Deep": `+deep+`}`, 1)
@@ -224,8 +226,10 @@ func TestValidateDocument_InputThatIsNotAJSONDocumentViolatesOBI01(t *testing.T)
 }
 
 // Value validation reaches a verdict only where the document's own schemas
-// decide it (OBI-T-07): a graph reaching a resource the document does not
-// embed, or a reference that resolves nowhere, reaches none.
+// decide it: the document alone does not settle a value whose validity
+// depends on a resource it does not contain, and a reference that resolves
+// nowhere gives an undefined result (§5.2), so a graph reaching a resource
+// the document does not embed, or such a reference, reaches none.
 func TestInputContract_Scope(t *testing.T) {
 	for name, tc := range map[string]struct{ document, want string }{
 		"a graph reaching an external resource": {`{"openbindings":"0.2.0","operations":{"a":{"input":{"$ref":"https://schemas.example.com/task.json"}}}}`, "no verdict"},
@@ -548,9 +552,10 @@ func TestValidateDocument_DialectRulesReachEverySchema(t *testing.T) {
 	}
 }
 
-// Reference cycles terminate in every walk (OBI-T-05): a recursive type is
-// evaluated, and a cycle that never advances into the value reaches no
-// verdict rather than hanging (OBI-T-07).
+// Reference cycles are permitted (§7.4) and terminate in every walk: a
+// recursive type is evaluated, and a cycle that never advances into the
+// value, whose result is undefined (§5.2, §7.4), reaches no verdict rather
+// than hanging.
 func TestValidateDocument_ReferenceCyclesTerminate(t *testing.T) {
 	recursive := `{"openbindings":"0.2.0",
 		"schemas":{"Node":{"type":"object","properties":{"next":{"$ref":"#/schemas/Node"}}}},
@@ -730,10 +735,10 @@ func TestValidateDocument_AbsoluteReferencesAreJSONSchemas(t *testing.T) {
 	}
 }
 
-// A resource limit is not evidence of a violation (§10.4). A number the
-// schema library would read beyond the numeric limits leaves the schema
-// unevaluable, so a value reaches no verdict, though the schema is judged
-// well-formed: the meta-schemas are checked against a stand-in.
+// A resource limit is not evidence of a violation (Reports and Verdicts). A
+// number the schema library would read beyond the numeric limits leaves the
+// schema unevaluable, so a value reaches no verdict, though the schema is
+// judged well-formed: the meta-schemas are checked against a stand-in.
 func TestValidateDocument_ResourceLimitsAreInconclusive(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{"a":{"input":{"minLength":1e999999}}}}`
 	if report := mustValidateDocument(t, document); report.Evidence["OBI-10"] != EvidenceSatisfied {
@@ -934,12 +939,12 @@ func TestParseDocument_ChecksNumbersBeyondTheLimits(t *testing.T) {
 	}
 }
 
-// Input nested deeper than the decoder reads is still read in full for
-// OBI-01, a token at a time, but cannot be decoded: every rule but OBI-03
-// meets a resource limit and is inconclusive (§10.4). Its declared version is
-// read however deep the input and wherever the member lies, so an unsupported
-// one is refused (CheckVersion) and a missing or malformed one violates
-// OBI-03.
+// Input nested deeper than the decoder reads is still read in full for OBI-01,
+// a token at a time, but cannot be decoded: every rule but OBI-03 meets a
+// resource limit and is inconclusive (Reports and Verdicts). Its declared
+// version is read however deep the input and wherever the member lies, so an
+// unsupported one is refused (CheckVersion) and a missing or malformed one
+// violates OBI-03.
 func TestValidateDocument_NestingLimitIsInconclusive(t *testing.T) {
 	nested := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
 	deep := `{"openbindings":"0.2.0","operations":{},"x-deep":` + nested + `}`
@@ -1191,7 +1196,7 @@ func TestValidateDocument_WorkIsLinear(t *testing.T) {
 
 // A subschema nested deeper than the meta-schema validator checks quickly
 // meets a resource limit: OBI-10 is inconclusive there, not decided
-// (§10.4). What the schema holds above it is still checked.
+// (Reports and Verdicts). What the schema holds above it is still checked.
 func TestValidateDocument_WellFormednessHasADepthLimit(t *testing.T) {
 	nested := strings.Repeat(`{"not":`, 300) + `{"type":42}` + strings.Repeat(`}`, 300)
 	cut := "/schemas/A" + strings.Repeat("/not", 257)
@@ -1430,9 +1435,10 @@ func TestValidateDocument_ResultShapes(t *testing.T) {
 	}
 }
 
-// On a text violating OBI-01, OBI-02 through OBI-13 impose no further
-// requirements and are not applicable in the vacuous sense of §10.4; the
-// OBI-01 violation alone establishes non-conformance (§10). Each way of
+// OBI-02 through OBI-13 apply only to the JSON value of a text that meets
+// OBI-01 (§10), so on a text violating it they are not applicable (Reports
+// and Verdicts), and the OBI-01 violation alone establishes non-conformance.
+// Each way of
 // violating it gives the same report: OBI-01 violated with its one
 // finding, every other rule not applicable with none, nothing inconclusive,
 // and no document. ParseDocument reports the same violation.

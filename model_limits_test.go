@@ -77,7 +77,7 @@ func TestModelLimits_InMemory(t *testing.T) {
 		}
 		// OBI-01 is undecided here, and a failed check of the declared
 		// version, which the model holds exactly, establishes that OBI-01
-		// or OBI-03 is violated, so non-conformance (§10).
+		// or OBI-03 is violated, so non-conformance (Reports and Verdicts).
 		report, err = build("0.2").Validate()
 		if !errors.As(err, new(*ValidationError)) || report.Conclusion != ConclusionNonConformant || !slices.Equal(report.Violated, []string{"OBI-03"}) {
 			t.Errorf("%s, no valid version: %s, violated %v, %v", name, report.Conclusion, report.Violated, err)
