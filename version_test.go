@@ -37,8 +37,8 @@ func TestParseReleaseLine(t *testing.T) {
 }
 
 // Exercise future declarations without changing the versions this SDK ships.
-// The public refusal decision and the independently judged corpus declaration
-// must both retain the minor, even when that minor is backward-compatible.
+// The refusal decision retains the minor, even when that minor is
+// backward-compatible.
 func TestCheckVersion_MajorMinorLines(t *testing.T) {
 	savedLine, savedPrereleases := supportedLine, supportedPrereleases
 	t.Cleanup(func() { supportedLine, supportedPrereleases = savedLine, savedPrereleases })
@@ -57,13 +57,9 @@ func TestCheckVersion_MajorMinorLines(t *testing.T) {
 			if !ok {
 				t.Fatal("declaration was rejected")
 			}
-			declaration := sdkDeclaration()
 			for version, supported := range tc.versions {
 				if refused := refusedBy(t, version); refused == supported {
 					t.Errorf("CheckVersion(%q) refuses %v, want %v", version, refused, !supported)
-				}
-				if got := declaration.Supports(version); got != supported {
-					t.Errorf("declaration.Supports(%q) = %v, want %v", version, got, supported)
 				}
 			}
 		})

@@ -8,11 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -24,14 +20,14 @@ import (
 
 // This file is the core module's corpus adapter. It executes every corpus
 // case whose action needs no schema evaluator: validity fixtures,
-// validate-document, resolve-operation, conclude-conformance, and
-// check-dependency-kind. The value actions (validate-operation-values and
-// check-examples) run in the schemaeval module's adapter, under the
-// project's ECMA-262 evaluator; core's tests cannot import it. derive-form
-// has no executor here. Each module records every case designated to it,
-// executed or omitted with a reason, and checks the count against the corpus
-// manifest. The scenarios are in format @2, the corpus of the specification
-// revision this SDK applies.
+// validate-document, resolve-operation, and check-dependency-kind. The
+// value actions (validate-operation-values and check-examples) run in the
+// schemaeval module's adapter, under the project's ECMA-262 evaluator; core's
+// tests cannot import it. Each module records every case designated to it,
+// executed or omitted with a reason, checks the count against the corpus
+// manifest, and judges each answer as the corpus's Judging table states,
+// under the capability profile it declares. The scenarios are in format @3,
+// the corpus of the specification text this SDK applies.
 
 type conformanceFixture struct {
 	Rule        string            `json:"rule"`
@@ -41,28 +37,29 @@ type conformanceFixture struct {
 }
 
 type conformanceTest struct {
-	Description      string          `json:"description"`
-	Document         json.RawMessage `json:"document"`
-	DocumentText     *string         `json:"documentText,omitempty"`
-	DocumentBase64   string          `json:"documentBase64,omitempty"`
-	Valid            bool            `json:"valid"`
-	Violates         []string        `json:"violates,omitempty"`
-	NotViolated      []string        `json:"notViolated,omitempty"`
-	RequiresSupports string          `json:"requiresSupports,omitempty"`
+	Description    string          `json:"description"`
+	Document       json.RawMessage `json:"document"`
+	DocumentText   *string         `json:"documentText,omitempty"`
+	DocumentBase64 string          `json:"documentBase64,omitempty"`
+	Valid          bool            `json:"valid"`
+	Violates       []string        `json:"violates,omitempty"`
+	NotViolated    []string        `json:"notViolated,omitempty"`
 }
 
 // findConformanceCorpus locates the spec repo's conformance/ root: the
 // directory OB_SPEC_CORPUS names, else a sibling spec checkout.
 func findConformanceCorpus() string { return corpus.Locate(".") }
 
-// sdkDeclaration is this SDK's support declaration, read from
-// SupportedVersions and the prereleases it names, never from its version
-// decision: gates derived from the code under test could gate its own
-// defects out.
-func sdkDeclaration() corpus.Declaration {
-	line := supportedLine.major + "." + supportedLine.minor
-	return corpus.Declaration{Lines: []string{line}, Prereleases: slices.Clone(supportedPrereleases)}
-}
+// rootProfile is the capability profile the core declares for the features
+// the cases this module executes depend on.
+var rootProfile = corpus.Profile{Features: map[string]bool{
+	"repeated-member-detection": true,
+	"exact-numbers":             true,
+	// A Go string cannot carry an escaped lone surrogate, a capability limit
+	// the package documentation declares, so ValidateDocument leaves a text
+	// holding one conformance-undetermined (Reports and Verdicts).
+	"exact-lone-surrogate-strings": false,
+}}
 
 // appliedTextRevision and appliedTextSHA256 bind the text this SDK applies:
 // the revision of github.com/openbindings/spec it pins, which must be
@@ -154,37 +151,22 @@ func runRootCorpus(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verified, why := appliedTextVerified(dir)
-	run := rootRun{declaration: sdkDeclaration(), verified: verified, unverified: why}
 	var ledger corpus.Ledger
 	for _, cs := range c.Cases {
-		module, reason := corpus.Designate(cs)
-		switch module {
-		case corpus.ModuleSchemaeval:
+		if module, _ := corpus.Designate(cs); module != corpus.ModuleRoot {
 			continue // the schemaeval module records it
-		case corpus.ModuleNone:
-			ledger.Record(cs.ID, corpus.Judgment{Category: corpus.Omitted, Detail: reason})
-			continue
 		}
 		t.Run(cs.ID+"/"+cs.Description, func(t *testing.T) {
-			j := run.judge(cs)
+			j := judgeRootCase(cs)
 			ledger.Record(cs.ID, j)
 			keyed, expected := expectedFailures[cs.ID]
-			switch {
-			case expected && j.Category == corpus.Fail && j.Detail == keyed.signature:
-				t.Logf("keyed expected failure (%s): %s", keyed.reason, j.Detail)
-			case expected && j.Category == corpus.Fail:
-				t.Errorf("%s (the keyed expected failure's signature is %q)", j.Detail, keyed.signature)
-			case expected:
-				t.Errorf("the keyed expected failure %s is now %s (%s): remove its expectedFailures entry", cs.ID, j.Category, j.Detail)
-			case j.Category == corpus.Pass:
-				t.Logf("pass: %s", j.Detail)
-			case j.Category == corpus.Advisory:
-				t.Logf("ADVISORY (never a failure): %s", j.Detail)
-			case j.Category == corpus.Fail:
-				t.Error(j.Detail)
+			switch failed, message := caseReport(j, keyed, expected); {
+			case failed:
+				t.Error(message)
+			case j.Category == corpus.Omitted:
+				t.Skip(message)
 			default:
-				t.Skipf("%s: %s", j.Category, j.Detail)
+				t.Log(message)
 			}
 		})
 	}
@@ -195,10 +177,25 @@ func runRootCorpus(t *testing.T, dir string) {
 	}
 }
 
-type rootRun struct {
-	declaration corpus.Declaration
-	verified    bool
-	unverified  string
+// caseReport says whether a case's judgment fails the run, and what to
+// report. A FAIL fails it unless the case is keyed to fail with that very
+// signature; a SHORTFALL fails it, since rootProfile is the core's own
+// declaration; a keyed case that no longer fails fails it too, so its entry
+// is removed.
+func caseReport(j corpus.Judgment, keyed keyedFailure, expected bool) (failed bool, message string) {
+	switch {
+	case expected && j.Category == corpus.Fail && j.Detail == keyed.signature:
+		return false, fmt.Sprintf("keyed expected failure (%s): %s", keyed.reason, j.Detail)
+	case expected && j.Category == corpus.Fail:
+		return true, fmt.Sprintf("%s (the keyed expected failure's signature is %q)", j.Detail, keyed.signature)
+	case expected:
+		return true, fmt.Sprintf("the keyed expected failure is now %s (%s): remove its expectedFailures entry", j.Category, j.Detail)
+	case j.Category == corpus.Fail:
+		return true, j.Detail
+	case j.Category == corpus.Shortfall:
+		return true, "SHORTFALL against the core's declared profile: " + j.Detail
+	}
+	return false, j.Category + ": " + j.Detail
 }
 
 func fail(format string, a ...any) corpus.Judgment {
@@ -209,23 +206,14 @@ func pass(detail string) corpus.Judgment {
 	return corpus.Judgment{Category: corpus.Pass, Detail: detail}
 }
 
-func omit(detail string) corpus.Judgment {
-	return corpus.Judgment{Category: corpus.Omitted, Detail: detail}
-}
-
-func (r rootRun) judge(cs corpus.Case) corpus.Judgment {
-	if reason, skip := corpus.Gate(cs.Gates, r.declaration); skip {
-		return omit(reason)
-	}
+func judgeRootCase(cs corpus.Case) corpus.Judgment {
 	switch cs.Action {
 	case corpus.ActionValidity:
 		return judgeFixture(cs)
 	case "validate-document":
-		return r.judgeDocument(cs)
+		return judgeDocument(cs, rootProfile)
 	case "resolve-operation":
 		return judgeResolve(cs)
-	case "conclude-conformance":
-		return judgeConclude(cs)
 	case "check-dependency-kind":
 		return judgeKind(cs)
 	}
@@ -249,29 +237,40 @@ func conformanceDocumentBytes(tt conformanceTest) ([]byte, error) {
 	}
 }
 
-// refusalResidue lists what a version refusal came with: a refusal is
-// exclusive of a document, a report, and an established violation.
-func refusalResidue(doc *Document, report ValidationReport, err error) []string {
-	var out []string
-	if doc != nil {
-		out = append(out, "a document")
-	}
-	if !reflect.DeepEqual(report, ValidationReport{}) {
-		out = append(out, "a report")
-	}
-	if errors.As(err, new(*ValidationError)) {
-		out = append(out, "a *ValidationError in its error chain")
-	}
-	return out
-}
-
 func isRefusal(err error) bool { return errors.As(err, new(*VersionRefusalError)) }
 
-// judgeFixture holds a validity fixture to ParseDocument followed by
-// Document.Validate, and to ValidateDocument's report: a conforming case
-// establishes no violation (inconclusive is not non-conformant); a violating
-// case is non-conformant, never refused, with every rule violates names
-// violated and none notViolated names.
+// documentAnswer is ValidateDocument's answer about a text, in the corpus's
+// terms: conformant, non-conformant, or a decline for
+// conformance-undetermined, with the rules it reports violated. Every case
+// declares the 0.2 line or no version, so a refusal is a problem, and so is
+// an error that disagrees with the report's conclusion.
+func documentAnswer(data []byte) (answer corpus.DocumentAnswer, problems []string) {
+	_, report, err := ValidateDocument(data)
+	var violation *ValidationError
+	switch {
+	case isRefusal(err):
+		return answer, []string{fmt.Sprintf("refused a text the 0.2 line's rules govern: %v", err)}
+	case err != nil && !errors.As(err, &violation):
+		return answer, []string{fmt.Sprintf("ValidateDocument: unexpected error %v", err)}
+	case (violation != nil) != (report.Conclusion == ConclusionNonConformant):
+		problems = append(problems, fmt.Sprintf("ValidateDocument's error %v disagrees with its report's conclusion %s", err, report.Conclusion))
+	}
+	switch report.Conclusion {
+	case ConclusionConformant:
+		answer.Conclusion = corpus.Conformant
+	case ConclusionNonConformant:
+		answer.Conclusion = corpus.NonConformant
+	default:
+		answer.Conclusion = corpus.Decline
+	}
+	answer.Violated = report.Violated
+	return answer, problems
+}
+
+// judgeFixture holds a validity fixture to ValidateDocument's report, as the
+// Judging table states, and holds ParseDocument followed by
+// Document.Validate to the same conclusion where the report decides one: a
+// conforming text is accepted, and a violating one is not.
 func judgeFixture(cs corpus.Case) corpus.Judgment {
 	var tt conformanceTest
 	if err := json.Unmarshal(cs.Raw, &tt); err != nil {
@@ -281,84 +280,23 @@ func judgeFixture(cs corpus.Case) corpus.Judgment {
 	if err != nil {
 		return fail("invalid fixture carriage: %v", err)
 	}
-	var problems []string
-	doc, parseErr := ParseDocument(data)
-	var report ValidationReport
-	var validateErr error
-	if parseErr == nil {
-		report, validateErr = doc.Validate()
-	}
-	// This validator decides every document rule the corpus exercises, so a
-	// rule a failing fixture names that comes back inconclusive is a
-	// regression, not a capability it lacks.
-	if !tt.Valid && parseErr == nil && validateErr == nil {
-		for _, rule := range tt.Violates {
-			if report.Evidence[rule] == EvidenceInconclusive {
-				problems = append(problems, rule+" was left inconclusive")
-			}
+	answer, problems := documentAnswer(data)
+	if answer.Conclusion != corpus.Decline && len(problems) == 0 {
+		doc, err := ParseDocument(data)
+		if err == nil {
+			_, err = doc.Validate()
+		}
+		switch accepted := err == nil; {
+		case accepted && answer.Conclusion == corpus.NonConformant:
+			problems = append(problems, "ParseDocument and Document.Validate accepted a text ValidateDocument concludes non-conformant")
+		case !accepted && answer.Conclusion == corpus.Conformant:
+			problems = append(problems, fmt.Sprintf("ParseDocument and Document.Validate refused a text ValidateDocument concludes conformant: %v", err))
 		}
 	}
-	switch actual := parseErr == nil && validateErr == nil; {
-	case actual == tt.Valid:
-	case tt.Valid && parseErr != nil:
-		problems = append(problems, fmt.Sprintf("expected valid, got parse error: %v", parseErr))
-	case tt.Valid:
-		problems = append(problems, fmt.Sprintf("expected valid, got validate error: %v", validateErr))
-	default:
-		problems = append(problems, "expected invalid, but the SDK accepted the document")
-	}
-	problems = append(problems, reportAgreesWithFixture(data, tt)...)
 	if len(problems) > 0 {
 		return fail("%s", strings.Join(problems, "; "))
 	}
-	return pass("")
-}
-
-// reportAgreesWithFixture holds ValidateDocument's report to the same
-// fixture.
-func reportAgreesWithFixture(data []byte, tt conformanceTest) []string {
-	doc, report, err := ValidateDocument(data)
-	refused := isRefusal(err)
-	var violation *ValidationError
-	if err != nil && !refused && !errors.As(err, &violation) {
-		return []string{fmt.Sprintf("ValidateDocument: unexpected error %v", err)}
-	}
-	var problems []string
-	if refused {
-		if residue := refusalResidue(doc, report, err); len(residue) > 0 {
-			problems = append(problems, "ValidateDocument's version refusal came with "+strings.Join(residue, ", "))
-		}
-	} else if (violation != nil) != (report.Conclusion == ConclusionNonConformant) {
-		problems = append(problems, fmt.Sprintf("ValidateDocument error %v disagrees with its report's conclusion %s", err, report.Conclusion))
-	}
-	if tt.Valid {
-		if refused {
-			problems = append(problems, fmt.Sprintf("ValidateDocument refused a conforming case: %v", err))
-		} else if report.Conclusion == ConclusionNonConformant {
-			problems = append(problems, fmt.Sprintf("ValidateDocument established violations %v for a conforming case", report.Violated))
-		}
-		return problems
-	}
-	if !refused && report.Conclusion != ConclusionNonConformant {
-		problems = append(problems, fmt.Sprintf("ValidateDocument concluded %s for a violating case", report.Conclusion))
-	}
-	// A version refusal is no validity verdict: a violating case, whose
-	// fixture names the document rules it violates, expects a non-conformant
-	// conclusion.
-	if refused {
-		return append(problems, fmt.Sprintf("ValidateDocument refused a violating case the fixture holds to document rules: %v", err))
-	}
-	for _, rule := range tt.Violates {
-		if report.Evidence[rule] != EvidenceViolated {
-			problems = append(problems, fmt.Sprintf("expected %s violated; its evidence is %q (violated: %v)", rule, report.Evidence[rule], report.Violated))
-		}
-	}
-	for _, rule := range tt.NotViolated {
-		if report.Evidence[rule] == EvidenceViolated {
-			problems = append(problems, fmt.Sprintf("%s reported violated; the fixture lists it notViolated (violated: %v)", rule, report.Violated))
-		}
-	}
-	return problems
+	return corpus.JudgeFixture(cs.Raw, answer, rootProfile)
 }
 
 type documentCarriage struct {
@@ -371,18 +309,12 @@ func (g documentCarriage) bytes() ([]byte, error) {
 	return conformanceDocumentBytes(conformanceTest{Document: g.Document, DocumentText: g.DocumentText, DocumentBase64: g.DocumentBase64})
 }
 
-// judgeDocument executes validate-document through ValidateDocument, reading
-// its whole response: every case declares the 0.2 line or no version, so a
-// refusal fails it; a conclusion agrees with its error; and a conclusion
-// names the text this SDK applies.
-func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
+// judgeDocument executes validate-document through ValidateDocument, under
+// profile p.
+func judgeDocument(cs corpus.Case, p corpus.Profile) corpus.Judgment {
 	var s struct {
 		Given    documentCarriage `json:"given"`
-		Expected struct {
-			Outcome          string   `json:"outcome"`
-			Violates         []string `json:"violates"`
-			NamesAppliedText bool     `json:"namesAppliedText"`
-		} `json:"expected"`
+		Expected json.RawMessage  `json:"expected"`
 	}
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
 		return fail("unreadable scenario: %v", err)
@@ -391,102 +323,26 @@ func (r rootRun) judgeDocument(cs corpus.Case) corpus.Judgment {
 	if err != nil {
 		return fail("%v", err)
 	}
-	_, report, err := ValidateDocument(data)
-	if isRefusal(err) {
-		return fail("version-refusal; expected %s", s.Expected.Outcome)
+	answer, problems := documentAnswer(data)
+	if len(problems) > 0 {
+		return fail("%s", strings.Join(problems, "; "))
 	}
-	var violation *ValidationError
-	if err != nil && !errors.As(err, &violation) {
-		return fail("ValidateDocument: unexpected error %v", err)
-	}
-	if (violation != nil) != (report.Conclusion == ConclusionNonConformant) {
-		return fail("the error %v disagrees with the conclusion %s", err, report.Conclusion)
-	}
-	switch want := s.Expected.Outcome; {
-	case want == "interpreted":
-		if report.Conclusion == "" {
-			return fail("no conclusion")
-		}
-	case want == "conformant" && report.Conclusion == ConclusionConformanceUndetermined:
-	case string(report.Conclusion) != want:
-		return fail("concluded %s; expected %s", report.Conclusion, want)
-	}
-	for _, rule := range s.Expected.Violates {
-		if report.Evidence[rule] != EvidenceViolated {
-			return fail("%s is %q, not violated (violated: %v)", rule, report.Evidence[rule], report.Violated)
-		}
-	}
-	if s.Expected.NamesAppliedText {
-		if declared, ok := declaredVersion(data); ok && includedPrerelease(declared) {
-			// A conclusion on a document declaring an explicitly included
-			// prerelease names that prerelease (OBI-T-08). The corpus holds
-			// no text for a draft, so there is no text to verify.
-			if named, err := parseSemverStrict(report.Release); err != nil || compareSemver(named, mustSemver(declared)) != 0 {
-				return fail("names %q; a conclusion on a document declaring the prerelease %q names that prerelease", report.Release, declared)
-			}
-			return pass(string(report.Conclusion))
-		}
-		return judgeNaming(report, appliedRelease, appliedRevision, r.verified, r.unverified, corpus.Required())
-	}
-	return pass(string(report.Conclusion))
+	return corpus.JudgeDocument(s.Expected, answer, p)
 }
 
-// judgeNaming holds a conclusion to the applied text this SDK declares: the
-// name it gives is compared first, always, and then the text it names must
-// have been verified.
-func judgeNaming(report ValidationReport, release, revision string, verified bool, unverified string, required bool) corpus.Judgment {
-	if report.Release != release || report.Revision != revision {
-		return fail("names %q@%q; the applied text is %q@%q", report.Release, report.Revision, release, revision)
+// scenarioDocument decodes a scenario's document with ValidateDocument, as a
+// caller holding the text would. Every such document declares the 0.2 line
+// and conforms, so a refusal, or a document the model does not carry, is a
+// failure.
+func scenarioDocument(document json.RawMessage) (*Document, error) {
+	doc, _, err := ValidateDocument(document)
+	switch {
+	case isRefusal(err):
+		return nil, fmt.Errorf("refused a document the 0.2 line's rules govern: %v", err)
+	case doc == nil:
+		return nil, fmt.Errorf("the model does not carry the document: %v", err)
 	}
-	if !verified {
-		if required {
-			return fail("UNVERIFIED applied text: %s", unverified)
-		}
-		return corpus.Judgment{Category: corpus.Unverified, Detail: unverified}
-	}
-	return pass(string(report.Conclusion))
-}
-
-// includedPrerelease reports whether v is a prerelease this SDK names
-// explicitly in supportedPrereleases.
-func includedPrerelease(v string) bool {
-	parsed, err := parseSemverStrict(v)
-	if err != nil || len(parsed.preRelease) == 0 {
-		return false
-	}
-	return slices.ContainsFunc(supportedPrereleases, func(p string) bool {
-		return compareSemver(parsed, mustSemver(p)) == 0
-	})
-}
-
-func mustSemver(v string) semver {
-	parsed, err := parseSemverStrict(v)
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}
-
-// continuesWithNonConformant is this adapter's declaration for the core:
-// ValidateDocument returns the document with a non-conformant report
-// whenever the model carries it (its fifth result shape), so a tool built on
-// it continues with every non-conformant document it can carry (§10.3).
-// Holding the core to that declaration, an omission because no document
-// came back fails: the model carries every document of the corpus.
-const continuesWithNonConformant = true
-
-// noDocument judges a case for which ValidateDocument returned no document:
-// a failure for a conformant document, and for a non-conformant one too,
-// since the core declares it continues with every non-conformant document
-// the model carries.
-func noDocument(nonConformant []string, err error) corpus.Judgment {
-	if len(nonConformant) == 0 {
-		return fail("the model does not carry a conformant document (%v)", err)
-	}
-	if !continuesWithNonConformant {
-		return omit("this SDK does not continue with a non-conformant document")
-	}
-	return fail("ValidateDocument returned no document for this non-conformant document, though the core declares it continues with every non-conformant document the model carries: %v", err)
+	return doc, nil
 }
 
 // judgeResolve executes resolve-operation: the model ValidateDocument
@@ -494,46 +350,32 @@ func noDocument(nonConformant []string, err error) corpus.Judgment {
 func judgeResolve(cs corpus.Case) corpus.Judgment {
 	var s struct {
 		Given struct {
-			Document      json.RawMessage `json:"document"`
-			NonConformant []string        `json:"nonConformant"`
-			Name          string          `json:"name"`
+			Document json.RawMessage `json:"document"`
+			Name     string          `json:"name"`
 		} `json:"given"`
 		Expected struct {
 			Outcome      string   `json:"outcome"`
 			OperationKey string   `json:"operationKey"`
 			BindingKeys  []string `json:"bindingKeys"`
-			KeyMatch     string   `json:"keyMatch"`
-			AliasMatch   string   `json:"aliasMatch"`
 		} `json:"expected"`
 	}
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
 		return fail("unreadable scenario: %v", err)
 	}
-	doc, _, err := ValidateDocument(s.Given.Document)
-	if isRefusal(err) {
-		return fail("version-refusal; expected %s", s.Expected.Outcome)
-	}
-	if doc == nil {
-		return noDocument(s.Given.NonConformant, err)
+	doc, err := scenarioDocument(s.Given.Document)
+	if err != nil {
+		return fail("%v", err)
 	}
 	key, _, found := doc.ResolveOperation(s.Given.Name)
 	switch s.Expected.Outcome {
-	case "collision":
-		role := "no single resolution"
-		switch {
-		case found && key == s.Expected.KeyMatch:
-			role = "key match " + key
-		case found && key == s.Expected.AliasMatch:
-			role = "alias match " + key
-		case found:
-			return fail("resolved to %q, neither candidate", key)
-		}
-		return corpus.Judgment{Category: corpus.Advisory, Detail: role}
 	case "not-found":
 		if found {
 			return fail("resolved to %q; expected not-found", key)
 		}
 		return pass("not-found")
+	case "resolved":
+	default:
+		return fail("unknown expected outcome %q", s.Expected.Outcome)
 	}
 	if !found {
 		return fail("not-found; expected %q", s.Expected.OperationKey)
@@ -563,52 +405,14 @@ type keyedFailure struct{ signature, reason string }
 // follows the corpus of the text it applies.
 var expectedFailures = map[string]keyedFailure{}
 
-func concludeGiven(cs corpus.Case) (map[string]RuleEvidenceStatus, string, error) {
-	var s struct {
-		Given struct {
-			Evidence map[string]RuleEvidenceStatus `json:"evidence"`
-		} `json:"given"`
-		Expected struct {
-			Conclusion string `json:"conclusion"`
-		} `json:"expected"`
-	}
-	if err := json.Unmarshal(cs.Raw, &s); err != nil {
-		return nil, "", fmt.Errorf("unreadable scenario: %v", err)
-	}
-	return s.Given.Evidence, s.Expected.Conclusion, nil
-}
-
-// judgeConclude executes conclude-conformance through ConcludeConformance.
-// The action supplies the evidence: its reported conclusion must match that
-// evidence exactly (§10.4). Withholding a report is not incomplete evidence.
-func judgeConclude(cs corpus.Case) corpus.Judgment {
-	evidence, expected, err := concludeGiven(cs)
-	if err != nil {
-		return fail("%v", err)
-	}
-	report := ConcludeConformance(evidence)
-	if string(report.Conclusion) != expected {
-		return fail("concluded %s; expected %s", report.Conclusion, expected)
-	}
-	return pass(string(report.Conclusion))
-}
-
-// sentinelStarter starts a check-dependency-kind action's retrieval
-// sentinels; a control replaces it with one that cannot start.
-var sentinelStarter = startSentinels
-
 // judgeKind executes check-dependency-kind: the model ValidateDocument
-// returns and Dependency.AcceptsKind, with the kind compared never retrieved:
-// a retrieval sentinel's channel is observed for the whole action, loading
-// included.
+// returns and Dependency.AcceptsKind.
 func judgeKind(cs corpus.Case) corpus.Judgment {
 	var s struct {
 		Given struct {
-			Document      json.RawMessage `json:"document"`
-			NonConformant []string        `json:"nonConformant"`
-			Dependency    string          `json:"dependency"`
-			Binding       string          `json:"binding"`
-			Sentinels     []string        `json:"retrievalSentinels"`
+			Document   json.RawMessage `json:"document"`
+			Dependency string          `json:"dependency"`
+			Binding    string          `json:"binding"`
 		} `json:"given"`
 		Expected struct {
 			Outcome string `json:"outcome"`
@@ -617,88 +421,21 @@ func judgeKind(cs corpus.Case) corpus.Judgment {
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
 		return fail("unreadable scenario: %v", err)
 	}
-	data := []byte(s.Given.Document)
-	var observe *sentinels
-	if len(s.Given.Sentinels) > 0 {
-		var err error
-		observe, err = sentinelStarter(s.Given.Sentinels)
-		if err != nil {
-			// An adapter that cannot observe retrieval cannot judge the case,
-			// and skipping it would hide that: the case fails.
-			return fail("the retrieval sentinels cannot start here: %v", err)
-		}
-		data = observe.substitute(data)
+	doc, err := scenarioDocument(s.Given.Document)
+	if err != nil {
+		return fail("%v", err)
 	}
-	meets, refused, carried, err := func() (bool, bool, bool, error) {
-		doc, _, err := ValidateDocument(data)
-		if isRefusal(err) {
-			return false, true, false, nil
-		}
-		if doc == nil {
-			return false, false, false, err
-		}
-		binding := doc.Bindings[s.Given.Binding]
-		return doc.Dependencies[s.Given.Dependency].AcceptsKind(doc.Sources[binding.Source].Kind), false, true, nil
-	}()
-	if observe != nil {
-		if seen := observe.stop(); seen != "" {
-			return fail("%s", seen)
-		}
-	}
-	switch {
-	case refused:
-		return fail("version-refusal; expected %s", s.Expected.Outcome)
-	case !carried:
-		return noDocument(s.Given.NonConformant, err)
+	dependency, declared := doc.Dependencies[s.Given.Dependency]
+	binding, bound := doc.Bindings[s.Given.Binding]
+	if !declared || !bound {
+		return fail("the document has no dependency %q or no binding %q", s.Given.Dependency, s.Given.Binding)
 	}
 	got := "does-not-meet"
-	if meets {
+	if dependency.AcceptsKind(doc.Sources[binding.Source].Kind) {
 		got = "meets"
 	}
 	if got != s.Expected.Outcome {
 		return fail("%s; expected %s", got, s.Expected.Outcome)
 	}
 	return pass(got)
-}
-
-// successor returns the SemVer numeric identifier one greater than n.
-func successor(n string) string {
-	value, _ := new(big.Int).SetString(n, 10)
-	return value.Add(value, big.NewInt(1)).String()
-}
-
-// The gates are judged against SupportedVersions' declaration: the authoring
-// version and a later patch of its line are administered; the next major
-// and the next minor are not. End to end, a poisoned case
-// gated out is never run, and a gated-in one is.
-func TestConformanceGates(t *testing.T) {
-	authoring, _ := parseSemverStrict(AuthoringVersion)
-	nextMajor := successor(authoring.major) + ".0.0"
-	nextMinor := authoring.major + "." + successor(authoring.minor) + ".0"
-	higherPatch := authoring.major + "." + authoring.minor + "." + successor(authoring.patch)
-	declaration := sdkDeclaration()
-	for v, want := range map[string]bool{AuthoringVersion: true, higherPatch: true, nextMajor: false, nextMinor: false, AuthoringVersion + "-rc.1": false} {
-		if got := declaration.Supports(v); got != want {
-			t.Errorf("declaration supports %s: %v, want %v", v, got, want)
-		}
-		// The declaration and the version decision agree on each.
-		if refused := isRefusal(CheckVersion(v)); refused == want {
-			t.Errorf("CheckVersion(%s) refused %v, but the declaration supports it %v", v, refused, want)
-		}
-	}
-
-	dir := t.TempDir()
-	fixture := fmt.Sprintf(`{"rule": "OBI-D-02", "section": "10.2", "description": "gates", "tests": [
-		{"description": "outside the declaration (poisoned: fails if administered)", "document": {}, "valid": true, "requiresSupports": %q},
-		{"description": "inside the declaration", "document": {}, "valid": false, "requiresSupports": %q}]}`, nextMajor, higherPatch)
-	manifest := `{"files": [{"path": "document/gates.json", "tests": 2}], "scenarioFiles": []}`
-	if err := os.MkdirAll(filepath.Join(dir, "document"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{"document/gates.json": fixture, "manifest.json": manifest} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	runRootCorpus(t, dir)
 }

@@ -1,16 +1,17 @@
-// Package corpus reads the specification's conformance corpus for this SDK's
-// corpus adapters, and judges what can be judged without the SDK: version
-// gates against a support declaration, value-result expectations against
-// observed verdicts and a declared profile, and the count of cases each
-// module executed or omitted. It imports nothing from the SDK, so the core
-// module's own tests and the schemaeval module's tests can both use it
-// without an import cycle: the core's tests execute the actions that need no
-// schema evaluator, and schemaeval's tests execute the value actions under
-// the project's ECMA-262 evaluator.
+// Package corpus reads the specification's core conformance corpus for this
+// SDK's corpus adapters, and judges what can be judged without the SDK: an
+// answer against what a case says the document means, under the capability
+// profile the adapter declares, as the corpus's Judging table states; and
+// the count of cases each module executed or omitted. It imports nothing
+// from the SDK, so the core module's own tests and the schemaeval module's
+// tests can both use it without an import cycle: the core's tests execute
+// the actions that need no schema evaluator, and schemaeval's tests execute
+// the value actions under the project's ECMA-262 evaluator.
 //
-// It reads the validity fixtures and the scenarios, in format
-// openbindings.core-tool-scenarios@2, the format of the corpus of the text
-// this SDK applies; a scenario file in any other format is refused.
+// It reads the validity fixtures in document/ and the scenarios in
+// scenarios/, in format openbindings.core-scenarios@3, the format of the
+// corpus of the text this SDK applies; a scenario file in any other format
+// is refused.
 package corpus
 
 import (
@@ -18,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -28,7 +28,7 @@ import (
 // Formats of a case.
 const (
 	FormatFixture = "fixture"
-	FormatV2      = "openbindings.core-tool-scenarios@2"
+	FormatV3      = "openbindings.core-scenarios@3"
 )
 
 // ActionValidity is the action of a validity fixture.
@@ -38,26 +38,22 @@ const ActionValidity = "validity"
 const (
 	ModuleRoot       = "root"
 	ModuleSchemaeval = "schemaeval"
-	ModuleNone       = "none"
 )
 
 // Case is one corpus case: a validity fixture test or a scenario.
 type Case struct {
 	// ID is the scenario ID, or for a fixture test its file and position
-	// (document/OBI-D-12.json#/tests/40).
-	ID          string
-	File        string
+	// (document/OBI-12.json#/tests/40).
+	ID   string
+	File string
+	// Rule is the rule a fixture file covers, and Section the section its
+	// file cites; a scenario file cites a section alone.
 	Rule        string
+	Section     string
 	Format      string
 	Action      string
 	Description string
 	Raw         json.RawMessage
-	Gates       Gates
-}
-
-// Gates are a case's version gates.
-type Gates struct {
-	RequiresSupports string `json:"requiresSupports"`
 }
 
 // Corpus is a loaded corpus.
@@ -91,13 +87,14 @@ func Locate(dirs ...string) string {
 func Required() bool { return os.Getenv("OB_CORPUS_REQUIRED") != "" }
 
 type fixtureFile struct {
-	Rule  string            `json:"rule"`
-	Tests []json.RawMessage `json:"tests"`
+	Rule    string            `json:"rule"`
+	Section string            `json:"section"`
+	Tests   []json.RawMessage `json:"tests"`
 }
 
 type scenarioFile struct {
 	Format    string            `json:"format"`
-	Rule      string            `json:"rule"`
+	Section   string            `json:"section"`
 	Scenarios []json.RawMessage `json:"scenarios"`
 }
 
@@ -105,12 +102,13 @@ type caseHeader struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
 	Action      string `json:"action"`
-	Gates
 }
 
-// Load reads every fixture and scenario file under dir, and checks the count
-// of cases in each against the manifest: every case the manifest counts is
-// read, and no other.
+// Load reads every fixture file in document/ and every scenario file in
+// scenarios/ under dir, and checks the count of cases in each against the
+// manifest: every case the manifest counts is read, and no other. A fixture
+// file cites a rule or a section; a scenario file is in format @3, and each
+// scenario names an action some module executes.
 func Load(dir string) (*Corpus, error) {
 	c := &Corpus{Dir: dir, Counts: map[string]int{}}
 	manifest, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
@@ -137,33 +135,34 @@ func Load(dir string) (*Corpus, error) {
 		c.Counts[f.Path] = f.Scenarios
 	}
 	read := map[string]int{}
-	for _, sub := range []string{"document", "tool"} {
-		names, err := jsonFiles(filepath.Join(dir, sub))
+	names, err := jsonFiles(filepath.Join(dir, "document"))
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		rel := "document/" + name
+		data, err := os.ReadFile(filepath.Join(dir, "document", name))
 		if err != nil {
 			return nil, err
 		}
-		for _, name := range names {
-			rel := sub + "/" + name
-			data, err := os.ReadFile(filepath.Join(dir, sub, name))
-			if err != nil {
-				return nil, err
-			}
-			var f fixtureFile
-			if err := json.Unmarshal(data, &f); err != nil {
-				return nil, fmt.Errorf("parsing %s: %w", rel, err)
-			}
-			for i, raw := range f.Tests {
-				var h caseHeader
-				if err := json.Unmarshal(raw, &h); err != nil {
-					return nil, fmt.Errorf("parsing %s test %d: %w", rel, i, err)
-				}
-				c.Cases = append(c.Cases, Case{ID: fmt.Sprintf("%s#/tests/%d", rel, i), File: rel, Rule: f.Rule, Format: FormatFixture,
-					Action: ActionValidity, Description: h.Description, Raw: raw, Gates: h.Gates})
-			}
-			read[rel] = len(f.Tests)
+		var f fixtureFile
+		if err := json.Unmarshal(data, &f); err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", rel, err)
 		}
+		if f.Rule == "" && f.Section == "" {
+			return nil, fmt.Errorf("%s: a fixture file cites a rule or a section, and this one cites neither", rel)
+		}
+		for i, raw := range f.Tests {
+			var h caseHeader
+			if err := json.Unmarshal(raw, &h); err != nil {
+				return nil, fmt.Errorf("parsing %s test %d: %w", rel, i, err)
+			}
+			c.Cases = append(c.Cases, Case{ID: fmt.Sprintf("%s#/tests/%d", rel, i), File: rel, Rule: f.Rule, Section: f.Section,
+				Format: FormatFixture, Action: ActionValidity, Description: h.Description, Raw: raw})
+		}
+		read[rel] = len(f.Tests)
 	}
-	names, err := jsonFiles(filepath.Join(dir, "scenarios"))
+	names, err = jsonFiles(filepath.Join(dir, "scenarios"))
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +177,7 @@ func Load(dir string) (*Corpus, error) {
 		if err := json.Unmarshal(data, &f); err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", rel, err)
 		}
-		if f.Format != FormatV2 {
+		if f.Format != FormatV3 {
 			return nil, fmt.Errorf("%s: unknown format %q", rel, f.Format)
 		}
 		for i, raw := range f.Scenarios {
@@ -190,11 +189,11 @@ func Load(dir string) (*Corpus, error) {
 				return nil, fmt.Errorf("%s: scenario %s repeats one in %s", rel, h.ID, prior)
 			}
 			seen[h.ID] = rel
-			if _, known := designations[h.Action]; !known {
+			if _, known := designations[h.Action]; !known || h.Action == ActionValidity {
 				return nil, fmt.Errorf("%s: scenario %s has unknown action %q", rel, h.ID, h.Action)
 			}
-			c.Cases = append(c.Cases, Case{ID: h.ID, File: rel, Rule: f.Rule, Format: f.Format, Action: h.Action,
-				Description: h.Description, Raw: raw, Gates: h.Gates})
+			c.Cases = append(c.Cases, Case{ID: h.ID, File: rel, Section: f.Section, Format: f.Format, Action: h.Action,
+				Description: h.Description, Raw: raw})
 		}
 		read[rel] = len(f.Scenarios)
 	}
@@ -235,72 +234,50 @@ func jsonFiles(dir string) ([]string, error) {
 }
 
 // designations maps each action to the module that executes it, with the
-// reason a module that does not execute it gives.
+// reason the other module gives for not executing it.
 var designations = map[string]struct{ module, reason string }{
 	ActionValidity:              {ModuleRoot, ""},
 	"validate-document":         {ModuleRoot, ""},
 	"resolve-operation":         {ModuleRoot, ""},
-	"conclude-conformance":      {ModuleRoot, ""},
 	"check-dependency-kind":     {ModuleRoot, ""},
 	"validate-operation-values": {ModuleSchemaeval, "value validation runs in the schemaeval module, under the project's ECMA-262 evaluator"},
 	"check-examples":            {ModuleSchemaeval, "example checking composes value validation, which runs in the schemaeval module"},
-	"derive-form":               {ModuleNone, "this SDK derives no forms from a schema (OBI-T-04 has no executor here)"},
 }
 
 // Designate names the module that executes a case, and the reason the other
-// modules omit it.
+// module omits it.
 func Designate(c Case) (module, reason string) {
 	d := designations[c.Action]
 	return d.module, d.reason
 }
 
-// Declaration is a tool's support declaration (§8.1): the release lines it
-// supports and the prereleases it includes. Gates are judged against it,
-// never against the tool's acceptance or refusal code.
-type Declaration struct {
-	Lines       []string // major.minor, e.g. "0.2" or "1.0"
-	Prereleases []string // "0.2.0-rc.1"
-}
-
-var semverRE = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
-
-// Supports reports whether the declaration includes version v: a release
-// whose major.minor line it declares, build metadata ignored, or a
-// prerelease it declares by its full version.
-func (d Declaration) Supports(v string) bool {
-	m := semverRE.FindStringSubmatch(v)
-	if m == nil {
-		return false
-	}
-	if m[4] != "" {
-		return slices.Contains(d.Prereleases, m[1]+"."+m[2]+"."+m[3]+"-"+m[4])
-	}
-	return slices.Contains(d.Lines, m[1]+"."+m[2])
-}
-
-// Gate reports whether a case's gates exclude it for a tool with declaration
-// d, and why.
-func Gate(g Gates, d Declaration) (reason string, skip bool) {
-	if v := g.RequiresSupports; v != "" && !d.Supports(v) {
-		return "gate: requires a tool applying the text of " + v, true
-	}
-	return "", false
-}
-
-// Profile is the capability profile an adapter declares: every feature the
-// corpus's cases depend on, supported or not.
+// Profile is the capability profile an adapter declares: each feature the
+// cases it executes depend on, supported or not.
 type Profile struct {
 	Features map[string]bool
 }
 
-// Run categories.
+// lacking returns a feature of dependsOn the profile declares unsupported,
+// or "", and a feature it does not declare at all, or "".
+func (p Profile) lacking(dependsOn []string) (unsupported, undeclared string) {
+	for _, f := range dependsOn {
+		supported, declared := p.Features[f]
+		switch {
+		case !declared:
+			return "", f
+		case !supported && unsupported == "":
+			unsupported = f
+		}
+	}
+	return unsupported, ""
+}
+
+// Run categories, as the corpus defines them.
 const (
-	Pass       = "pass"
-	Fail       = "FAIL"
-	Shortfall  = "SHORTFALL"
-	Omitted    = "OMITTED"
-	Advisory   = "ADVISORY"
-	Unverified = "UNVERIFIED"
+	Pass      = "pass"
+	Fail      = "FAIL"
+	Shortfall = "SHORTFALL"
+	Omitted   = "OMITTED"
 )
 
 // Judgment is a case's run category and its detail.
@@ -309,89 +286,267 @@ type Judgment struct {
 	Detail   string
 }
 
-// Observed is one value's observed answer: its verdict (valid,
-// instance-mismatch, or no-verdict) and, for a no-verdict, the reason the
-// adapter reads from the answer (no-contract, undefined-result, or "").
-type Observed struct {
-	Verdict, Reason string
+// Answers software gives: a value's result or an example's, and a text's
+// conclusion. Decline is no answer either way.
+const (
+	Satisfies     = "satisfies"
+	Fails         = "fails"
+	Conformant    = "conformant"
+	NonConformant = "non-conformant"
+	Decline       = "decline"
+)
+
+// expectedResult is one value's expected result in any of its forms.
+type expectedResult struct {
+	Result      string   `json:"result"`
+	OrNoVerdict bool     `json:"orNoVerdict"`
+	DependsOn   []string `json:"dependsOn"`
 }
 
-// JudgeValues judges a value case's observed answers against its expected
-// object. refused says whether the answer was a version refusal, which fails
-// every value case: each declares the 0.2 line or no version.
-func JudgeValues(expected json.RawMessage, refused bool, observed []Observed, p Profile) Judgment {
+func readResult(raw json.RawMessage) (expectedResult, error) {
+	var token string
+	if json.Unmarshal(raw, &token) == nil {
+		return expectedResult{Result: token}, nil
+	}
+	var r expectedResult
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return r, err
+	}
+	if r.Result != Satisfies && r.Result != Fails {
+		return r, fmt.Errorf("an object result holds %q, not satisfies or fails", r.Result)
+	}
+	return r, nil
+}
+
+// judgeResult judges one answer (Satisfies, Fails, or Decline) against one
+// expected result, under the case's dependsOn unless the result replaces it:
+//   - satisfies or fails passes with the same result, or with a decline
+//     where the result carries orNoVerdict or a feature it depends on is
+//     declared unsupported; any other decline is a SHORTFALL, and the other
+//     result FAILs;
+//   - undefined, external, and no-contract pass with any decline, and a
+//     result FAILs.
+func judgeResult(raw json.RawMessage, caseDependsOn []string, answer string, p Profile) Judgment {
+	r, err := readResult(raw)
+	if err != nil {
+		return Judgment{Fail, "unreadable expected result: " + err.Error()}
+	}
+	depends := caseDependsOn
+	if r.DependsOn != nil {
+		depends = r.DependsOn
+	}
+	unsupported, undeclared := p.lacking(depends)
+	if undeclared != "" {
+		return Judgment{Fail, "the profile does not declare " + undeclared}
+	}
+	if answer != Satisfies && answer != Fails && answer != Decline {
+		return Judgment{Fail, fmt.Sprintf("an answer %q that is no result and no decline", answer)}
+	}
+	switch r.Result {
+	case "undefined", "external", "no-contract":
+		if answer != Decline {
+			return Judgment{Fail, fmt.Sprintf("%s where the expected result is %s, which no result answers", answer, r.Result)}
+		}
+		return Judgment{Pass, ""}
+	case Satisfies, Fails:
+		switch {
+		case answer == r.Result:
+			return Judgment{Pass, ""}
+		case answer != Decline:
+			return Judgment{Fail, fmt.Sprintf("%s; expected %s", answer, r.Result)}
+		case r.OrNoVerdict:
+			return Judgment{Pass, "declined where the schema holds a part the result does not depend on"}
+		case unsupported != "":
+			return Judgment{Pass, "declined under " + unsupported + ", declared unsupported"}
+		}
+		return Judgment{Shortfall, fmt.Sprintf("declined where the profile supports every feature the result depends on; expected %s", r.Result)}
+	}
+	return Judgment{Fail, fmt.Sprintf("unknown expected result %q", r.Result)}
+}
+
+// worst combines the judgments of a case's parts, keyed by what each
+// judges: any FAIL fails the case, then any SHORTFALL, and otherwise it
+// passes.
+func worst(parts map[string]Judgment) Judgment {
+	var fails, shortfalls []string
+	keys := make([]string, 0, len(parts))
+	for k := range parts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		switch j := parts[k]; j.Category {
+		case Fail:
+			fails = append(fails, k+": "+j.Detail)
+		case Shortfall:
+			shortfalls = append(shortfalls, k+": "+j.Detail)
+		}
+	}
+	switch {
+	case len(fails) > 0:
+		return Judgment{Fail, strings.Join(fails, "; ")}
+	case len(shortfalls) > 0:
+		return Judgment{Shortfall, strings.Join(shortfalls, "; ")}
+	}
+	return Judgment{Pass, ""}
+}
+
+// JudgeValues judges a validate-operation-values case: answers holds the
+// software's answer for each value, in order, Satisfies, Fails, or Decline.
+func JudgeValues(expected json.RawMessage, answers []string, p Profile) Judgment {
 	var e struct {
-		Results       []json.RawMessage `json:"results"`
-		DependsOn     []string          `json:"dependsOn"`
-		ForbidReasons []string          `json:"forbidReasons"`
+		Results   []json.RawMessage `json:"results"`
+		DependsOn []string          `json:"dependsOn"`
 	}
 	if err := json.Unmarshal(expected, &e); err != nil {
 		return Judgment{Fail, "unreadable expectation: " + err.Error()}
 	}
-	if refused {
-		return Judgment{Fail, "version-refusal; expected value results"}
+	if len(answers) != len(e.Results) {
+		return Judgment{Fail, fmt.Sprintf("%d answers for %d expected results", len(answers), len(e.Results))}
 	}
-	if len(observed) != len(e.Results) {
-		return Judgment{Fail, fmt.Sprintf("%d results for %d expected", len(observed), len(e.Results))}
+	parts := map[string]Judgment{}
+	for i, answer := range answers {
+		parts[fmt.Sprintf("value %02d", i)] = judgeResult(e.Results[i], e.DependsOn, answer, p)
 	}
-	var got []string
-	shortfall, omission := "", ""
-	for i, o := range observed {
-		got = append(got, o.Verdict)
-		if o.Reason != "" && slices.Contains(e.ForbidReasons, o.Reason) {
-			return Judgment{Fail, fmt.Sprintf("value %d: reason %s is forbidden here", i, o.Reason)}
-		}
-		var form struct {
-			Verdict     string   `json:"verdict"`
-			OrNoVerdict bool     `json:"orNoVerdict"`
-			DependsOn   []string `json:"dependsOn"`
-		}
-		var token string
-		if json.Unmarshal(e.Results[i], &token) == nil {
-			form.Verdict = token
-		} else if err := json.Unmarshal(e.Results[i], &form); err != nil {
-			return Judgment{Fail, "unreadable expected result: " + err.Error()}
-		}
-		depends := e.DependsOn
-		if form.DependsOn != nil {
-			depends = form.DependsOn
-		}
-		lacking := ""
-		for _, f := range depends {
-			supported, declared := p.Features[f]
-			if !declared {
-				return Judgment{Fail, "the profile does not declare " + f}
+	j := worst(parts)
+	if j.Category == Pass {
+		j.Detail = fmt.Sprint(answers)
+	}
+	return j
+}
+
+// exampleTokens reads an example's expected claim as the value result it
+// states: a true claim is a value that satisfies its contract, a false one
+// a value that fails it, and no claim a value where no contract is stated.
+var exampleTokens = map[string]string{
+	"true":      Satisfies,
+	"false":     Fails,
+	"undefined": "undefined",
+	"external":  "external",
+	"no-claim":  "no-contract",
+}
+
+// JudgeExamples judges a check-examples case: answers holds, per example
+// and per side the example supplies, the software's answer for that value,
+// Satisfies, Fails, or Decline. A claim's truth is judged as the value's
+// result is: true as satisfies, false as fails, undefined and external as
+// themselves, and no claim as no contract.
+func JudgeExamples(expected json.RawMessage, answers map[string]map[string]string, p Profile) Judgment {
+	var e struct {
+		Examples map[string]map[string]string `json:"examples"`
+	}
+	if err := json.Unmarshal(expected, &e); err != nil {
+		return Judgment{Fail, "unreadable expectation: " + err.Error()}
+	}
+	parts := map[string]Judgment{}
+	for name, sides := range e.Examples {
+		for side, claim := range sides {
+			key := name + " " + side
+			token, known := exampleTokens[claim]
+			if !known {
+				parts[key] = Judgment{Fail, "unknown expected claim " + claim}
+				continue
 			}
-			if !supported {
-				lacking = f
+			answer, given := answers[name][side]
+			if !given {
+				parts[key] = Judgment{Fail, "no answer for a value the example supplies"}
+				continue
 			}
-		}
-		switch {
-		case form.Verdict == "no-verdict" || (lacking != "" && !form.OrNoVerdict):
-			if o.Verdict != "no-verdict" {
-				why := "no verdict is required"
-				if lacking != "" {
-					why = "the profile declares " + lacking + " unsupported, so no verdict is required"
-				}
-				return Judgment{Fail, fmt.Sprintf("value %d: %s; got %s", i, why, o.Verdict)}
-			}
-		case o.Verdict == form.Verdict:
-		case o.Verdict == "no-verdict" && form.OrNoVerdict:
-		case o.Verdict == "no-verdict" && o.Reason == "resource-limit":
-			omission = fmt.Sprintf("value %d: no verdict at a reported resource limit", i)
-		case o.Verdict == "no-verdict":
-			shortfall = fmt.Sprintf("value %d: no verdict where the profile supports every feature the case depends on", i)
-		default:
-			return Judgment{Fail, fmt.Sprintf("value %d: got %s; expected %s", i, o.Verdict, string(e.Results[i]))}
+			raw, _ := json.Marshal(token)
+			parts[key] = judgeResult(raw, nil, answer, p)
 		}
 	}
-	switch {
-	case shortfall != "":
-		return Judgment{Shortfall, fmt.Sprintf("%s %v", shortfall, got)}
-	case omission != "":
-		return Judgment{Omitted, fmt.Sprintf("%s %v", omission, got)}
+	for name, sides := range answers {
+		for side := range sides {
+			if _, expected := e.Examples[name][side]; !expected {
+				parts[name+" "+side] = Judgment{Fail, "an answer for a value the case does not list"}
+			}
+		}
 	}
-	return Judgment{Pass, fmt.Sprint(got)}
+	return worst(parts)
+}
+
+// DocumentAnswer is software's answer about a text: Conformant,
+// NonConformant, or Decline (neither established), and the rules it reports
+// violated.
+type DocumentAnswer struct {
+	Conclusion string
+	Violated   []string
+}
+
+// judgeConformance judges a DocumentAnswer against whether the text
+// conforms: a conforming text passes when concluded conformant, or declined
+// under a dependsOn feature declared unsupported, and is a SHORTFALL when
+// declined otherwise; a non-conforming text passes when concluded
+// non-conformant with every rule of violates violated and none of
+// notViolated. Every other answer FAILs.
+func judgeConformance(conforms bool, violates, notViolated, dependsOn []string, a DocumentAnswer, p Profile) Judgment {
+	unsupported, undeclared := p.lacking(dependsOn)
+	if undeclared != "" {
+		return Judgment{Fail, "the profile does not declare " + undeclared}
+	}
+	if conforms {
+		switch a.Conclusion {
+		case Conformant:
+			return Judgment{Pass, Conformant}
+		case Decline:
+			if unsupported != "" {
+				return Judgment{Pass, "declined under " + unsupported + ", declared unsupported"}
+			}
+			return Judgment{Shortfall, "declined on a conforming text where the profile supports every feature the case depends on"}
+		}
+		return Judgment{Fail, fmt.Sprintf("concluded %s for a conforming text (violated: %v)", a.Conclusion, a.Violated)}
+	}
+	if a.Conclusion != NonConformant {
+		return Judgment{Fail, fmt.Sprintf("concluded %s for a text that does not conform", a.Conclusion)}
+	}
+	var problems []string
+	for _, rule := range violates {
+		if !slices.Contains(a.Violated, rule) {
+			problems = append(problems, fmt.Sprintf("expected %s violated", rule))
+		}
+	}
+	for _, rule := range notViolated {
+		if slices.Contains(a.Violated, rule) {
+			problems = append(problems, fmt.Sprintf("%s reported violated, which the case lists as not violated", rule))
+		}
+	}
+	if len(problems) > 0 {
+		return Judgment{Fail, fmt.Sprintf("%s (violated: %v)", strings.Join(problems, "; "), a.Violated)}
+	}
+	return Judgment{Pass, fmt.Sprintf("%s %v", NonConformant, a.Violated)}
+}
+
+// JudgeFixture judges a validity fixture test, raw, against the answer.
+// Fixtures carry no dependsOn, so a decline on a conforming text is a
+// SHORTFALL.
+func JudgeFixture(raw json.RawMessage, a DocumentAnswer, p Profile) Judgment {
+	var t struct {
+		Valid       *bool    `json:"valid"`
+		Violates    []string `json:"violates"`
+		NotViolated []string `json:"notViolated"`
+	}
+	if err := json.Unmarshal(raw, &t); err != nil || t.Valid == nil {
+		return Judgment{Fail, fmt.Sprintf("unreadable fixture test: %v", err)}
+	}
+	return judgeConformance(*t.Valid, t.Violates, t.NotViolated, nil, a, p)
+}
+
+// JudgeDocument judges a validate-document scenario's expected object
+// against the answer.
+func JudgeDocument(expected json.RawMessage, a DocumentAnswer, p Profile) Judgment {
+	var e struct {
+		Outcome   string   `json:"outcome"`
+		Violates  []string `json:"violates"`
+		DependsOn []string `json:"dependsOn"`
+	}
+	if err := json.Unmarshal(expected, &e); err != nil {
+		return Judgment{Fail, "unreadable expectation: " + err.Error()}
+	}
+	if e.Outcome != Conformant && e.Outcome != NonConformant {
+		return Judgment{Fail, fmt.Sprintf("unknown expected outcome %q", e.Outcome)}
+	}
+	return judgeConformance(e.Outcome == Conformant, e.Violates, nil, e.DependsOn, a, p)
 }
 
 // Ledger records each case's run category in one module's run.
@@ -423,14 +578,13 @@ func (l *Ledger) Outcome(id string) (Judgment, bool) {
 }
 
 // Reconcile checks that module recorded exactly one outcome for every case
-// designated to it, and for module root also every case no module executes,
-// and nothing else. It returns the problems and a per-action count summary.
+// designated to it, and nothing else. It returns the problems and a
+// per-action count summary.
 func (c *Corpus) Reconcile(module string, l *Ledger) (problems []string, summary string) {
 	counts := map[string]map[string]int{}
 	expected := map[string]bool{}
 	for _, cs := range c.Cases {
-		m, _ := Designate(cs)
-		if m != module && !(module == ModuleRoot && m == ModuleNone) {
+		if m, _ := Designate(cs); m != module {
 			continue
 		}
 		expected[cs.ID] = true
@@ -463,8 +617,8 @@ func (c *Corpus) Reconcile(module string, l *Ledger) (problems []string, summary
 	for _, a := range actions {
 		n := counts[a]
 		total += n["cases"]
-		lines = append(lines, fmt.Sprintf("%s: %d cases (pass %d, FAIL %d, OMITTED %d, SHORTFALL %d, ADVISORY %d, UNVERIFIED %d)",
-			a, n["cases"], n[Pass], n[Fail], n[Omitted], n[Shortfall], n[Advisory], n[Unverified]))
+		lines = append(lines, fmt.Sprintf("%s: %d cases (pass %d, FAIL %d, SHORTFALL %d, OMITTED %d)",
+			a, n["cases"], n[Pass], n[Fail], n[Shortfall], n[Omitted]))
 	}
 	return problems, fmt.Sprintf("module %s: %d of the corpus's %d cases\n%s", module, total, len(c.Cases), strings.Join(lines, "\n"))
 }

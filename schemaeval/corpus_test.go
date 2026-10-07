@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,9 +15,11 @@ import (
 
 // This file is the schemaeval module's corpus adapter. It executes the
 // corpus's value actions, validate-operation-values and check-examples, with
-// the core's value contracts under this module's evaluator, which reads patterns as ECMA-262 regular
-// expressions with Unicode semantics (OBI-T-07). The core module's adapter
-// executes every other action; core's tests cannot import this module.
+// the core's value contracts under this module's evaluator, which reads
+// patterns as ECMA-262 regular expressions with Unicode semantics (§5.2),
+// and judges each answer as the corpus's Judging table states. The core
+// module's adapter executes every other action; core's tests cannot import
+// this module.
 
 // valueProfile is the capability profile the core with this evaluator
 // declares for the features the corpus's value cases depend on.
@@ -34,10 +34,13 @@ var valueProfile = corpus.Profile{Features: map[string]bool{
 	"repeated-member-detection":        true,
 	"draft-07-dialect":                 false,
 	"exact-numbers":                    true,
+	// A Go string cannot carry an escaped lone surrogate, another declared
+	// capability limit, so a value holding one gets no verdict.
+	"exact-lone-surrogate-strings": false,
 }}
 
-// caseBound bounds one case: OBI-T-05 leaves termination strategy to the
-// tool, and the corpus's recursive cases are finite.
+// caseBound bounds one case, so a case that does not terminate fails the
+// run rather than hanging it; the corpus's recursive cases are finite.
 const caseBound = 10 * time.Second
 
 func TestConformanceCorpusValues(t *testing.T) {
@@ -67,9 +70,9 @@ func TestConformanceCorpusValues(t *testing.T) {
 			case corpus.Fail:
 				t.Error(j.Detail)
 			case corpus.Shortfall:
-				// OBI-T-07 permits declining, but valueProfile is this
-				// executor's own declaration: no verdict where it declares
-				// every feature the case depends on supported is its defect.
+				// valueProfile is this executor's own declaration: a decline
+				// where it declares every feature the case depends on
+				// supported is its defect.
 				t.Errorf("SHORTFALL against this executor's declared profile: %s", j.Detail)
 			default:
 				t.Skipf("%s: %s", j.Category, j.Detail)
@@ -110,12 +113,11 @@ func judgeValueCase(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgm
 
 type valueScenario struct {
 	Given struct {
-		Document      json.RawMessage   `json:"document"`
-		NonConformant []string          `json:"nonConformant"`
-		Operation     string            `json:"operation"`
-		Side          string            `json:"side"`
-		Values        []json.RawMessage `json:"values"`
-		Resources     []struct {
+		Document  json.RawMessage   `json:"document"`
+		Operation string            `json:"operation"`
+		Side      string            `json:"side"`
+		Values    []json.RawMessage `json:"values"`
+		Resources []struct {
 			URI      string          `json:"uri"`
 			Document json.RawMessage `json:"document"`
 		} `json:"resources"`
@@ -125,44 +127,43 @@ type valueScenario struct {
 
 // contractsOf decodes the document into the model and resolves its value
 // contracts, so ValueContractCompiler.Resolve's own version decision is the
-// one exercised. carried is false when the model cannot carry the document.
-func contractsOf(document json.RawMessage, e openbindings.SchemaEvaluator, resources []openbindings.Resource) (contracts *openbindings.ValueContracts, model *openbindings.Document, carried bool, err error) {
+// one exercised. Every value case's document declares the 0.2 line and
+// conforms, so a document the model does not carry, a refusal, or any other
+// error resolving it fails the case.
+func contractsOf(document json.RawMessage, e openbindings.SchemaEvaluator, resources []openbindings.Resource) (*openbindings.ValueContracts, *openbindings.Document, error) {
 	var doc openbindings.Document
 	if err := json.Unmarshal(document, &doc); err != nil {
-		return nil, nil, false, err
+		return nil, nil, fmt.Errorf("the model does not carry the document: %v", err)
 	}
 	compiler, err := openbindings.NewValueContractCompiler(e, resources...)
 	if err != nil {
-		return nil, &doc, true, err
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), caseBound)
 	defer cancel()
-	contracts, err = compiler.Resolve(ctx, &doc)
-	return contracts, &doc, true, err
+	contracts, err := compiler.Resolve(ctx, &doc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Resolve: %v", err)
+	}
+	return contracts, &doc, nil
 }
 
-// observe names a value contract's answer as the corpus does, with the
-// no-verdict reason the answer carries.
-func observe(err error) (corpus.Observed, error) {
+// answer names a value contract's answer as the corpus does: satisfies for
+// a valid value, fails for an established mismatch, and a decline for any
+// no-verdict, whatever its cause, which the corpus does not test.
+func answer(err error) (string, error) {
 	mismatch, noVerdict := errors.Is(err, openbindings.ErrMismatch), errors.Is(err, openbindings.ErrNoVerdict)
 	switch {
 	case err == nil:
-		return corpus.Observed{Verdict: "valid"}, nil
+		return corpus.Satisfies, nil
 	case mismatch && noVerdict:
-		return corpus.Observed{}, fmt.Errorf("an answer matches both ErrMismatch and ErrNoVerdict: %v", err)
+		return "", fmt.Errorf("an answer matches both ErrMismatch and ErrNoVerdict: %v", err)
 	case mismatch:
-		return corpus.Observed{Verdict: "instance-mismatch"}, nil
+		return corpus.Fails, nil
 	case noVerdict:
-		reason := ""
-		switch {
-		case errors.Is(err, openbindings.ErrNoValueContract):
-			reason = "no-contract"
-		case errors.Is(err, openbindings.ErrUndefined):
-			reason = "undefined-result"
-		}
-		return corpus.Observed{Verdict: "no-verdict", Reason: reason}, nil
+		return corpus.Decline, nil
 	}
-	return corpus.Observed{}, fmt.Errorf("an answer that is neither outcome: %v", err)
+	return "", fmt.Errorf("an answer that is neither outcome: %v", err)
 }
 
 func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment {
@@ -174,20 +175,9 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 	for _, r := range s.Given.Resources {
 		resources = append(resources, openbindings.Resource{URI: r.URI, Document: r.Document})
 	}
-	contracts, _, carried, err := contractsOf(s.Given.Document, e, resources)
-	switch {
-	case !carried && len(s.Given.NonConformant) == 0:
-		return fail("the model does not carry a conformant document: %v", err)
-	case !carried:
-		// The model's decoding is the core's own: it continues with every
-		// non-conformant document the model carries, and the model carries
-		// every document of the corpus, so this is a failure, never a
-		// silent omission.
-		return fail("the model does not carry this non-conformant document: %v", err)
-	case errors.As(err, new(*openbindings.VersionRefusalError)):
-		return corpus.JudgeValues(s.Expected, true, nil, valueProfile)
-	case err != nil:
-		return fail("Resolve: %v", err)
+	contracts, _, err := contractsOf(s.Given.Document, e, resources)
+	if err != nil {
+		return fail("%v", err)
 	}
 	compile := contracts.CompileInput
 	if s.Given.Side == "output" {
@@ -199,37 +189,36 @@ func judgeValues(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment
 	if err != nil {
 		return fail("compiling %s's %s contract: %v", s.Given.Operation, s.Given.Side, err)
 	}
-	var observed []corpus.Observed
+	var answers []string
 	for i, v := range s.Given.Values {
-		o, err := observe(contract.ValidateJSON(ctx, v))
+		a, err := answer(contract.ValidateJSON(ctx, v))
 		if err != nil {
 			return fail("value %d: %v", i, err)
 		}
-		observed = append(observed, o)
+		answers = append(answers, a)
 	}
-	return corpus.JudgeValues(s.Expected, false, observed, valueProfile)
+	return corpus.JudgeValues(s.Expected, answers, valueProfile)
 }
 
 // judgeExamples checks an operation's examples by composing value
-// validation: the core has no example checker. An example value checked
-// against a stated contract holds or is a false claim, or gets no verdict;
-// one where the operation states no contract makes no claim (§5.1).
+// validation: the core has no example checker. Each value an example
+// supplies is validated against the corresponding value contract, where the
+// operation states none as where it does, and the claim's truth is judged as
+// that value's answer (§5.1).
 func judgeExamples(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgment {
 	var s struct {
 		Given struct {
 			Document  json.RawMessage `json:"document"`
 			Operation string          `json:"operation"`
 		} `json:"given"`
-		Expected struct {
-			Examples map[string]map[string]string `json:"examples"`
-		} `json:"expected"`
+		Expected json.RawMessage `json:"expected"`
 	}
 	if err := json.Unmarshal(cs.Raw, &s); err != nil {
 		return fail("unreadable scenario: %v", err)
 	}
-	contracts, model, carried, err := contractsOf(s.Given.Document, e, nil)
-	if !carried || err != nil {
-		return fail("the document's value contracts: %v", err)
+	contracts, model, err := contractsOf(s.Given.Document, e, nil)
+	if err != nil {
+		return fail("%v", err)
 	}
 	key, operation, found := model.ResolveOperation(s.Given.Operation)
 	if !found {
@@ -237,55 +226,27 @@ func judgeExamples(cs corpus.Case, e openbindings.SchemaEvaluator) corpus.Judgme
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), caseBound)
 	defer cancel()
-	got := map[string]map[string]string{}
+	answers := map[string]map[string]string{}
 	for name, example := range operation.Examples {
-		got[name] = map[string]string{}
+		answers[name] = map[string]string{}
 		for _, side := range []struct {
 			name    string
 			value   json.RawMessage
-			schema  openbindings.JSONSchema
 			compile func(context.Context, string) (*openbindings.ValueContract, error)
-		}{{"input", example.Input, operation.Input, contracts.CompileInput}, {"output", example.Output, operation.Output, contracts.CompileOutput}} {
+		}{{"input", example.Input, contracts.CompileInput}, {"output", example.Output, contracts.CompileOutput}} {
 			if side.value == nil {
-				continue
-			}
-			if side.schema == nil {
-				got[name][side.name] = "no-claim"
 				continue
 			}
 			contract, err := side.compile(ctx, key)
 			if err != nil {
 				return fail("compiling %s's %s contract: %v", key, side.name, err)
 			}
-			o, err := observe(contract.ValidateJSON(ctx, side.value))
+			a, err := answer(contract.ValidateJSON(ctx, side.value))
 			if err != nil {
 				return fail("example %s %s: %v", name, side.name, err)
 			}
-			got[name][side.name] = map[string]string{"valid": "holds", "instance-mismatch": "false-claim", "no-verdict": "no-verdict"}[o.Verdict]
+			answers[name][side.name] = a
 		}
 	}
-	var diffs []string
-	names := make([]string, 0, len(got))
-	for name := range got {
-		names = append(names, name)
-	}
-	for name := range s.Expected.Examples {
-		if _, ok := got[name]; !ok {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	names = slices.Compact(names)
-	for _, name := range names {
-		g, w := got[name], s.Expected.Examples[name]
-		for _, side := range []string{"input", "output"} {
-			if g[side] != w[side] {
-				diffs = append(diffs, fmt.Sprintf("%s %s: got %q, expected %q", name, side, g[side], w[side]))
-			}
-		}
-	}
-	if len(diffs) > 0 {
-		return fail("%s", strings.Join(diffs, "; "))
-	}
-	return corpus.Judgment{Category: corpus.Pass, Detail: "composition"}
+	return corpus.JudgeExamples(s.Expected, answers, valueProfile)
 }

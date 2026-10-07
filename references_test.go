@@ -91,8 +91,9 @@ func TestReferences(t *testing.T) {
 // a target exactly where OBI-11 or OBI-12 reports a violation, or where
 // it names a plain name declared more than once, which OBI-13 reports. A
 // string OBI-11 reports as no well-formed URI-reference is not listed at
-// all (§7.1). The documents are the corpus's, when it is found, and a few
-// of the test's own.
+// all (§7.1). The documents are a few of the test's own and, when the corpus
+// is found, those of its fixtures for OBI-11, OBI-12, and OBI-13. Each
+// source must check enough references that the agreement is not vacuous.
 func TestReferences_AgreeWithOBI12(t *testing.T) {
 	documents := map[string][]byte{
 		"references": []byte(referencesDocument),
@@ -102,8 +103,10 @@ func TestReferences_AgreeWithOBI12(t *testing.T) {
 		"plain names": []byte(`{"openbindings":"0.2.0","schemas":{"P":{"$anchor":"n"},"Q":{"$anchor":"n"},"A":{"$anchor":"a","$dynamicAnchor":"a"},"I":{"$id":"https://ex.test/i","$anchor":"inner"}},
 		  "operations":{"op":{"input":{"anyOf":[{"$ref":"#n"},{"$ref":"#a"},{"$ref":"#inner"},{"$ref":"#t%61sk"},{"$dynamicRef":"#n"}]}}}}`),
 	}
-	if dir := findConformanceCorpus(); dir != "" {
-		for _, rule := range []string{"OBI-D-05", "OBI-D-12", "OBI-D-13"} {
+	fromCorpus := map[string]bool{}
+	dir := findConformanceCorpus()
+	if dir != "" {
+		for _, rule := range []string{"OBI-11", "OBI-12", "OBI-13"} {
 			data, err := os.ReadFile(filepath.Join(dir, "document", rule+".json"))
 			if err != nil {
 				t.Fatal(err)
@@ -115,11 +118,12 @@ func TestReferences_AgreeWithOBI12(t *testing.T) {
 			for _, test := range fixture.Tests {
 				if test.Document != nil {
 					documents[rule+"/"+test.Description] = test.Document
+					fromCorpus[rule+"/"+test.Description] = true
 				}
 			}
 		}
 	}
-	checked := 0
+	checked := map[bool]int{} // by whether the document is the corpus's
 	for name, data := range documents {
 		var doc Document
 		if err := json.Unmarshal(data, &doc); err != nil {
@@ -149,17 +153,20 @@ func TestReferences_AgreeWithOBI12(t *testing.T) {
 			if r.Base != "" || r.Value != "" && !strings.HasPrefix(r.Value, "#") || inResource(&doc, r.Location) {
 				continue
 			}
-			checked++
+			checked[fromCorpus[name]]++
 			declaredTwice := strings.Contains(r.Unresolved, "declares more than once")
 			if (r.Target == "") != (violated[r.Location] || declaredTwice) {
 				t.Errorf("%s: %s %q: Target %q (%s), but OBI-11 or OBI-12 violated there: %v", name, r.Location, r.Value, r.Target, r.Unresolved, violated[r.Location])
 			}
 		}
 	}
-	if checked < 25 {
-		t.Fatalf("only %d references checked", checked)
+	if checked[false] < 20 {
+		t.Fatalf("only %d references of the test's own documents checked", checked[false])
 	}
-	t.Logf("%d references in %d documents agree with OBI-12", checked, len(documents))
+	if dir != "" && checked[true] < 25 {
+		t.Fatalf("only %d references of the corpus's documents checked", checked[true])
+	}
+	t.Logf("%d references in %d documents agree with OBI-12 (%d of them the corpus's)", checked[false]+checked[true], len(documents), checked[true])
 }
 
 // A $ref or $dynamicRef string that is not a well-formed URI-reference is not
