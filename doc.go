@@ -93,9 +93,11 @@
 // resolves within it, and reads the evaluator's answer, keeping a panic, a
 // context error, or a malformed answer from becoming a verdict. The
 // evaluator evaluates. The openbindingstest package checks an evaluator
-// against the contract. Core keeps no compiled value contract: the
-// openbindings-go/schemaeval module's examples show a service compiling the
-// contracts it serves at startup, and one compiling on demand.
+// against the contract. Core keeps no compiled value contract, and contracts
+// share no compiled work, so a service compiles each the first time it needs
+// it and keeps it (CompileInput states the cost). The
+// openbindings-go/schemaeval module's examples show that, and a small
+// document's contracts compiled at startup.
 //
 // Where this SDK gives no verdict that a tool with more capability could
 // give, OBI-T-07 permits it, and these are its declared capability limits.

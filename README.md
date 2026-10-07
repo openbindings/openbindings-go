@@ -263,9 +263,13 @@ case err != nil:
 ```
 
 `Validate` takes a Go value, read as encoding/json encodes it. Core keeps no
-compiled contract: a service compiles the contracts it serves at startup, and
-one compiling on demand shares a compile through `singleflight` under a ctx
-no single request owns (see the examples in `schemaeval`). Schemas the
+compiled contract, and contracts share no compiled work: compiling one takes
+time in proportion to the schemas it reaches, a few hundred milliseconds with
+`schemaeval` for a contract reaching a thousand connected schemas. So a
+service compiles each contract the first time it needs it and keeps it,
+sharing a compile through `singleflight` under a ctx no single request owns;
+compiling every contract at startup suits a small document (see the examples
+in `schemaeval`). Schemas the
 document references but does not embed are supplied as `Resource`s to
 `NewValueContractCompiler`; core fetches nothing.
 

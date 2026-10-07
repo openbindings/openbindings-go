@@ -153,9 +153,16 @@ type compiled struct {
 	compares bool
 }
 
-// Validate validates a JSON value. It runs to completion once started: the
-// library takes no context.
-func (c *compiled) Validate(ctx context.Context, value any) (err error) {
+// Validate validates a JSON value. The library takes no context, so when
+// the ctx can end, the evaluation runs on its own goroutine and Validate
+// returns the ctx's error as soon as the ctx is done, without waiting for it.
+// The abandoned evaluation runs on until it finishes, and its answer, a panic
+// included, is discarded: this bounds how long a caller waits, not the work
+// done. Bounding concurrent evaluations is the application's. A ctx that can
+// never end, such as context.Background, evaluates in the calling goroutine.
+// Core hands Validate a value it decoded itself, so an abandoned evaluation
+// reads nothing the caller may change.
+func (c *compiled) Validate(ctx context.Context, value any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -166,6 +173,36 @@ func (c *compiled) Validate(ctx context.Context, value any) (err error) {
 		}
 		checked = substitute(value)
 	}
+	if ctx.Done() == nil {
+		return c.evaluate(checked)
+	}
+	type answer struct {
+		err      error
+		panicked any
+	}
+	// Buffered, so an abandoned evaluation never blocks on sending.
+	answered := make(chan answer, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				answered <- answer{panicked: r}
+			}
+		}()
+		answered <- answer{err: c.evaluate(checked)}
+	}()
+	select {
+	case a := <-answered:
+		if a.panicked != nil {
+			panic(a.panicked)
+		}
+		return a.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// evaluate runs the library's evaluation and reads its answer.
+func (c *compiled) evaluate(checked substitution) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			s, ok := r.(sentinel)

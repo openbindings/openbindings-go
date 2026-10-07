@@ -119,6 +119,13 @@ type ValueContracts struct {
 // as you validate against it. The error matches ErrOperationNotFound, or is
 // the ctx's error; otherwise the *ValueContract is never nil.
 //
+// Compiling takes time in proportion to the schemas the contract reaches,
+// which core bundles and the evaluator compiles from scratch, and contracts
+// share no compiled work: with schemaeval, a contract reaching a thousand
+// connected schemas takes a few hundred milliseconds. A service over a large
+// document compiles each contract the first time it needs it and keeps it,
+// rather than compiling every contract at startup.
+//
 // A value contract is decided as a whole: its standing refusal
 // (ValueContract.Err), core's or the evaluator's, applies to every value,
 // even one whose evaluation would never reach what is refused, such as a
