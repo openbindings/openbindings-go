@@ -46,9 +46,9 @@ import (
 // JSONSchema means the member is absent, which states no value contract in
 // that direction (§5.1). A typed nil held there, such as a nil
 // json.RawMessage or a nil map[string]any, is not absent: it is written as a
-// present null, which is no schema, and OBI-D-02 and OBI-D-10 report it. As an
+// present null, which is no schema, and OBI-02 and OBI-10 report it. As an
 // entry of Document.Schemas, where the entry itself says the member is
-// present, nil is a JSON null, which OBI-D-10 reports. Whether a present value
+// present, nil is a JSON null, which OBI-10 reports. Whether a present value
 // is a well-formed schema is a document rule Validate decides, not this type.
 type JSONSchema any
 
@@ -92,11 +92,13 @@ func Value[T any](member *T) T {
 
 // OperationExample is a named, author-supplied sample of an operation's
 // caller-facing values (§5.1). Each is an author claim that the value
-// validates against the operation's corresponding schema; no document rule
-// checks it (OBI-T-09, OBI-T-10). Input and Output are the example values as
-// JSON: nil when the member is absent, and the bytes `null` when the example
-// supplies the JSON value null, a value like any other. An empty, non-nil
-// json.RawMessage holds no value and encodes as absent.
+// satisfies the operation's corresponding value contract, where one is
+// stated (§5.1, Examples); the claim's truth is outside conformance, so no
+// document rule checks it (§5, Author claims). Input and Output are the
+// example values as JSON: nil when the member is absent, and the bytes
+// `null` when the example supplies the JSON value null, a value like any
+// other. An empty, non-nil json.RawMessage holds no value and encodes as
+// absent.
 type OperationExample struct {
 	Description *string         `json:"description,omitempty"`
 	Input       json.RawMessage `json:"input,omitempty"`
@@ -127,7 +129,7 @@ type Operation struct {
 	Tags        []string `json:"tags,omitzero"`
 	// Aliases are additional names for this operation, equal in standing to its
 	// key. The key plus aliases form one flat, document-unique namespace; every
-	// name resolves to this operation (see ResolveOperation / OBI-T-06).
+	// name identifies this operation (§5.1, Aliases; see ResolveOperation).
 	Aliases []string `json:"aliases,omitzero"`
 
 	Input  JSONSchema `json:"input,omitempty"`
@@ -197,8 +199,8 @@ type Binding struct {
 	// through this binding (§5.3): true claims repetition with the same input,
 	// in context differing at most in ways the effects do not depend on, adds
 	// no intended operation-level effects after the first; false claims some
-	// valid repetition can; nil claims neither. No document rule checks it
-	// (OBI-T-09), and it alone never makes a retry safe.
+	// valid repetition can; nil claims neither. Its truth is outside
+	// conformance (§5, Author claims), and it alone never makes a retry safe.
 	Idempotent *bool `json:"idempotent,omitempty"`
 	// Preference is the author's signed integer preference among bindings of
 	// the same operation, nil when absent (no preference, not zero).
@@ -253,11 +255,11 @@ func (d Dependency) MarshalJSON() ([]byte, error) {
 // AcceptsKind reports whether kind is acceptable at this consumption point:
 // whether a binding whose source has that kind meets the dependency's any-of
 // kind constraint (§5.5). A nil Kinds list declares no constraint and accepts
-// every kind; a present empty list, which OBI-D-02 forbids, accepts none.
-// Comparison is exact string equality, independent of whether a processor
-// supports the kind (OBI-T-01). It checks the kind constraint alone: it says
-// nothing about operation compatibility, provider selection, or whether a
-// binding can be used.
+// every kind; a present empty list, which OBI-02 forbids, accepts none.
+// Two kinds are the same kind exactly when their strings are equal (§6,
+// Comparison), so the comparison is exact, whatever supports the kind. It
+// checks the kind constraint alone: it says nothing about operation
+// compatibility, provider selection, or whether a binding can be used.
 func (d Dependency) AcceptsKind(kind string) bool {
 	if d.Kinds == nil {
 		return true
@@ -285,7 +287,7 @@ func (d Dependency) AcceptsKind(kind string) bool {
 // OpenBindings is the declared specification version. Every other member is
 // absent exactly when its Go value is nil. That includes Operations, which §5
 // requires: the model carries a document that omits it, so Validate can report
-// the omission (OBI-D-02) and re-encoding leaves it omitted.
+// the omission (OBI-02) and re-encoding leaves it omitted.
 type Document struct {
 	OpenBindings string  `json:"openbindings"`
 	Name         *string `json:"name,omitempty"`

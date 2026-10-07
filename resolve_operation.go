@@ -2,13 +2,15 @@ package openbindings
 
 import "slices"
 
-// ResolveOperation resolves a name to an operation, per OBI-T-06.
+// ResolveOperation resolves a name to the operation it identifies: a name
+// identifies an operation exactly when it equals the operation's key or one
+// of its aliases (§5.1, Aliases).
 //
 // An operation's identifiers are its key plus its Aliases; together they form
 // one flat namespace in which key and alias matches are equally authoritative.
-// OBI-D-04 makes that namespace document-unique, so in a conformant document
+// OBI-05 makes that namespace document-unique, so in a conformant document
 // a name resolves to at most one operation. A name that several operations
-// carry, in a document that violates OBI-D-04, names no one operation and does
+// carry, in a document that violates OBI-05, names no one operation and does
 // not resolve: no match is privileged over another. Matching is exact: no
 // trimming, case-folding, or approximation.
 //
@@ -38,8 +40,8 @@ func (d *Document) ResolveOperation(name string) (string, Operation, bool) {
 }
 
 // OperationBindings returns the keys of an operation's bindings: the bindings
-// whose Operation is key, the operation's key (OBI-T-06), sorted. The order is
-// for presentation only; it is not the author's preference
+// whose Operation is key, the operation's key (§5.1, Aliases), sorted. The
+// order is for presentation only; it is not the author's preference
 // (Binding.Preference), and choosing among the bindings is the caller's.
 //
 // It finds by key alone: an alias finds nothing, so a caller holding a name

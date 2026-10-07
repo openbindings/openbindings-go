@@ -36,7 +36,10 @@ alongside this one (at `../spec`), or point `OB_SPEC_CORPUS` at its
 The corpus's value cases run in the `schemaeval` module's tests, under its
 ECMA-262 evaluator, so run `go test ./...` in `schemaeval` as well; each
 module checks that it executed or omitted, with a reason, every case the
-corpus manifest counts for it.
+corpus manifest counts for it. Each judges its answers by the corpus's
+Judging table under the capability profile it declares, and fails a
+SHORTFALL (a decline where it declares every feature the case depends on
+supported) as it fails a FAIL.
 
 Run `go vet ./...` and `go test -race ./...` in `httpdiscovery` as well. Its tests
 cover the HTTP Discovery companion's client and server rules and verify the

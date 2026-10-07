@@ -10,8 +10,8 @@ import (
 
 // maxPatternNesting bounds how deeply a pattern nests groups. Checking a
 // pattern recurses once per level, and patterns never nest near this deep, so
-// a deeper one is core's own limit met (§10.4), not evidence about the
-// pattern.
+// a deeper one is core's own limit met (Reports and Verdicts, in the core
+// package documentation), not evidence about the pattern.
 const maxPatternNesting = 256
 
 // ErrPatternNesting is the error for a pattern nesting groups deeper than

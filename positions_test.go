@@ -56,8 +56,8 @@ func TestFindings_Positions(t *testing.T) {
 	}
 }
 
-// OBI-D-01 findings are positioned at the byte that breaks the input.
-func TestFindings_D01Positions(t *testing.T) {
+// OBI-01 findings are positioned at the byte that breaks the input.
+func TestFindings_OBI01Positions(t *testing.T) {
 	for _, c := range []struct {
 		name, input, want string
 	}{
@@ -69,8 +69,8 @@ func TestFindings_D01Positions(t *testing.T) {
 	} {
 		_, report, _ := ValidateDocument([]byte(c.input))
 		violations := report.Violations()
-		if len(violations) != 1 || violations[0].Rule != "OBI-D-01" || violations[0].Position.String() != c.want {
-			t.Errorf("%s: %+v, want OBI-D-01 at %s", c.name, violations, c.want)
+		if len(violations) != 1 || violations[0].Rule != "OBI-01" || violations[0].Position.String() != c.want {
+			t.Errorf("%s: %+v, want OBI-01 at %s", c.name, violations, c.want)
 		}
 	}
 }

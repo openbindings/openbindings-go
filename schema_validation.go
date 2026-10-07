@@ -22,12 +22,12 @@ import (
 var openbindingsSchemaJSON []byte
 
 // compiledOBISchema is the embedded OBI document schema, compiled once at
-// init, for OBI-D-02 (the document validates against openbindings.schema.json).
+// init, for OBI-02 (the document validates against openbindings.schema.json).
 var compiledOBISchema *jsonschema.Schema
 
 // compiledMetaSchema is the JSON Schema 2020-12 meta-schema, compiled once at
 // init from the validator library's locally embedded copy (never fetched from
-// the network), for OBI-D-10 (every operation schema and schemas entry is
+// the network), for OBI-10 (every operation schema and schemas entry is
 // valid against the 2020-12 meta-schemas).
 var compiledMetaSchema *jsonschema.Schema
 
@@ -53,7 +53,7 @@ func init() {
 	compiledMetaSchema = meta
 }
 
-// validateSchemaWellFormedness records OBI-D-10 violations at one OBI schema
+// validateSchemaWellFormedness records OBI-10 violations at one OBI schema
 // position: the value must be a JSON Schema 2020-12 schema in object or
 // boolean form, and the object form must validate against the 2020-12
 // meta-schemas (which cover subschemas recursively), with format an
@@ -66,8 +66,9 @@ func init() {
 // The meta-schema validator's work grows faster than linearly with a
 // schema's depth, so the subschemas a schema nests deeper than
 // schemaDepthLimit are not checked, which leaves the rule inconclusive there
-// (§10.4). The rest of the schema is checked all the same: the meta-schemas
-// judge each subschema by what it holds, whatever its subschemas hold.
+// (Reports and Verdicts, in the package documentation). The rest of the
+// schema is checked all the same: the meta-schemas judge each subschema by
+// what it holds, whatever its subschemas hold.
 func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, knownValid map[string]bool) {
 	switch v := schema.(type) {
 	case bool:
@@ -80,20 +81,20 @@ func validateSchemaWellFormedness(c *ruleChecks, prefix string, schema any, know
 		checked, cut := cutSchema(v, schemaDepthLimit)
 		problems, err := checkAgainstMetaSchema(checked)
 		if err != nil {
-			c.inconclusive("OBI-D-10", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
+			c.inconclusive("OBI-10", prefix, fmt.Sprintf("could not be checked against the 2020-12 meta-schemas: %v", err))
 			return
 		}
 		for _, problem := range problems {
-			c.violated("OBI-D-10", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
+			c.violated("OBI-10", prefix+jsonpointer.Format(problem.Location...), "not a well-formed JSON Schema 2020-12 schema: "+problem.Message)
 		}
 		switch {
 		case cut != "":
-			c.inconclusive("OBI-D-10", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
+			c.inconclusive("OBI-10", prefix+cut, fmt.Sprintf("this subschema, and any other nested deeper than %d levels, was not checked against the 2020-12 meta-schemas", schemaDepthLimit))
 		case len(problems) == 0 && key != "":
 			knownValid[key] = true
 		}
 	default:
-		c.violated("OBI-D-10", prefix, fmt.Sprintf("a schema is a JSON Schema 2020-12 object or boolean; got %s", jsonTypeName(v)))
+		c.violated("OBI-10", prefix, fmt.Sprintf("a schema is a JSON Schema 2020-12 object or boolean; got %s", jsonTypeName(v)))
 	}
 }
 
@@ -168,7 +169,7 @@ func cutSchema(schema map[string]any, limit int) (map[string]any, string) {
 	return cut(schema, 0), first
 }
 
-// validateAgainstOBISchema records OBI-D-02 evidence: whether the document's
+// validateAgainstOBISchema records OBI-02 evidence: whether the document's
 // generic view validates against openbindings.schema.json.
 //
 // The document schema tells numbers apart only by type and equality, except
@@ -205,8 +206,9 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 		var mismatch bool
 		if problems, mismatch = checked.Outcome(verr); !mismatch {
 			recordSchemaFindings(c, found)
-			// An exceeded resource limit is not evidence of violation (§10.4).
-			c.inconclusive("OBI-D-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
+			// An exceeded resource limit is not evidence of violation
+			// (Reports and Verdicts).
+			c.inconclusive("OBI-02", "", fmt.Sprintf("could not be checked against the document schema: %v", verr))
 			return
 		}
 	}
@@ -246,7 +248,7 @@ func validateAgainstOBISchema(c *ruleChecks, view any) {
 	recordSchemaFindings(c, found)
 }
 
-// schemaFinding is an OBI-D-02 violation: where the failing keyword applies
+// schemaFinding is an OBI-02 violation: where the failing keyword applies
 // and where the violation is, as reference tokens, and what the document
 // schema refused there.
 type schemaFinding struct {
@@ -254,19 +256,19 @@ type schemaFinding struct {
 	message     string
 }
 
-// recordSchemaFindings records OBI-D-02 violations in the order of where the
+// recordSchemaFindings records OBI-02 violations in the order of where the
 // failing keyword applies, by reference token, then of their messages.
 func recordSchemaFindings(c *ruleChecks, found []schemaFinding) {
 	slices.SortStableFunc(found, func(a, b schemaFinding) int {
 		return cmp.Or(slices.Compare(a.applies, b.applies), strings.Compare(a.message, b.message))
 	})
 	for _, f := range found {
-		c.violated("OBI-D-02", jsonpointer.Format(f.at...), "does not validate against the document schema: "+f.message)
+		c.violated("OBI-02", jsonpointer.Format(f.at...), "does not validate against the document schema: "+f.message)
 	}
 }
 
 // namedMaps are the maps whose member names the document schema constrains,
-// with a pattern equal to OBI-D-03's: the keys of the top-level maps and of
+// with a pattern equal to OBI-04's: the keys of the top-level maps and of
 // an operation's examples.
 var namedMaps = [][]string{{"schemas"}, {"operations"}, {"dependencies"}, {"sources"}, {"bindings"}, {"operations", "*", "examples"}}
 

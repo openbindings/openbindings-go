@@ -68,7 +68,8 @@ func ExampleValidateDocument() {
 	}`)
 
 	// ValidateDocument decides every document rule on the exact input bytes
-	// and reports the §10.4 conclusion.
+	// and reports the conformance conclusion (Reports and Verdicts, in the
+	// package documentation).
 	_, report, err := openbindings.ValidateDocument(data)
 	if err != nil {
 		fmt.Println(err)
@@ -91,7 +92,7 @@ func ExampleDocument_Validate_unknownFields() {
 	_ = json.Unmarshal(data, &doc)
 
 	// An unprefixed name the specification does not define is reserved for it
-	// (§12), so the document is non-conformant (OBI-D-02).
+	// (§12), so the document is non-conformant (OBI-02).
 	report, err := doc.Validate()
 	fmt.Println("violation established:", err != nil)
 	for _, finding := range report.Violations() {
@@ -99,7 +100,7 @@ func ExampleDocument_Validate_unknownFields() {
 	}
 	// Output:
 	// violation established: true
-	// OBI-D-02 /unknownFeild does not validate against the document schema: additional property "unknownFeild" not allowed
+	// OBI-02 /unknownFeild does not validate against the document schema: additional property "unknownFeild" not allowed
 }
 
 func ExampleDocument_exact() {
@@ -193,7 +194,7 @@ func ExampleDocument_OperationBindings() {
 	}
 
 	// Resolve the name a caller gave, then find the bindings by the key it
-	// resolves to (OBI-T-06): an alias finds no binding itself.
+	// resolves to (§5.1, Aliases): an alias finds no binding itself.
 	key, _, found := doc.ResolveOperation("tasks.create")
 	fmt.Println(key, found)
 	for _, binding := range doc.OperationBindings(key) {

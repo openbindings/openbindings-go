@@ -15,13 +15,13 @@ import (
 )
 
 // jsonNestingLimit is how deeply encoding/json nests the values it decodes.
-// Input nesting deeper is read in full for OBI-D-01, but the document model
+// Input nesting deeper is read in full for OBI-01, but the document model
 // and the generic view cannot be decoded from it.
 const jsonNestingLimit = 10000
 
 // errNestingLimit is the error for input nested deeper than jsonNestingLimit:
-// a resource limit met, which is no evidence about any rule but OBI-D-01
-// (§10.4).
+// a resource limit met, which is no evidence about any rule but OBI-01
+// (Reports and Verdicts, in the package documentation).
 var errNestingLimit = fmt.Errorf("nested deeper than the decoder reads (%d levels)", jsonNestingLimit)
 
 // errUnexpectedEnd is the syntax error for input that ends inside a value.
@@ -30,8 +30,8 @@ var errUnexpectedEnd = errors.New("unexpected end of JSON input")
 // loneSurrogateError reports a string escape of an isolated UTF-16 surrogate
 // (a lone \uD800, say). RFC 8259 admits it, so it breaks no document rule,
 // but a Go string cannot hold it and encoding/json would replace it with
-// U+FFFD, altering the document; the document model does not carry it
-// (§10.4: a capability this SDK lacks).
+// U+FFFD, altering the document; the document model does not carry it, a
+// capability this SDK lacks (Reports and Verdicts).
 type loneSurrogateError struct {
 	// location is the JSON Pointer of the string value holding it, or of the
 	// object whose member name holds it.
@@ -48,7 +48,7 @@ func (e *loneSurrogateError) Error() string {
 }
 
 // duplicateNameError reports an object that repeats a member name, which
-// OBI-D-01 refuses.
+// OBI-01 refuses.
 type duplicateNameError struct {
 	// location is the JSON Pointer of the object, and at the byte offset of
 	// the repeated name.
@@ -67,12 +67,12 @@ var byteOrderMark = []byte("\xef\xbb\xbf")
 // verifyExactJSON checks what decoding JSON into Go values would otherwise
 // lose without error: that the input is one valid UTF-8 JSON value with no
 // leading byte-order mark, and that no object in it repeats a member name,
-// which OBI-D-01 requires; and that no string escapes a lone UTF-16
+// which OBI-01 requires; and that no string escapes a lone UTF-16
 // surrogate, which the document model cannot carry. encoding/json replaces
 // invalid UTF-8 and lone surrogates and keeps only the last of repeated names.
 // A syntax error is reported before a repeated name, which is reported before
 // a lone surrogate, and all before nesting deeper than the decoder reads: the
-// first two break OBI-D-01, the others only exceed what the SDK can carry.
+// first two break OBI-01, the others only exceed what the SDK can carry.
 func verifyExactJSON(b []byte) error {
 	if !utf8.Valid(b) {
 		return errors.New("not valid UTF-8")
@@ -95,28 +95,35 @@ func verifyExactJSON(b []byte) error {
 	return nil
 }
 
-// declaredVersion reads the version a document declares from its bytes,
-// before any other rule is decided (§8.1, Version declaration): the value of
-// the root object's openbindings member, when the input has no byte-order
-// mark and is one JSON value whose root object has exactly one such member,
-// holding a string. The input is read as §8.1 decodes it: a byte outside a
-// well-formed UTF-8 sequence is a syntax error between tokens and within an
-// escape, and changes only the string that holds it, so one in another
-// member's string leaves the decision unchanged and one in the version or in
-// the member's name leaves the input declaring no version. It reads input of
-// any depth, and input that repeats a member name elsewhere or holds a lone
-// surrogate; OBI-D-01 judges those, under a supported version.
+// declaredVersion returns the version a text declares, which this SDK reads
+// before any rule is decided (§8.1, Version declaration): a text declares a
+// version exactly when it is UTF-8 with no leading byte-order mark and parses
+// under the JSON grammar as an object with exactly one openbindings member
+// whose value is a string that is a SemVer version; that value is the
+// version. Repeated names elsewhere do not stop a declaration, nor does a
+// string escaping a lone UTF-16 surrogate, which the grammar admits: under a
+// supported version, OBI-01 judges the first, and the second is beyond what
+// this SDK carries. Any other text declares no version, an ill-formed byte
+// anywhere in it included. The text is read at any depth.
 func declaredVersion(data []byte) (string, bool) {
-	raw, declared := versionMember(data)
-	if !declared || raw[0] != '"' {
+	if !utf8.Valid(data) || bytes.HasPrefix(data, byteOrderMark) {
+		return "", false
+	}
+	raw, found := versionMember(data)
+	if !found || raw[0] != '"' {
 		return "", false
 	}
 	version, _ := exactString(raw)
+	if !isValidSemver(version) {
+		return "", false
+	}
 	return version, true
 }
 
 // versionMember returns the raw value of the root object's openbindings
-// member, read as declaredVersion reads it, whatever its type.
+// member, whatever its type, when data parses under the JSON grammar as an
+// object with exactly one such member, member names compared after
+// unescaping (§5). It does not check that data is UTF-8.
 func versionMember(data []byte) ([]byte, bool) {
 	scan := exactScan{b: data, readVersion: true}
 	if scan.run() != nil || len(scan.versions) != 1 {

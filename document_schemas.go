@@ -7,9 +7,9 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
-// documentSchemas is what OBI-D-12 and OBI-D-13 read from an OBI document's
+// documentSchemas is what OBI-12 and OBI-13 read from an OBI document's
 // schemas (§5.2, §7): the plain names the document resource declares and the
-// identifiers OBI-D-13 compares. Every schema the document contains is
+// identifiers OBI-13 compares. Every schema the document contains is
 // walked: the schemas at OBI positions (an operation's input or output, an
 // entry of schemas, and every subschema the 2020-12 meta-schema validates as
 // one, the legacy definitions and the schema values of the legacy
@@ -20,10 +20,10 @@ import (
 type documentSchemas struct {
 	// anchors maps each plain name the document resource declares to every
 	// declaration of it, in document order: one per $anchor and one per
-	// $dynamicAnchor whose value declares a name (plainName), as OBI-D-13
+	// $dynamicAnchor whose value declares a name (plainName), as OBI-13
 	// counts them (JSON Schema Core §8.2.2).
 	anchors map[string][]anchorDeclaration
-	// identifiers maps each identifier OBI-D-13 compares to where every
+	// identifiers maps each identifier OBI-13 compares to where every
 	// schema declaring it sits, in document order.
 	identifiers map[string][]*pathNode
 }
@@ -40,7 +40,7 @@ func collectDocumentSchemas(view any) documentSchemas {
 	d := documentSchemas{anchors: map[string][]anchorDeclaration{}, identifiers: map[string][]*pathNode{}}
 	// inResource is true within a schema that has an $id member, a boundary
 	// (§7) whatever the member's value, whose plain names are its own.
-	// identifier is the identifier OBI-D-13 compares for the nearest
+	// identifier is the identifier OBI-13 compares for the nearest
 	// enclosing schema that declares $id, or "" when there is none or it is
 	// not compared.
 	var walk func(node any, at *pathNode, inResource bool, identifier string)
@@ -95,8 +95,8 @@ func collectDocumentSchemas(view any) documentSchemas {
 // declares: the value itself, when it is a string matching, as a whole, the
 // grammar of JSON Schema Core §8.2.2 (a letter or underscore, then any
 // number of letters, digits, hyphens, underscores, and periods, all ASCII).
-// Any other value declares no name, for OBI-D-12, OBI-D-13, or the
-// resolution §7.2 bases on OBI-D-12 (§7.3); OBI-D-10 reports it. Both
+// Any other value declares no name, for OBI-12, OBI-13, or the
+// resolution §7.2 bases on OBI-12 (§7.3); OBI-10 reports it. Both
 // indexes, this file's and the schema space's, read names through it, so
 // they cannot disagree on what a document declares.
 func plainName(value any) (string, bool) {
@@ -115,7 +115,7 @@ func plainName(value any) (string, bool) {
 	return name, true
 }
 
-// comparableID returns the identifier OBI-D-13 compares for an $id, or ""
+// comparableID returns the identifier OBI-13 compares for an $id, or ""
 // when it compares none: a well-formed URI-reference that is an absolute URI,
 // or that resolves against the identifier of the nearest enclosing schema that
 // declares one, itself compared (enclosing), resolved by RFC 3986 §5.2, which

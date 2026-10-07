@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openbindings.com/schema/openbindings-0.2.json",
   "title": "OpenBindings Interface Document (v0.2.0)",
-  "description": "Derived JSON Schema for the OpenBindings interface document. It expresses the structural portion of the specification, and OBI-D-02 applies it as published. A conflict with the prose is an erratum; this schema decides OBI-D-02 until a patch release corrects it (see openbindings.md OBI-D-02).",
+  "description": "Derived JSON Schema for the OpenBindings interface document. It expresses the structural portion of the specification, and OBI-02 applies it as published. A conflict with the prose is an erratum; this schema decides OBI-02 until a patch release corrects it (see openbindings.md OBI-02).",
   "type": "object",
   "required": ["openbindings", "operations"],
   "properties": {
@@ -79,7 +79,7 @@
   "additionalProperties": false,
   "$defs": {
     "JSONSchema": {
-      "description": "JSON Schema 2020-12 schema: object or boolean form. Where $schema appears on the object form, its value is checked here (OBI-D-06), not its placement: in an OBI, JSON Schema permits $schema only at a resource root, a schema that declares $id (openbindings.md §5.2). OBI-D-06 at nested positions and meta-schema validity (OBI-D-10) are prose rules beyond this schema.",
+      "description": "JSON Schema 2020-12 schema: object or boolean form. Where $schema appears on the object form, its value is expressed here (OBI-09), not its placement: in an OBI, JSON Schema permits $schema only at a resource root, a schema that declares $id (openbindings.md §5.2). OBI-09 at nested positions and meta-schema validity (OBI-10) are prose rules beyond this schema.",
       "anyOf": [
         {
           "type": "object",
@@ -149,7 +149,7 @@
     },
     "OperationExample": {
       "type": "object",
-      "description": "An operation example: each of its input and output members is one caller-facing value. Positive author claims: the author asserts that each provided value validates against the corresponding operation schema, where that schema is present (§5.1); the claim's truth is not a document rule. Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
+      "description": "An operation example: each of its input and output members is one caller-facing value. Positive author claims: the author claims that each provided value satisfies the corresponding contract, where a contract is stated (§5.1); the claim's truth is outside conformance. Member presence is distinct from value: an explicitly null member is a provided JSON null value.",
       "properties": {
         "description": {
           "type": "string",
@@ -199,7 +199,7 @@
         "kind": {
           "type": "string",
           "minLength": 1,
-          "description": "The source's kind: exact, opaque, non-empty string used to select an interpretation of the source and its bindings (e.g., example.openapi@1). Never implicitly dereferenced; no version algebra."
+          "description": "The source's kind: exact, opaque, non-empty string naming how the source and its bindings are read (e.g., example.openapi@1). A name, not an address; its spelling implies no version order or compatibility."
         },
         "content": {
           "description": "Optional source content, as any JSON value, read under the source's kind. The core assigns no meaning to its presence, absence, type, or members. Member presence is distinct from value: content carrying JSON null is a present member."
@@ -237,7 +237,7 @@
           "type": "integer",
           "minimum": -9007199254740991,
           "maximum": 9007199254740991,
-          "description": "Author preference signal among bindings of the same operation: higher is more preferred; equal values express no ordering; omission states no preference and is not equivalent to any numeric value. The specification defines no selection algorithm."
+          "description": "Author preference signal among bindings of the same operation: higher is more preferred; equal values express no ordering; omission states no preference and is not equivalent to any numeric value."
         },
         "description": {
           "type": "string",

@@ -21,10 +21,10 @@ var suiteFiles embed.FS
 
 const suiteRoot = "testdata/json-schema-test-suite/"
 
-// suiteExcluded names the suite files and folders that test what OBI-T-07
-// rules out, and why.
+// suiteExcluded names the suite files and folders that test what a value
+// contract's reading (§5.2) rules out, and why.
 var suiteExcluded = map[string]string{
-	"draft2020-12/optional/format":                          "these assert format, which OBI-T-07 makes an annotation; format.json tests that it is one",
+	"draft2020-12/optional/format":                          "these assert format, which §5.2 reads as an annotation; format.json tests that it is one",
 	"draft2020-12/optional/dependencies-compatibility.json": "these evaluate dependencies, which strict 2020-12 does not define, so it constrains nothing",
 }
 

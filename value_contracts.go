@@ -9,7 +9,7 @@ import (
 	"github.com/openbindings/openbindings-go/internal/jsonpointer"
 )
 
-// ValueContractCompiler compiles value contracts (§3; OBI-T-07) with an
+// ValueContractCompiler compiles value contracts (§3, §5.2) with an
 // evaluator the application supplies. It is safe for concurrent use.
 type ValueContractCompiler struct {
 	evaluator SchemaEvaluator
@@ -51,7 +51,7 @@ func NewValueContractCompiler(e SchemaEvaluator, resources ...Resource) (*ValueC
 //
 // A document declaring a well-formed version outside the supported set
 // returns a *VersionRefusalError (CheckVersion), and one declaring no valid
-// version the *ValidationError naming its OBI-D-09 violation; either way it
+// version the *ValidationError naming its OBI-03 violation; either way it
 // is not interpreted. A document beyond this SDK's own limits returns an
 // error matching ErrInconclusive, and one that fails to encode an error
 // matching no category, as does a nil document; Document.Validate states
@@ -78,7 +78,8 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*Va
 	}
 	// Index identifiers once. Repeated identifiers on one operation still
 	// name it; identifiers shared by different operations stay ambiguous,
-	// even if a third operation carries them (OBI-T-06).
+	// even if a third operation carries them: in a document violating
+	// OBI-05, such a name identifies no one operation (§5.1, Aliases).
 	ambiguous := map[string]bool{}
 	addName := func(name, key string) {
 		if ambiguous[name] {
@@ -106,7 +107,7 @@ func (c *ValueContractCompiler) Resolve(ctx context.Context, doc *Document) (*Va
 type ValueContracts struct {
 	compiler *ValueContractCompiler
 	space    *schemaSpace
-	// keys maps each operation identifier to its operation's key (OBI-T-06),
+	// keys maps each operation identifier to its operation's key (§5.1),
 	// and states holds whether each operation states an input and an output
 	// contract.
 	keys   map[string]string
@@ -115,7 +116,7 @@ type ValueContracts struct {
 
 // CompileInput and CompileOutput compile an operation's input or output
 // contract with the evaluator; the operation is named by its key or an alias
-// (OBI-T-06). Every call compiles anew: keep the *ValueContract for as long
+// (§5.1, Aliases). Every call compiles anew: keep the *ValueContract for as long
 // as you validate against it. The error matches ErrOperationNotFound, or is
 // the ctx's error; otherwise the *ValueContract is never nil.
 //
@@ -130,9 +131,10 @@ type ValueContracts struct {
 // (ValueContract.Err), core's or the evaluator's, applies to every value,
 // even one whose evaluation would never reach what is refused, such as a
 // reference to a resource nobody supplied on a branch the value does not
-// take. OBI-T-07 prescribes no evaluation strategy, so this is permitted, and
-// it is a declared capability limit of this SDK: a tool preparing only what
-// each value reaches could give such a value a verdict.
+// take. That is a declared capability limit of this SDK, a no-verdict and
+// never a wrong verdict (Reports and Verdicts, in the package
+// documentation): an implementation preparing only what each value reaches
+// could give such a value a verdict.
 //
 // They run the evaluator's Compile in the calling goroutine and wait for it,
 // past the ctx's end if the evaluator does not stop sooner. They return the

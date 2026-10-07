@@ -45,7 +45,7 @@ func TestResolveOperation_NotFound(t *testing.T) {
 func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 	// A name that is one operation's native key, and a different name that is
 	// another operation's alias, both resolve to their own operation. Key
-	// matches are not privileged: OBI-D-04 guarantees a name belongs to one op.
+	// matches are not privileged: OBI-05 guarantees a name belongs to one op.
 	iface := &Document{
 		Operations: map[string]Operation{
 			"nativeThing": {Description: Present("native")},
@@ -61,7 +61,8 @@ func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 }
 
 // A name that several operations carry, in a document that violates
-// OBI-D-04, resolves to none of them: no match is privileged (OBI-T-06).
+// OBI-05, identifies no one operation, so it resolves to none of them: no
+// match is privileged (§5.1, Aliases).
 func TestResolveOperation_AmbiguousNamesDoNotResolve(t *testing.T) {
 	iface := &Document{Operations: map[string]Operation{
 		"a": {Aliases: []string{"shared"}},
@@ -86,8 +87,8 @@ func TestResolveOperation_NilDocument(t *testing.T) {
 	}
 }
 
-// OperationBindings finds an operation's bindings by its key alone
-// (OBI-T-06), sorted for presentation.
+// OperationBindings finds an operation's bindings by its key alone (§5.1,
+// Aliases), sorted for presentation.
 func TestOperationBindings(t *testing.T) {
 	doc := &Document{
 		Operations: map[string]Operation{
@@ -101,7 +102,7 @@ func TestOperationBindings(t *testing.T) {
 			"createTask.grpc": {Operation: "createTask", Source: "grpc"},
 			"listTasks.http":  {Operation: "listTasks", Source: "http"},
 			// A binding naming no operation key, in a document violating
-			// OBI-D-07, is no operation's binding.
+			// OBI-06, is no operation's binding.
 			"orphan.http": {Operation: "gone", Source: "http"},
 		},
 	}

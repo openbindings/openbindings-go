@@ -395,16 +395,16 @@ func TestDocumentModel_EncodingRefusesWhatDecodingRefuses(t *testing.T) {
 // the model cannot encode exactly is not validated: an escaped lone surrogate
 // the encoding would have replaced with U+FFFD no longer passes a const of
 // U+FFFD. A lone surrogate is valid JSON text a Go string cannot carry, a
-// capability limit of this SDK (§10.4), so the report is undetermined,
-// deciding OBI-D-09 alone, as ValidateDocument decides such bytes, and
-// Resolve's error matches ErrInconclusive.
+// capability limit of this SDK (Reports and Verdicts), so the report is
+// undetermined, deciding OBI-03 alone, as ValidateDocument decides such
+// bytes, and Resolve's error matches ErrInconclusive.
 func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 	iface := Document{OpenBindings: "0.2.0", Operations: map[string]Operation{"op": {
 		Input:    map[string]any{"const": "\ufffd"},
 		Examples: map[string]OperationExample{"e": {Input: json.RawMessage(`"\ud800"`)}},
 	}}}
-	if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
-		t.Fatalf("want an undetermined report deciding OBI-D-09 alone, got %v, %+v", err, report)
+	if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-03"}) {
+		t.Fatalf("want an undetermined report deciding OBI-03 alone, got %v, %+v", err, report)
 	}
 	compiler, _ := NewValueContractCompiler(testEvaluator{})
 	if _, err := compiler.Resolve(context.Background(), &iface); !errors.Is(err, ErrInconclusive) || errors.Is(err, ErrNoVerdict) {
@@ -420,7 +420,7 @@ func TestValidate_HostObjectsEncodeExactly(t *testing.T) {
 // would refuse. Validate returns the encoding error, never a report on
 // another document, except for raw JSON escaping a lone surrogate, which is
 // this SDK's own limit: there Validate reports undetermined, deciding only
-// OBI-D-09.
+// OBI-03.
 func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 	text := func(s string) *string { return &s }
 	selfHolding := Operation{}
@@ -462,8 +462,8 @@ func TestMarshal_RefusesWhatWouldNotDecodeBackUnchanged(t *testing.T) {
 		if data, err := json.Marshal(iface); err == nil {
 			t.Errorf("%s: encoded %s", name, data)
 		}
-		if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-D-09"}) {
-			t.Errorf("%s: want an undetermined report deciding OBI-D-09 alone, got %v, %+v", name, err, report)
+		if report, err := iface.Validate(); err != nil || report.Conclusion != ConclusionConformanceUndetermined || !slices.Equal(decidedRules(report), []string{"OBI-03"}) {
+			t.Errorf("%s: want an undetermined report deciding OBI-03 alone, got %v, %+v", name, err, report)
 		}
 	}
 

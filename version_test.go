@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/openbindings/openbindings-go/internal/corpus"
 )
 
 // The declaration and the version this SDK writes agree: documents built
@@ -35,8 +37,8 @@ func TestParseReleaseLine(t *testing.T) {
 }
 
 // Exercise future declarations without changing the versions this SDK ships.
-// The public refusal decision and the independently judged corpus declaration
-// must both retain the minor, even when that minor is backward-compatible.
+// The refusal decision retains the minor, even when that minor is
+// backward-compatible.
 func TestCheckVersion_MajorMinorLines(t *testing.T) {
 	savedLine, savedPrereleases := supportedLine, supportedPrereleases
 	t.Cleanup(func() { supportedLine, supportedPrereleases = savedLine, savedPrereleases })
@@ -55,13 +57,9 @@ func TestCheckVersion_MajorMinorLines(t *testing.T) {
 			if !ok {
 				t.Fatal("declaration was rejected")
 			}
-			declaration := sdkDeclaration()
 			for version, supported := range tc.versions {
 				if refused := refusedBy(t, version); refused == supported {
 					t.Errorf("CheckVersion(%q) refuses %v, want %v", version, refused, !supported)
-				}
-				if got := declaration.Supports(version); got != supported {
-					t.Errorf("declaration.Supports(%q) = %v, want %v", version, got, supported)
 				}
 			}
 		})
@@ -101,7 +99,8 @@ func TestCheckVersion(t *testing.T) {
 		{name: "higher minor pre-1", version: "0.3.0", refused: true},
 		{name: "a prerelease of a supported release", version: "0.2.0-rc.1", refused: true},
 		{name: "a prerelease of a later patch", version: "0.2.1-rc.1", refused: true},
-		// A text declaring no version is never refused (§8.1).
+		// A text declaring no version is never refused: 0.2's rules govern
+		// it (§8.1, §10).
 		{name: "invalid empty", version: ""},
 		{name: "invalid 1.0", version: "1.0"},
 		{name: "invalid 0.2", version: "0.2"},
@@ -344,5 +343,32 @@ func TestVersionNumbersAreUnbounded(t *testing.T) {
 	b, _ := parseSemverStrict("1.0.0-" + huge + "0")
 	if compareSemver(a, b) >= 0 {
 		t.Fatal("numeric pre-release identifiers compare numerically at any size")
+	}
+}
+
+// The SDK checks its own record of the specification text it applies, apart
+// from any corpus case: appliedRelease and appliedRevision name the text a
+// report names, appliedTextSHA256 pins that revision's openbindings.md, and
+// the embedded document schema must be that revision's (verifyAppliedText).
+// The history checked is that of the specification repository holding the
+// corpus. As the corpus tests do, it fails under OB_CORPUS_REQUIRED (set in
+// CI) and skips otherwise when there is no corpus, or the record cannot be
+// verified against it.
+func TestAppliedText_IsVerified(t *testing.T) {
+	dir := findConformanceCorpus()
+	if dir == "" {
+		if corpus.Required() {
+			t.Fatal("spec conformance corpus not found (OB_CORPUS_REQUIRED is set; set OB_SPEC_CORPUS to the spec repo's conformance dir)")
+		}
+		t.Skip("spec conformance corpus not found")
+	}
+	verified, why := appliedTextVerified(dir)
+	switch {
+	case verified:
+		t.Logf("the applied text %s at %s is verified against %s", appliedRelease, appliedRevision, dir)
+	case corpus.Required():
+		t.Fatalf("the applied text is not verified (OB_CORPUS_REQUIRED is set): %s", why)
+	default:
+		t.Skipf("the applied text is not verified: %s", why)
 	}
 }

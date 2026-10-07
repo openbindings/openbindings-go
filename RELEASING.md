@@ -21,22 +21,16 @@ While the specification release this SDK applies is a working draft,
 CI checks the spec out at that commit. A release of this SDK made after
 that specification release is published names it by `appliedRelease`
 alone: `appliedRevision` becomes `""`, and Go CI checks out the tag
-`v<appliedRelease>` instead. Two checks verify the text a version names only
+`v<appliedRelease>` instead. The SDK verifies the text a version names only
 through its revision today, so before `appliedRevision` is set to `""`:
 
-1. Give the corpus adapter's applied-text verification (`verifyAppliedText`
-   in `conformance_test.go`) a path that verifies a release against its
+1. Give the applied-text verification (`verifyAppliedText` in
+   `conformance_test.go`) a path that verifies a release against its
    published snapshot (the spec's `versions/X.Y.Z/` and its tag), with that
    snapshot's hash pinned beside it. Without one, a release named alone is
    reported unverified, which `OB_CORPUS_REQUIRED` (set in CI) turns into a
-   failure of the scenarios that check the text a conclusion names:
-   T08-S-06, T08-S-07, T08-S-08, and T08-S-10.
-2. Give the spec repository's reference-runner job the same path for its
-   declared-text check. Its `./declared` prints only `-applied RELEASE` for
-   a release named alone, so the job, which requires `-applied` and
-   `-applied-sha256`, fails, and the runner's `-strict` run would fail the
-   same four scenarios.
-3. Then set `appliedRevision` to `""`, and confirm that Go CI checks out
+   failure of `TestAppliedText_IsVerified`.
+2. Then set `appliedRevision` to `""`, and confirm that Go CI checks out
    `v<appliedRelease>` and passes, before the release is tagged.
 
 ## Tags
@@ -81,11 +75,11 @@ entry, which also records each row's final state.
 
 | Row | Met when |
 |---|---|
-| Every rule | Every core document rule, and every tool rule that applies to the SDK, is implemented; CI runs the specification's core corpus with `OB_CORPUS_REQUIRED` against the text the release applies. |
+| Every rule | Every core rule is implemented, and what the SDK computes from a document (an operation's identifiers and bindings, kind comparison, reference resolution, value contracts) follows the section that defines it; CI runs the specification's core corpus with `OB_CORPUS_REQUIRED` against the text the release applies. |
 | Exact model | A document read and written back is unchanged, and the embedded document schema is byte-identical to the specification's at the applied revision. |
 | Only the core | Every exported name in the root module maps to the core specification or a convenience it implies; the root module holds no invocation, synthesis, discovery, or binding-specification code. Separately installed companion modules name their own authority. |
 | One vocabulary | Public names use the specification's terms. |
-| The text named | `appliedRelease` names the release applied, and `appliedRevision` its revision while that release is a working draft (`""` once released), so a validation report names the text it applied (OBI-T-08). |
+| The text named | `appliedRelease` names the release applied, and `appliedRevision` its revision while that release is a working draft (`""` once released), so a validation report names the text it applied. |
 | Parity | The TypeScript SDK matches at the observable OpenBindings boundary: `IMPLEMENTATION_PARITY.md` lists nothing pending. |
 
 Peer rankings are recorded beside the rows, not as one of them: reviewers
@@ -98,9 +92,9 @@ release's CHANGELOG entry states the result.
 
 | Row | State |
 |---|---|
-| Every rule | Met at spec `1d5f08c`. OBI-T-04 and OBI-T-10 do not apply: the SDK derives no forms and checks no examples. |
+| Every rule | Met at spec `349e67b`. The SDK checks no example against its value contract (§5.1) and derives no form from a schema. |
 | Exact model | Met. |
-| Only the core | Met. `openbindingstest` and `schemaeval` serve OBI-T-07's value validation, and `httpdiscovery` names the HTTP Discovery text it applies by revision and SHA-256. |
+| Only the core | Met. `openbindingstest` and `schemaeval` serve value validation (§5.2), and `httpdiscovery` names the HTTP Discovery text it applies by revision and SHA-256. |
 | One vocabulary | Met. `Reference.Target` and `Position` keep their names: a schema reference's target and a finding's place in the input text share no context with the specification's binding target and OBI position. A report names the applied `Release`, and `ErrInconclusive` marks only input beyond this SDK's own limits. |
 | The text named | Met. |
 | Parity | Not met: see `IMPLEMENTATION_PARITY.md`. |

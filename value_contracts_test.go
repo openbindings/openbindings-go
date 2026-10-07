@@ -331,7 +331,7 @@ func TestBundle_SuppliedRootIdentity(t *testing.T) {
 // Dialects go by resource (§5.2, JSON Schema Core §9.3.2). The document
 // resource's is 2020-12, and a $schema in it declares none, so a schema
 // copied with a foreign $schema and no $id is read as 2020-12 and gets a
-// verdict, though the $schema still violates OBI-D-06; so is one below an
+// verdict, though the $schema still violates OBI-09; so is one below an
 // $id resource's root, where $schema is misplaced. A resource whose root
 // names another dialect, and a resource inheriting it, get no verdict:
 // this SDK evaluates 2020-12 alone.
@@ -357,8 +357,8 @@ func TestDialects_ByResource(t *testing.T) {
 		if got := inputVerdict(t, c.document, "op", c.value); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
-		if report := mustValidateDocument(t, c.document); report.Evidence["OBI-D-06"] != EvidenceViolated && !strings.Contains(c.name, "2020-12") {
-			t.Errorf("%s: OBI-D-06 is %s, want violated", c.name, report.Evidence["OBI-D-06"])
+		if report := mustValidateDocument(t, c.document); report.Evidence["OBI-09"] != EvidenceViolated && !strings.Contains(c.name, "2020-12") {
+			t.Errorf("%s: OBI-09 is %s, want violated", c.name, report.Evidence["OBI-09"])
 		}
 	}
 	// The refusal is located at the root that declares the dialect, also
@@ -465,13 +465,13 @@ func TestRefusals(t *testing.T) {
 	}
 }
 
-// OBI-D-12 and a value contract look a same-document reference in the
+// OBI-12 and a value contract look a same-document reference in the
 // document resource up alike (§7.2): a pointer landing on a resource nested
 // inside another resource fails both.
 func TestRefusals_SameDocumentLookupIsShared(t *testing.T) {
 	document := `{"openbindings":"0.2.0","operations":{"op":{"input":{"$ref":"#/schemas/A/properties/x"}}},"schemas":{"A":{"$id":"https://ex.test/a","properties":{"x":{"$id":"https://ex.test/b"}}}}}`
-	if _, report, _ := ValidateDocument([]byte(document)); !slices.Contains(report.Violated, "OBI-D-12") {
-		t.Errorf("OBI-D-12 passes the reference: %+v", report.Findings)
+	if _, report, _ := ValidateDocument([]byte(document)); !slices.Contains(report.Violated, "OBI-12") {
+		t.Errorf("OBI-12 passes the reference: %+v", report.Findings)
 	}
 	if refusal := refusalOf(t, document, "op"); !errors.Is(refusal, ErrUndefined) {
 		t.Errorf("the value contract resolves the reference: %v", refusal)
@@ -548,7 +548,8 @@ func TestCompile_NoValueContract(t *testing.T) {
 	}
 }
 
-// A name two operations carry resolves to neither (OBI-T-06).
+// A name two operations carry, in a document violating OBI-05, identifies no
+// one operation (§5.1, Aliases), so it resolves to neither.
 func TestCompile_AmbiguousName(t *testing.T) {
 	contracts := contractsFor(t, mustDecodeDocument(t, `{"openbindings":"0.2.0","operations":{"a":{"aliases":["x"]},"b":{"aliases":["x"]}}}`))
 	if _, err := contracts.CompileInput(context.Background(), "x"); !errors.Is(err, ErrOperationNotFound) {
@@ -622,7 +623,7 @@ func TestBundle_NamespaceAvoidsTheDocument(t *testing.T) {
 }
 
 // isVersionViolation reports whether err is the *ValidationError naming the
-// OBI-D-09 violation Document.Validate establishes for doc, and nothing else:
+// OBI-03 violation Document.Validate establishes for doc, and nothing else:
 // no other finding, no refusal, and not ErrInconclusive.
 func isVersionViolation(err error, doc *Document) bool {
 	var got, want *ValidationError
@@ -633,7 +634,7 @@ func isVersionViolation(err error, doc *Document) bool {
 		return false
 	}
 	for _, finding := range want.Findings {
-		if finding.Rule == "OBI-D-09" {
+		if finding.Rule == "OBI-03" {
 			return finding == got.Findings[0]
 		}
 	}
@@ -642,13 +643,13 @@ func isVersionViolation(err error, doc *Document) bool {
 
 // Resolve interprets only a document whose declared version it supports: it
 // refuses one outside SupportedVersions (CheckVersion), and for a document
-// declaring no valid version returns its OBI-D-09 violation, not a refusal.
+// declaring no valid version returns its OBI-03 violation, not a refusal.
 func TestResolve_DeclaredVersion(t *testing.T) {
 	compiler, err := NewValueContractCompiler(testEvaluator{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for version, want := range map[string]string{"0.2.7": "resolved", "0.3.0": "refusal", "0.2": "OBI-D-09", "": "OBI-D-09"} {
+	for version, want := range map[string]string{"0.2.7": "resolved", "0.3.0": "refusal", "0.2": "OBI-03", "": "OBI-03"} {
 		doc := &Document{OpenBindings: version, Operations: map[string]Operation{}}
 		_, err := compiler.Resolve(context.Background(), doc)
 		got := "resolved"
@@ -656,7 +657,7 @@ func TestResolve_DeclaredVersion(t *testing.T) {
 		case errors.As(err, new(*VersionRefusalError)) && !errors.Is(err, ErrInconclusive):
 			got = "refusal"
 		case isVersionViolation(err, doc):
-			got = "OBI-D-09"
+			got = "OBI-03"
 		case err != nil:
 			got = err.Error()
 		}

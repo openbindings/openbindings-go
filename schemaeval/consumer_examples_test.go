@@ -283,9 +283,10 @@ func Example_valueContractSnapshot() {
 }
 
 // `ob validate <obi> --examples` checks every example value against its
-// operation's contract (OBI-T-10: a mismatch is a false claim, never an
-// exception to the schema). An absent example member is not checked; a
-// present null is a value like any other.
+// operation's contract (§5.1, Examples: a value that fails it makes the
+// claim false, and an example never changes the value contract its schema
+// states). An absent example member is not checked; a present null is a
+// value like any other.
 func Example_cliValidateExamples() {
 	ctx := context.Background()
 	doc, err := openbindings.ParseDocument([]byte(valuesOBI))

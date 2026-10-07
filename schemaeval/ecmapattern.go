@@ -23,7 +23,8 @@ var errResetCapture = errors.New("a backreference whose capture semantics the en
 
 // maxPatternNesting bounds how deeply a pattern nests groups. Checking and
 // compiling a pattern recurses once per level, and patterns never nest near
-// this deep, so a deeper one is a resource limit met (§10.4), not evidence
+// this deep, so a deeper one is a resource limit met, which gives no verdict
+// (Reports and Verdicts, in the core package documentation), not evidence
 // about the pattern.
 const maxPatternNesting = 256
 

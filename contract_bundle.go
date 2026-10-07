@@ -17,7 +17,8 @@ import (
 // schemaDepthLimit bounds how deeply a copied schema nests subschemas (see
 // schemaDepth). Checking a schema against the meta-schemas grows faster than
 // linearly with that depth, and schemas never nest near this deep, so a
-// deeper one is core's own limit met (§10.4), not evidence about the schema.
+// deeper one is core's own limit met (Reports and Verdicts, in the package
+// documentation), not evidence about the schema.
 const schemaDepthLimit = 256
 
 // bundleSpelling chooses the spellings of what core generates in a bundle:
@@ -115,7 +116,7 @@ func checkUnit(unit unitKey) []unitProblem {
 			case errors.Is(err, schemacompiler.ErrPatternNesting):
 				out = append(out, problem(missingCapability, location, location, fmt.Sprintf("its pattern %q meets %v", pattern, err), true))
 			case err != nil:
-				out = append(out, problem(undefinedResult, location, location, fmt.Sprintf("its pattern %q is not an ECMA-262 regular expression with the u flag (OBI-T-07): %v", pattern, err), false))
+				out = append(out, problem(undefinedResult, location, location, fmt.Sprintf("its pattern %q is not an ECMA-262 regular expression with the u flag (§5.2): %v", pattern, err), false))
 			}
 		}
 	}
@@ -212,7 +213,7 @@ func (r *contractReach) copiedUnits() []unitKey {
 }
 
 // collisions refuses two copied resources that share a name in normal form
-// (core's conservative policy; OBI-D-13 compares characters).
+// (core's conservative policy; OBI-13 compares characters).
 func collisions(units []unitKey) []located {
 	carrier := map[string]*docResource{}
 	var out []located

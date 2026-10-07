@@ -5,7 +5,7 @@
 Implements the 0.2 line of the OpenBindings core specification, applying the
 0.2.0 working draft at the spec revision `appliedRevision` in `version.go`
 names. Validation reports name that text in `ValidationReport.Release` and
-`ValidationReport.Revision` (OBI-T-08). The root module is rebuilt as the
+`ValidationReport.Revision`. The root module is rebuilt as the
 core alone, so code written against 0.1.0 needs the changes listed under
 Changed and Removed.
 
@@ -17,13 +17,15 @@ Changed and Removed.
   project's JSON Schema evaluator for value validation, and the optional
   `httpdiscovery`, the HTTP Discovery companion.
 - **Document validation.** `ParseDocument(data)` checks the input bytes
-  (OBI-D-01), refuses a version outside `SupportedVersions`, applies the document
-  schema (OBI-D-02), and decodes. `ValidateDocument(data)` and
-  `Document.Validate()` decide every document rule, OBI-D-01 through OBI-D-13
+  (OBI-01), refuses a version outside `SupportedVersions`, applies the document
+  schema (OBI-02), and decodes. `ValidateDocument(data)` and
+  `Document.Validate()` decide every document rule, OBI-01 through OBI-13
   (`DocumentRules()`), and return a `ValidationReport`: per-rule `Evidence`,
   the `Violated` and `Inconclusive` rules, `Findings` located by JSON Pointer
   and, from input bytes, by `Position` (offset, line, column), and a
   `Conclusion` of conformant, non-conformant, or conformance-undetermined.
+  The package documentation defines these report terms (Reports and
+  Verdicts); the specification defines conformance and no report.
   `ConcludeConformance(evidence)` concludes from evidence a caller supplies.
 - **Version support.** `SupportedVersions` (`"0.2.x"`) states the versions
   the SDK supports, and `AuthoringVersion` (`"0.2.0"`) the version a document
@@ -32,14 +34,19 @@ Changed and Removed.
   supported set, the refusal that `ParseDocument`, `ValidateDocument`,
   `Document.Validate`, `Document.References`, and
   `ValueContractCompiler.Resolve` return instead of interpreting a document.
+  A text declares a version exactly when it is UTF-8 with no byte-order mark
+  and parses as a JSON object with exactly one `openbindings` member holding
+  a SemVer string (§8.1); any other text, one holding an ill-formed byte
+  anywhere included, declares none and is judged under 0.2's rules, never
+  refused.
 - **`ErrInconclusive`** marks a call that decided nothing because the input
   is beyond the SDK's own limits, such as nesting deeper than it reads. It is
   neither a conformance conclusion nor a value verdict. A document declaring
   no valid version is not inconclusive: `Document.References` and
-  `ValueContractCompiler.Resolve` return its OBI-D-09 violation as a
+  `ValueContractCompiler.Resolve` return its OBI-03 violation as a
   `*ValidationError`.
 - **Operation resolution and binding lookup.** `Document.ResolveOperation(name)`
-  resolves an operation's key or alias (OBI-T-06), and
+  resolves an operation's key or alias (§5.1), and
   `Document.OperationBindings(key)` returns the keys of its bindings, sorted.
 - **Schema references.** `Document.References()` lists every `$ref` and
   `$dynamicRef` in the schemas a document contains, each a `Reference` with
@@ -47,8 +54,8 @@ Changed and Removed.
 - **Dependencies.** `Document.Dependencies` holds named consumption points
   (`Dependency`, §5.5). `Dependency.Kinds` is an optional any-of kind
   constraint, which `Dependency.AcceptsKind(kind)` applies by exact string
-  comparison (OBI-T-01).
-- **Value contracts (OBI-T-07).**
+  comparison (§6).
+- **Value contracts (§5.2).**
   `NewValueContractCompiler(evaluator, resources...)` takes a
   `SchemaEvaluator` the application supplies, and its
   `Resolve(ctx, doc)` resolves a document's schemas into `ValueContracts`,
@@ -86,14 +93,14 @@ Changed and Removed.
   version outside `0.2.x`, gets a `*VersionRefusalError`.
   `MinSupportedVersion`, `MaxTestedVersion`, `SupportedRange`, and
   `IsSupportedVersion` are replaced by `SupportedVersions`,
-  `AuthoringVersion`, and `CheckVersion`. OBI-D-09 checks the declared
+  `AuthoringVersion`, and `CheckVersion`. OBI-03 checks the declared
   version against the SemVer 2.0.0 grammar, where 0.1.0 accepted only
   `MAJOR.MINOR.PATCH` digits.
 - **Types follow the 0.2 document model.**
   - `Interface` is `Document`, and `BindingEntry` is `Binding`. `Document`
     adds `Dependencies` and drops `Roles`, `Security`, and `Transforms`.
   - `Source.Format`, a format token, is `Source.Kind`, an opaque string
-    compared exactly (§6, OBI-T-01). `Source.Location` and `Source.Priority`
+    compared exactly (§6). `Source.Location` and `Source.Priority`
     are removed, and `Source.Content` is a `json.RawMessage`.
   - `BindingEntry.Ref`, `InputTransform`, and `OutputTransform` give way to
     `Binding.Content`, a `json.RawMessage` read under the source's kind, to
@@ -124,21 +131,21 @@ Changed and Removed.
   them; 0.1.0 always escaped them.
 - **`Validate` decides the document rules.**
   `Interface.Validate(opts ...ValidateOption) error`, a shape check, is
-  `Document.Validate() (ValidationReport, error)`, which decides OBI-D-01
-  through OBI-D-13 and takes no options. A nil error means no violation was established, not
+  `Document.Validate() (ValidationReport, error)`, which decides OBI-01
+  through OBI-13 and takes no options. A nil error means no violation was established, not
   conformance: `ValidationReport.Conclusion` carries the conclusion. A member
   the model does not define whose name does not begin with `x-` is an
-  OBI-D-02 violation; 0.1.0 accepted one unless `WithRejectUnknownTypedFields`
+  OBI-02 violation; 0.1.0 accepted one unless `WithRejectUnknownTypedFields`
   was set.
 - **`ValidationError`** carries `Findings []Finding` in place of
   `Problems []string`.
 - **`ErrOperationNotFound`** marks a name that resolves to no one operation
-  (OBI-T-06). `ValueContracts.CompileInput` and `CompileOutput` return
+  (§5.1). `ValueContracts.CompileInput` and `CompileOutput` return
   errors matching it.
 - **Go version and dependencies.** The root module requires Go 1.25.12, not
   Go 1.22, and depends on `github.com/santhosh-tekuri/jsonschema/v6` and
   `golang.org/x/text`, used privately to check the embedded document schema
-  and the JSON Schema 2020-12 meta-schemas (OBI-D-02, OBI-D-10). 0.1.0 had
+  and the JSON Schema 2020-12 meta-schemas (OBI-02, OBI-10). 0.1.0 had
   no dependencies.
 
 ### Removed

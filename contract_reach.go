@@ -71,7 +71,7 @@ func (s *schemaSpace) reach(entry string) *contractReach {
 	r.entry = start
 	resource, isSchema := s.obi.schemas[entry]
 	if !isSchema {
-		r.fail(start, failure{undefinedResult, "the operation's schema there is not a JSON Schema 2020-12 object or boolean (OBI-D-10)"})
+		r.fail(start, failure{undefinedResult, "the operation's schema there is not a JSON Schema 2020-12 object or boolean (OBI-10)"})
 		return r
 	}
 	r.inDocument = resource.document
@@ -179,7 +179,7 @@ func (r *contractReach) lookUp(holder schemaKey, name string) {
 	// The document resource is outermost in the dynamic scope (§7.2), so the
 	// lookup consults its plain name first, and the name captures the
 	// $dynamicRef when its declaration there is a $dynamicAnchor (JSON
-	// Schema Core §8.2.3.2). Its plain names are OBI-D-12's (§7.2, §7.3):
+	// Schema Core §8.2.3.2). Its plain names are OBI-12's (§7.2, §7.3):
 	// one it declares more than once, by either keyword, leaves the capture
 	// undefined (Core §8.2.2), and one past core's index is its limit.
 	switch declarations := r.space.document.anchors[name]; {
@@ -207,7 +207,7 @@ func declaresDynamicAnchor(target schemaTarget, name string) bool {
 
 // findCycles refuses a reached cycle of in-place applications, which never
 // advances into the value. Where every evaluation must enter it (certainLoop),
-// the result is undefined (OBI-T-07, §7.4); otherwise an evaluator may never
+// the result is undefined (§5.2, §7.4); otherwise an evaluator may never
 // enter it for some values, and the refusal is conservative: core does not
 // decide which values' evaluations do.
 func (r *contractReach) findCycles() {
