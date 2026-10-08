@@ -345,7 +345,7 @@ func Example_cliValidateExamples() {
 // invokeChecks is how `ob invoke` checks a stream of input values before it
 // sends each one, one value at a time (invariant 1: each value separately,
 // never the sequence). The spec leaves runtime validation, and what to do
-// without a verdict, to the tool (§1.2, invariant 2), so the policy is
+// without a verdict, to the tool (§1.1, invariant 2), so the policy is
 // stated here: the lab's where it gives one, the exercise's where it does
 // not.
 //   - A value that does not fit is refused before anything is sent if it is
