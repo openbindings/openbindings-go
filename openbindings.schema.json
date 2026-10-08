@@ -118,7 +118,7 @@
         },
         "aliases": {
           "type": "array",
-          "description": "Additional names for this operation, equal in standing to its key. The key plus aliases form one flat, document-unique namespace; every name resolves to this operation. Carrying a shared contract's operation name here claims correspondence with that operation.",
+          "description": "Additional names for this operation, each identifying it exactly as its key does (§5.1). The key plus aliases form one flat, document-unique namespace. Carrying a shared contract's operation name here claims correspondence with that operation.",
           "uniqueItems": true,
           "items": {
             "type": "string",
@@ -231,7 +231,7 @@
         },
         "idempotent": {
           "type": "boolean",
-          "description": "Author claim about repeating the operation through this binding: true asserts repetition with the same input, in context differing at most in ways the effects do not depend on, adds no intended operation-level effects after the first; false asserts some valid repetition through it can; absent claims nothing. Not a retry-safety or cacheability authorization (§5.3)."
+          "description": "Author claim about repeating the operation through this binding: true asserts repetition with the same input, in context differing at most in ways the effects do not depend on, adds no intended operation-level effects after the first; false asserts some such repetition through it can; absent claims nothing. Not a retry-safety or cacheability authorization (§5.3)."
         },
         "preference": {
           "type": "integer",
