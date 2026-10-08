@@ -64,9 +64,9 @@ var rootProfile = corpus.Profile{Features: map[string]bool{
 // appliedTextRevision and appliedTextSHA256 bind the text this SDK applies:
 // the revision of github.com/openbindings/spec it pins, which must be
 // appliedRevision, and the sha256 of that revision's openbindings.md.
-const appliedTextRevision = "349e67b75637e391138b9c841c77bebef308c4fa"
+const appliedTextRevision = "e07843706d2dba801cc447f05de1d1fb57e9dc35"
 
-const appliedTextSHA256 = "09de9f78ea9c359b272d7006fa4dac00d574b29d90364d146afcbfc0bedacfce"
+const appliedTextSHA256 = "252ba200145eadc0d289138cef494acc55e2f441d3ef0f83fcedeba825c95ecf"
 
 // appliedTextVerified verifies the text this SDK names against the bytes it
 // pins (verifyAppliedText), for the history of the specification repository

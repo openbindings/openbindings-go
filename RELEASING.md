@@ -88,11 +88,11 @@ specifications (kin-openapi, libopenapi, gqlparser, protocompile with
 protobuf-go's descriptors, Smithy's smithy-model) on named criteria, and the
 release's CHANGELOG entry states the result.
 
-### Readiness of the 0.2.0 working draft (2026-10-06)
+### Readiness of the 0.2.0 working draft (2026-10-08)
 
 | Row | State |
 |---|---|
-| Every rule | Met at spec `349e67b`. The SDK checks no example against its value contract (§5.1) and derives no form from a schema. |
+| Every rule | Met at spec `e078437`. The SDK checks no example against its value contract (§5.1) and derives no form from a schema. |
 | Exact model | Met. |
 | Only the core | Met. `openbindingstest` and `schemaeval` serve value validation (§5.2), and `httpdiscovery` names the HTTP Discovery text it applies by revision and SHA-256. |
 | One vocabulary | Met. `Reference.Target` and `Position` keep their names: a schema reference's target and a finding's place in the input text share no context with the specification's binding target and OBI position. A report names the applied `Release`, and `ErrInconclusive` marks only input beyond this SDK's own limits. |
