@@ -13,7 +13,7 @@
     },
     "name": {
       "type": "string",
-      "description": "Human-friendly interface name. Not an identifier."
+      "description": "Human-friendly label. Not an identifier."
     },
     "version": {
       "type": "string",
@@ -114,11 +114,11 @@
           "items": {
             "type": "string"
           },
-          "description": "Documentation labels for grouping and filtering."
+          "description": "Documentation labels for grouping and filtering, in no meaningful order; a repeated tag adds nothing (§5.1)."
         },
         "aliases": {
           "type": "array",
-          "description": "Additional names for this operation, each identifying it exactly as its key does (§5.1). The key plus aliases form one flat, document-unique namespace. Carrying a shared contract's operation name here claims correspondence with that operation.",
+          "description": "Additional names for this operation, in no meaningful order, each identifying it exactly as its key does (§5.1). The key plus aliases form one flat, document-unique namespace. Carrying a shared contract's operation name here claims correspondence with that operation.",
           "uniqueItems": true,
           "items": {
             "type": "string",
@@ -231,7 +231,7 @@
         },
         "idempotent": {
           "type": "boolean",
-          "description": "Author claim about repeating the operation through this binding: true asserts repetition with the same input, in context differing at most in ways the effects do not depend on, adds no intended operation-level effects after the first; false asserts some such repetition through it can; absent claims nothing. Not a retry-safety or cacheability authorization (§5.3)."
+          "description": "Author claim about repeating the operation through this binding: true asserts repetition with the same input, in context differing at most in ways the effects do not depend on, adds no intended operation-level effects after the first; false asserts some such repetition through it can; absent claims nothing. Implies neither that the operation is safe, read-only, deterministic, or cacheable (§5.3)."
         },
         "preference": {
           "type": "integer",

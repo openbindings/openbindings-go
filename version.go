@@ -31,7 +31,7 @@ const appliedRelease = "0.2.0"
 // validation report names with it (ValidationReport.Revision): a commit of
 // github.com/openbindings/spec. It is "" once appliedRelease is released,
 // when the release alone names the text.
-const appliedRevision = "1ee84b244bea0047882cc81a2e074eec460b874b"
+const appliedRevision = "e07843706d2dba801cc447f05de1d1fb57e9dc35"
 
 // supportedPrereleases lists the prerelease versions this SDK supports, each
 // named explicitly: a prerelease is a draft, and supporting its release does
