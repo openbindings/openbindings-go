@@ -1,5 +1,8 @@
 # openbindings-go
 
+> **Legacy implementation.** The maintained reference SDK is now [openbindings/sdk](https://github.com/openbindings/sdk), with a Rust engine and TypeScript/Wasm API. This repository preserves earlier APIs and supports consumers during migration. The successor is unpublished and does not yet replace every invocation, synthesis or binding-adapter workflow. See [the transition policy](LIFECYCLE.md).
+
+
 The [OpenBindings](https://openbindings.com) SDK for Go. Its core module carries
 the OBI document model, its document rules and conformance report, operation resolution, and
 validation of values against value contracts, as the core specification
